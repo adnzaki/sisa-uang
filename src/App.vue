@@ -90,11 +90,12 @@ watch(
 
 const isAuthRoute = computed(() => route.path === '/auth');
 
-// Regular user navigation items (Personal Finance Management)
+// Regular user navigation items (Personal Finance Management - Desktop Sidebar & Mobile Sidebar Drawer)
 const userNavItems = computed(() => [
   { name: t('nav.dashboard'), path: '/', icon: LayoutDashboard },
   { name: t('nav.transactions'), path: '/transactions', icon: ArrowLeftRight },
   { name: t('nav.wallets'), path: '/wallets', icon: Wallet },
+  { name: t('nav.ownership'), path: '/ownership', icon: Users },
   { name: t('nav.budgets'), path: '/budgets', icon: PieChart },
   { name: t('nav.analytics'), path: '/analytics', icon: BarChart3 },
   { name: t('nav.settings'), path: '/settings', icon: Settings },
@@ -789,16 +790,20 @@ async function handleLogout() {
           </span>
         </RouterLink>
 
-        <button
-          type="button"
-          class="min-h-[48px] flex flex-col items-center justify-center gap-0.5 text-slate-500 dark:text-slate-400"
-          @click="mobileDrawerOpen = true"
+        <RouterLink
+          to="/settings"
+          class="min-h-[48px] flex flex-col items-center justify-center gap-0.5 transition-colors"
+          :class="
+            route.path === '/settings'
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : 'text-slate-500 dark:text-slate-400'
+          "
         >
-          <Menu class="w-5 h-5" />
+          <Settings class="w-5 h-5" />
           <span class="text-[10px] font-medium tracking-tight whitespace-nowrap">
-            {{ t('nav.moreMenu') }}
+            {{ t('nav.settings') }}
           </span>
-        </button>
+        </RouterLink>
       </nav>
 
       <!-- 2. Super Admin Mobile Bottom Navigation (Strictly Users, Logs, Alerts, Settings) -->

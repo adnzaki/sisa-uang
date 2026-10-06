@@ -3,6 +3,7 @@ import { useAuthStore } from '../stores/auth';
 import DashboardView from '../views/DashboardView.vue';
 import TransactionsView from '../views/TransactionsView.vue';
 import WalletsView from '../views/WalletsView.vue';
+import OwnershipView from '../views/OwnershipView.vue';
 import BudgetsView from '../views/BudgetsView.vue';
 import AnalyticsView from '../views/AnalyticsView.vue';
 import SettingsView from '../views/SettingsView.vue';
@@ -86,6 +87,12 @@ export const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/ownership',
+      name: 'ownership',
+      component: OwnershipView,
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/budgets',
       name: 'budgets',
       component: BudgetsView,
@@ -143,7 +150,7 @@ router.beforeEach((to, _from, next) => {
   }
 
   // Super Admin only manages users, logs/alerts, and settings — block finance routes for Super Admin
-  const financePaths = ['/', '/transactions', '/wallets', '/budgets', '/analytics'];
+  const financePaths = ['/', '/transactions', '/wallets', '/ownership', '/budgets', '/analytics'];
   if (authStore.isAuthenticated && authStore.isSuperAdmin && financePaths.includes(to.path)) {
     next({ path: '/control-panel' });
     return;
