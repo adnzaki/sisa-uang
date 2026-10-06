@@ -1,0 +1,248 @@
+<script setup lang="ts">
+import { computed } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { Calendar } from 'lucide-vue-next';
+import { useFinanceStore, formatPeriodLabel } from '../stores/finance';
+import { useThemeStore } from '../stores/theme';
+
+const { locale } = useI18n();
+const financeStore = useFinanceStore();
+const themeStore = useThemeStore();
+
+const categoryBreakdown = computed(() => {
+  const map = new Map<string, number>();
+  for (const tx of financeStore.periodTransactions) {
+    if (tx.type === 'expense') {
+      map.set(tx.category, (map.get(tx.category) || 0) + Number(tx.amount || 0));
+    }
+  }
+  const totalExp = Math.max(1, financeStore.monthlyExpense);
+  return Array.from(map.entries())
+    .map(([category, amount]) => ({
+      category,
+      amount,
+      share: Math.round((amount / totalExp) * 100),
+    }))
+    .sort((a, b) => b.amount - a.amount);
+});
+
+const incomeCategoryBreakdown = computed(() => {
+  const map = new Map<string, number>();
+  for (const tx of financeStore.periodTransactions) {
+    if (tx.type === 'income') {
+      map.set(tx.category, (map.get(tx.category) || 0) + Number(tx.amount || 0));
+    }
+  }
+  const totalInc = Math.max(1, financeStore.monthlyIncome);
+  return Array.from(map.entries())
+    .map(([category, amount]) => ({
+      category,
+      amount,
+      share: Math.round((amount / totalInc) * 100),
+    }))
+    .sort((a, b) => b.amount - a.amount);
+});
+
+const walletAllocation = computed(() => {
+  const total = Math.max(1, financeStore.totalBalance);
+  return financeStore.wallets
+    .map((w) => ({
+      id: w.id,
+      name: w.name,
+      type: w.type,
+      balance: w.balance,
+      share: Math.max(0, Math.round((w.balance / total) * 100)),
+    }))
+    .sort((a, b) => b.balance - a.balance);
+});
+</script>
+
+<template>
+  <div class="space-y-6">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div>
+        <h1 class="text-2xl sm:text-3xl font-display italic text-slate-900 dark:text-slate-100">
+          Analitik Arus Kas & Sisa Uang
+        </h1>
+        <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+          Evaluasi struktur pengeluaran, pemasukan, dan distribusi aset lintas sumber dana dari Firestore.
+        </p>
+      </div>
+
+      <!-- Period Selector -->
+      <div class="relative flex items-center self-start sm:self-auto">
+        <Calendar class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 absolute left-3 pointer-events-none" />
+        <select
+          v-model="financeStore.selectedPeriod"
+          aria-label="Pilih Periode Bulan"
+          class="min-h-[44px] pl-8 pr-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600"
+        >
+          <option value="all">Semua Periode ({{ financeStore.transactions.length }} Transaksi)</option>
+          <option
+            v-for="p in financeStore.availablePeriods"
+            :key="p"
+            :value="p"
+          >
+            {{ formatPeriodLabel(p, locale === 'id' ? 'id-ID' : 'en-US') }}
+          </option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Top Key Ratios -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-1.5">
+        <div class="text-xs text-slate-500 dark:text-slate-400">Rasio Sisa Uang (Tabungan)</div>
+        <div class="text-2xl font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+          {{ financeStore.savingsRate }}%
+        </div>
+        <div class="text-xs text-slate-500 dark:text-slate-400">
+          Periode {{ formatPeriodLabel(financeStore.selectedPeriod, locale === 'id' ? 'id-ID' : 'en-US') }}
+        </div>
+      </div>
+
+      <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-1.5">
+        <div class="text-xs text-slate-500 dark:text-slate-400">Batas Aman Harian</div>
+        <div class="text-2xl font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
+          {{ themeStore.formatMoney(financeStore.safeDailySpend) }}
+        </div>
+        <div class="text-xs text-slate-500 dark:text-slate-400">
+          Untuk {{ financeStore.daysRemainingInMonth }} hari ke depan
+        </div>
+      </div>
+
+      <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-1.5">
+        <div class="text-xs text-slate-500 dark:text-slate-400">Selisih Kas Bersih</div>
+        <div
+          class="text-2xl font-mono font-bold tabular-nums"
+          :class="
+            financeStore.periodNetCashflow >= 0
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : 'text-rose-600 dark:text-rose-400'
+          "
+        >
+          {{ themeStore.formatMoney(financeStore.periodNetCashflow) }}
+        </div>
+        <div class="text-xs text-slate-500 dark:text-slate-400">
+          Masuk {{ themeStore.formatMoney(financeStore.monthlyIncome) }} · Keluar {{ themeStore.formatMoney(financeStore.monthlyExpense) }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Two Column Breakdown -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Category Expense Distribution -->
+      <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4">
+        <div>
+          <h2 class="text-base font-semibold text-slate-900 dark:text-slate-100">
+            Distribusi Pengeluaran per Kategori
+          </h2>
+          <p class="text-xs text-slate-500 dark:text-slate-400">
+            Proporsi pengeluaran pada {{ formatPeriodLabel(financeStore.selectedPeriod, locale === 'id' ? 'id-ID' : 'en-US') }}
+          </p>
+        </div>
+
+        <div v-if="categoryBreakdown.length === 0" class="py-8 text-center text-xs text-slate-500">
+          Belum ada data pengeluaran pada periode ini.
+        </div>
+
+        <div v-else class="space-y-3.5">
+          <div
+            v-for="item in categoryBreakdown"
+            :key="item.category"
+            class="space-y-1.5"
+          >
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-medium text-slate-800 dark:text-slate-200">
+                {{ item.category }}
+              </span>
+              <span class="font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                {{ themeStore.formatMoney(item.amount) }} · {{ item.share }}%
+              </span>
+            </div>
+            <div class="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+              <div
+                class="h-full rounded-full bg-rose-500 transition-all duration-200"
+                :style="{ width: `${item.share}%` }"
+              ></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Wallet Asset Allocation & Income Breakdown -->
+      <div class="space-y-6">
+        <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4">
+          <div>
+            <h2 class="text-base font-semibold text-slate-900 dark:text-slate-100">
+              Alokasi Dana Lintas Sumber Dana
+            </h2>
+            <p class="text-xs text-slate-500 dark:text-slate-400">
+              Persentase penempatan saldo pada masing-masing rekening
+            </p>
+          </div>
+
+          <div class="space-y-3.5">
+            <div
+              v-for="w in walletAllocation"
+              :key="w.id"
+              class="space-y-1.5"
+            >
+              <div class="flex items-center justify-between text-xs">
+                <span class="font-medium text-slate-800 dark:text-slate-200">
+                  {{ w.name }}
+                </span>
+                <span class="font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                  {{ themeStore.formatMoney(w.balance) }} · {{ w.share }}%
+                </span>
+              </div>
+              <div class="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                <div
+                  class="h-full rounded-full bg-emerald-600 transition-all duration-200"
+                  :style="{ width: `${w.share}%` }"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section
+          v-if="incomeCategoryBreakdown.length > 0"
+          class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4"
+        >
+          <div>
+            <h2 class="text-base font-semibold text-slate-900 dark:text-slate-100">
+              Sumber Pemasukan per Kategori
+            </h2>
+            <p class="text-xs text-slate-500 dark:text-slate-400">
+              Komposisi pemasukan pada {{ formatPeriodLabel(financeStore.selectedPeriod, locale === 'id' ? 'id-ID' : 'en-US') }}
+            </p>
+          </div>
+
+          <div class="space-y-3.5">
+            <div
+              v-for="item in incomeCategoryBreakdown"
+              :key="item.category"
+              class="space-y-1.5"
+            >
+              <div class="flex items-center justify-between text-xs">
+                <span class="font-medium text-slate-800 dark:text-slate-200">
+                  {{ item.category }}
+                </span>
+                <span class="font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                  {{ themeStore.formatMoney(item.amount) }} · {{ item.share }}%
+                </span>
+              </div>
+              <div class="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                <div
+                  class="h-full rounded-full bg-emerald-600 transition-all duration-200"
+                  :style="{ width: `${item.share}%` }"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</template>

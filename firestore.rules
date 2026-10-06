@@ -1,0 +1,527 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default-Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Global Hardened Primitives
+    // =========================================================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedAdminEmail() {
+      return isSignedIn() &&
+        (
+          (request.auth.token.email_verified == true && request.auth.token.email == 'adnanzaki65@admin.sd.belajar.id') ||
+          request.auth.token.email == 'vuedevo@gmail.com'
+        );
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        isBootstrappedAdminEmail() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isNotBlocked() {
+      return !exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active';
+    }
+
+    // =========================================================================
+    // Validation Blueprints (Anti-Update-Gap)
+    // =========================================================================
+    function isValidAdmin(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'createdAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'status', 'authProvider', 'currency', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'uid',
+          'username',
+          'email',
+          'displayName',
+          'passwordHash',
+          'role',
+          'status',
+          'authProvider',
+          'currency',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        (!('username' in data) || (data.username is string && data.username.size() >= 1 && data.username.size() <= 60)) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+        (!('passwordHash' in data) || (data.passwordHash is string && data.passwordHash.size() <= 255)) &&
+        data.role is string && (data.role == 'user' || data.role == 'admin') &&
+        data.status is string && (data.status == 'active' || data.status == 'blocked') &&
+        data.authProvider is string && (data.authProvider == 'password' || data.authProvider == 'google') &&
+        data.currency is string && (data.currency == 'IDR' || data.currency == 'USD') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWallet(data) {
+      return data.keys().hasAll(['ownerId', 'name', 'type', 'balance', 'color', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'name', 'type', 'balance', 'color', 'createdAt', 'updatedAt']) &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+        data.type is string && (data.type == 'cash' || data.type == 'bank' || data.type == 'ewallet' || data.type == 'investment' || data.type == 'credit') &&
+        (data.balance is int || data.balance is float) &&
+        data.color is string && data.color.size() >= 1 && data.color.size() <= 20 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWalletOwner(data) {
+      return data.keys().hasAll(['ownerId', 'walletId', 'walletName', 'holderName', 'balance', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'walletId', 'walletName', 'holderName', 'balance', 'createdAt', 'updatedAt']) &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.walletId is string && data.walletId.size() >= 1 && data.walletId.size() <= 128 && data.walletId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.walletName is string && data.walletName.size() >= 1 && data.walletName.size() <= 60 &&
+        data.holderName is string && data.holderName.size() >= 1 && data.holderName.size() <= 60 &&
+        (data.balance is int || data.balance is float) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['ownerId', 'name', 'type', 'color', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'name', 'type', 'color', 'createdAt', 'updatedAt']) &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 50 &&
+        data.type is string && (data.type == 'income' || data.type == 'expense') &&
+        data.color is string && data.color.size() >= 1 && data.color.size() <= 20 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['ownerId', 'walletId', 'walletName', 'type', 'category', 'amount', 'note', 'date', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'walletId',
+          'walletName',
+          'fundOwnerId',
+          'fundOwnerName',
+          'toWalletId',
+          'toWalletName',
+          'toFundOwnerId',
+          'toFundOwnerName',
+          'type',
+          'category',
+          'amount',
+          'note',
+          'date',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.walletId is string && data.walletId.size() >= 1 && data.walletId.size() <= 128 && data.walletId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.walletName is string && data.walletName.size() >= 1 && data.walletName.size() <= 60 &&
+        (!('fundOwnerId' in data) || (data.fundOwnerId is string && data.fundOwnerId.size() <= 128)) &&
+        (!('fundOwnerName' in data) || (data.fundOwnerName is string && data.fundOwnerName.size() <= 60)) &&
+        (!('toWalletId' in data) || (data.toWalletId is string && data.toWalletId.size() <= 128)) &&
+        (!('toWalletName' in data) || (data.toWalletName is string && data.toWalletName.size() <= 60)) &&
+        (!('toFundOwnerId' in data) || (data.toFundOwnerId is string && data.toFundOwnerId.size() <= 128)) &&
+        (!('toFundOwnerName' in data) || (data.toFundOwnerName is string && data.toFundOwnerName.size() <= 60)) &&
+        data.type is string && (data.type == 'income' || data.type == 'expense' || data.type == 'transfer') &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 50 &&
+        (data.amount is int || data.amount is float) && data.amount > 0 &&
+        data.note is string && data.note.size() <= 200 &&
+        data.date is string && data.date.size() >= 8 && data.date.size() <= 30 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidBudget(data) {
+      return data.keys().hasAll(['ownerId', 'category', 'limitAmount', 'spentAmount', 'period', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'category', 'limitAmount', 'spentAmount', 'period', 'createdAt', 'updatedAt']) &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 50 &&
+        (data.limitAmount is int || data.limitAmount is float) && data.limitAmount > 0 &&
+        (data.spentAmount is int || data.spentAmount is float) && data.spentAmount >= 0 &&
+        data.period is string && data.period.size() >= 6 && data.period.size() <= 20 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidActivityLog(data) {
+      return data.keys().hasAll(['actorUid', 'actorEmail', 'action', 'detail', 'severity', 'createdAt']) &&
+        data.keys().hasOnly(['actorUid', 'actorEmail', 'action', 'detail', 'severity', 'createdAt']) &&
+        data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128 && data.actorUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.actorEmail is string && data.actorEmail.size() >= 3 && data.actorEmail.size() <= 120 &&
+        data.action is string && data.action.size() >= 2 && data.action.size() <= 60 &&
+        data.detail is string && data.detail.size() >= 1 && data.detail.size() <= 250 &&
+        data.severity is string && (data.severity == 'info' || data.severity == 'warning' || data.severity == 'critical') &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidSecurityAlert(data) {
+      return data.keys().hasAll(['actorUid', 'actorEmail', 'title', 'description', 'severity', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['actorUid', 'actorEmail', 'title', 'description', 'severity', 'status', 'createdAt', 'updatedAt']) &&
+        data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128 && data.actorUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.actorEmail is string && data.actorEmail.size() >= 3 && data.actorEmail.size() <= 120 &&
+        data.title is string && data.title.size() >= 3 && data.title.size() <= 100 &&
+        data.description is string && data.description.size() >= 3 && data.description.size() <= 300 &&
+        data.severity is string && (data.severity == 'warning' || data.severity == 'critical') &&
+        data.status is string && (data.status == 'open' || data.status == 'resolved') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // =========================================================================
+    // Collection Rules
+    // =========================================================================
+
+    // 1. Admins Registry (/admins/{adminId})
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && isValidId(adminId) && (isOwner(adminId) || isAdmin());
+      allow list: if isBootstrappedAdminEmail();
+      allow create: if isSignedIn() &&
+        isValidId(adminId) &&
+        isValidAdmin(incoming()) &&
+        incoming().uid == adminId &&
+        incoming().createdAt == request.time &&
+        isAdmin();
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(adminId) && isAdmin();
+    }
+
+    // 2. Users Collection (/users/{userId}) - PII Isolated to Owner and Admin
+    match /users/{userId} {
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn() &&
+        isValidId(userId) &&
+        isValidUser(incoming()) &&
+        incoming().uid == userId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            isOwner(userId) &&
+            incoming().status == 'active' &&
+            incoming().role == 'user'
+          ) ||
+          isAdmin()
+        );
+      allow update: if isSignedIn() &&
+        isValidId(userId) &&
+        isValidUser(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            (isOwner(userId) || existing().email == request.auth.token.email) &&
+            existing().status == 'active' &&
+            incoming().role == existing().role &&
+            incoming().status == existing().status &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'username', 'currency', 'updatedAt'])
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'username', 'passwordHash', 'role', 'status', 'currency', 'updatedAt']) &&
+            isAdmin()
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(userId) && isAdmin();
+    }
+
+    // 3. Wallets Collection (/wallets/{walletId})
+    match /wallets/{walletId} {
+      allow get: if isSignedIn() && isValidId(walletId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdminEmail());
+      allow create: if isSignedIn() &&
+        isValidId(walletId) &&
+        isValidWallet(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (incoming().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+      allow update: if isSignedIn() &&
+        isValidId(walletId) &&
+        isValidWallet(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'balance', 'color', 'updatedAt']) &&
+            isNotBlocked()
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'balance', 'color', 'updatedAt']) &&
+            isAdmin()
+          )
+        );
+      allow delete: if isSignedIn() &&
+        isValidId(walletId) &&
+        (
+          (existing().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+    }
+
+    // 4. Wallet Owners Collection (/wallet_owners/{fundOwnerId})
+    match /wallet_owners/{fundOwnerId} {
+      allow get: if isSignedIn() && isValidId(fundOwnerId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdminEmail());
+      allow create: if isSignedIn() &&
+        isValidId(fundOwnerId) &&
+        isValidWalletOwner(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            incoming().ownerId == request.auth.uid &&
+            isNotBlocked() &&
+            exists(/databases/$(database)/documents/wallets/$(incoming().walletId)) &&
+            get(/databases/$(database)/documents/wallets/$(incoming().walletId)).data.ownerId == request.auth.uid
+          ) ||
+          isAdmin()
+        );
+      allow update: if isSignedIn() &&
+        isValidId(fundOwnerId) &&
+        isValidWalletOwner(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['walletName', 'holderName', 'balance', 'updatedAt']) &&
+            isNotBlocked()
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['walletName', 'holderName', 'balance', 'updatedAt']) &&
+            isAdmin()
+          )
+        );
+      allow delete: if isSignedIn() &&
+        isValidId(fundOwnerId) &&
+        (
+          (existing().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+    }
+
+    // 5. Categories Collection (/categories/{categoryId})
+    match /categories/{categoryId} {
+      allow get: if isSignedIn() && isValidId(categoryId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdminEmail());
+      allow create: if isSignedIn() &&
+        isValidId(categoryId) &&
+        isValidCategory(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (incoming().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+      allow update: if isSignedIn() &&
+        isValidId(categoryId) &&
+        isValidCategory(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'color', 'updatedAt']) &&
+            isNotBlocked()
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'color', 'updatedAt']) &&
+            isAdmin()
+          )
+        );
+      allow delete: if isSignedIn() &&
+        isValidId(categoryId) &&
+        (
+          (existing().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+    }
+
+    // 6. Transactions Collection (/transactions/{transactionId})
+    match /transactions/{transactionId} {
+      allow get: if isSignedIn() && isValidId(transactionId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdminEmail());
+      allow create: if isSignedIn() &&
+        isValidId(transactionId) &&
+        isValidTransaction(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            incoming().ownerId == request.auth.uid &&
+            isNotBlocked() &&
+            exists(/databases/$(database)/documents/wallets/$(incoming().walletId)) &&
+            get(/databases/$(database)/documents/wallets/$(incoming().walletId)).data.ownerId == request.auth.uid
+          ) ||
+          isAdmin()
+        );
+      allow update: if isSignedIn() &&
+        isValidId(transactionId) &&
+        isValidTransaction(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'walletId',
+              'walletName',
+              'fundOwnerId',
+              'fundOwnerName',
+              'toWalletId',
+              'toWalletName',
+              'toFundOwnerId',
+              'toFundOwnerName',
+              'type',
+              'category',
+              'amount',
+              'note',
+              'date',
+              'updatedAt'
+            ]) &&
+            isNotBlocked() &&
+            exists(/databases/$(database)/documents/wallets/$(incoming().walletId)) &&
+            get(/databases/$(database)/documents/wallets/$(incoming().walletId)).data.ownerId == request.auth.uid
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'walletId',
+              'walletName',
+              'fundOwnerId',
+              'fundOwnerName',
+              'toWalletId',
+              'toWalletName',
+              'toFundOwnerId',
+              'toFundOwnerName',
+              'type',
+              'category',
+              'amount',
+              'note',
+              'date',
+              'updatedAt'
+            ]) &&
+            isAdmin()
+          )
+        );
+      allow delete: if isSignedIn() &&
+        isValidId(transactionId) &&
+        (
+          (existing().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+    }
+
+    // 7. Budgets Collection (/budgets/{budgetId})
+    match /budgets/{budgetId} {
+      allow get: if isSignedIn() && isValidId(budgetId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdminEmail());
+      allow create: if isSignedIn() &&
+        isValidId(budgetId) &&
+        isValidBudget(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (incoming().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+      allow update: if isSignedIn() &&
+        isValidId(budgetId) &&
+        isValidBudget(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['category', 'limitAmount', 'spentAmount', 'period', 'updatedAt']) &&
+            isNotBlocked()
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['category', 'limitAmount', 'spentAmount', 'period', 'updatedAt']) &&
+            isAdmin()
+          )
+        );
+      allow delete: if isSignedIn() &&
+        isValidId(budgetId) &&
+        (
+          (existing().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+    }
+
+    // 8. Activity Logs Collection (/activity_logs/{logId})
+    match /activity_logs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && (existing().actorUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().actorUid == request.auth.uid || isBootstrappedAdminEmail());
+      allow create: if isSignedIn() &&
+        isValidId(logId) &&
+        isValidActivityLog(incoming()) &&
+        incoming().createdAt == request.time &&
+        (incoming().actorUid == request.auth.uid || isAdmin());
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(logId) && isAdmin();
+    }
+
+    // 9. Security Alerts Collection (/security_alerts/{alertId})
+    match /security_alerts/{alertId} {
+      allow get: if isSignedIn() && isValidId(alertId) && (existing().actorUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().actorUid == request.auth.uid || isBootstrappedAdminEmail());
+      allow create: if isSignedIn() &&
+        isValidId(alertId) &&
+        isValidSecurityAlert(incoming()) &&
+        incoming().actorUid == request.auth.uid &&
+        incoming().status == 'open' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isSignedIn() &&
+        isValidId(alertId) &&
+        isValidSecurityAlert(incoming()) &&
+        incoming().actorUid == existing().actorUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+        (existing().status != 'resolved' || isAdmin()) &&
+        isAdmin();
+      allow delete: if isSignedIn() && isValidId(alertId) && isAdmin();
+    }
+  }
+}

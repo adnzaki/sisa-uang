@@ -1,0 +1,573 @@
+{
+  "entities": {
+    "Admin": {
+      "title": "Admin",
+      "description": "Trusted administrator membership record keyed by user UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Administrator user UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Administrator email address",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile and access control record (adapted from CodeIgniter 4 Shield).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth or migrated UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User email address (PII isolated to owner and admin)",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name or username",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "role": {
+          "type": "string",
+          "description": "RBAC role",
+          "enum": ["user", "admin"]
+        },
+        "status": {
+          "type": "string",
+          "description": "Account access status",
+          "enum": ["active", "blocked"]
+        },
+        "authProvider": {
+          "type": "string",
+          "description": "Authentication provider used",
+          "enum": ["password", "google"]
+        },
+        "currency": {
+          "type": "string",
+          "description": "Preferred display currency",
+          "enum": ["IDR", "USD"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Account creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Account update server timestamp"
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "displayName",
+        "role",
+        "status",
+        "authProvider",
+        "currency",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Wallet": {
+      "title": "Wallet",
+      "description": "Sumber Dana utama (e.g., Mandiri, BCA, Dompet Tunai, GoPay).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "User account UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Sumber dana name",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "type": {
+          "type": "string",
+          "description": "Wallet category type",
+          "enum": ["cash", "bank", "ewallet", "investment", "credit"]
+        },
+        "balance": {
+          "type": "number",
+          "description": "Aggregate wallet balance across all fund owners"
+        },
+        "color": {
+          "type": "string",
+          "description": "Accent color identifier",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "name",
+        "type",
+        "balance",
+        "color",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WalletOwner": {
+      "title": "WalletOwner",
+      "description": "Kepemilikan Dana di dalam satu Sumber Dana (misal: Mandiri -> Pribadi, Istri).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "User account UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "walletId": {
+          "type": "string",
+          "description": "Parent Sumber Dana (Wallet) ID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "walletName": {
+          "type": "string",
+          "description": "Parent Sumber Dana name snapshot",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "holderName": {
+          "type": "string",
+          "description": "Nama pemilik dana (contoh: Pribadi, Istri, Anak)",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "balance": {
+          "type": "number",
+          "description": "Saldo spesifik milik pemilik dana ini di dalam sumber dana tersebut"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "walletId",
+        "walletName",
+        "holderName",
+        "balance",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Master kategori transaksi pemasukan dan pengeluaran.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "User account UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Nama kategori",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "type": {
+          "type": "string",
+          "description": "Jenis kategori transaksi",
+          "enum": ["income", "expense"]
+        },
+        "color": {
+          "type": "string",
+          "description": "Warna label kategori",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "name",
+        "type",
+        "color",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Transaksi keuangan (income, expense, atau transfer antar sumber dana dan kepemilikan dana).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "User account UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "walletId": {
+          "type": "string",
+          "description": "Sumber dana ID asal",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "walletName": {
+          "type": "string",
+          "description": "Nama sumber dana asal",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "fundOwnerId": {
+          "type": "string",
+          "description": "ID kepemilikan dana asal",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "fundOwnerName": {
+          "type": "string",
+          "description": "Nama pemilik dana asal (misal: Pribadi, Istri)",
+          "minLength": 0,
+          "maxLength": 60
+        },
+        "toWalletId": {
+          "type": "string",
+          "description": "Sumber dana tujuan (khusus transaksi transfer)",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "toWalletName": {
+          "type": "string",
+          "description": "Nama sumber dana tujuan (khusus transaksi transfer)",
+          "minLength": 0,
+          "maxLength": 60
+        },
+        "toFundOwnerId": {
+          "type": "string",
+          "description": "ID kepemilikan dana tujuan (khusus transaksi transfer)",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "toFundOwnerName": {
+          "type": "string",
+          "description": "Nama pemilik dana tujuan (khusus transaksi transfer)",
+          "minLength": 0,
+          "maxLength": 60
+        },
+        "type": {
+          "type": "string",
+          "description": "Jenis transaksi: income, expense, atau transfer",
+          "enum": ["income", "expense", "transfer"]
+        },
+        "category": {
+          "type": "string",
+          "description": "Nama kategori transaksi",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "amount": {
+          "type": "number",
+          "description": "Nominal transaksi positif"
+        },
+        "note": {
+          "type": "string",
+          "description": "Catatan transaksi",
+          "minLength": 0,
+          "maxLength": 200
+        },
+        "date": {
+          "type": "string",
+          "description": "Tanggal transaksi (YYYY-MM-DD)",
+          "minLength": 8,
+          "maxLength": 30
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "walletId",
+        "walletName",
+        "type",
+        "category",
+        "amount",
+        "note",
+        "date",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Budget": {
+      "title": "Budget",
+      "description": "Monthly category spending budget to calculate Sisa Uang.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "category": {
+          "type": "string",
+          "description": "Category name",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "limitAmount": {
+          "type": "number",
+          "description": "Monthly budget allocation limit"
+        },
+        "spentAmount": {
+          "type": "number",
+          "description": "Current spent amount in period"
+        },
+        "period": {
+          "type": "string",
+          "description": "Budget month period (YYYY-MM)",
+          "minLength": 6,
+          "maxLength": 20
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "category",
+        "limitAmount",
+        "spentAmount",
+        "period",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Real-time user and system audit log entry for Super Admin monitoring.",
+      "type": "object",
+      "properties": {
+        "actorUid": {
+          "type": "string",
+          "description": "UID of the user performing the action",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "actorEmail": {
+          "type": "string",
+          "description": "Email of the actor",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "action": {
+          "type": "string",
+          "description": "Action identifier code",
+          "minLength": 2,
+          "maxLength": 60
+        },
+        "detail": {
+          "type": "string",
+          "description": "Human-readable audit description",
+          "minLength": 1,
+          "maxLength": 250
+        },
+        "severity": {
+          "type": "string",
+          "description": "Audit severity level",
+          "enum": ["info", "warning", "critical"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the event"
+        }
+      },
+      "required": [
+        "actorUid",
+        "actorEmail",
+        "action",
+        "detail",
+        "severity",
+        "createdAt"
+      ]
+    },
+    "SecurityAlert": {
+      "title": "SecurityAlert",
+      "description": "Instant suspicious activity alert surfaced in the Super Admin control panel.",
+      "type": "object",
+      "properties": {
+        "actorUid": {
+          "type": "string",
+          "description": "UID associated with the suspicious event",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "actorEmail": {
+          "type": "string",
+          "description": "Email associated with the suspicious event",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "title": {
+          "type": "string",
+          "description": "Short alert title",
+          "minLength": 3,
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed explanation of suspicious trigger",
+          "minLength": 3,
+          "maxLength": 300
+        },
+        "severity": {
+          "type": "string",
+          "description": "Threat severity level",
+          "enum": ["warning", "critical"]
+        },
+        "status": {
+          "type": "string",
+          "description": "Resolution status of the alert",
+          "enum": ["open", "resolved"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Resolution update server timestamp"
+        }
+      },
+      "required": [
+        "actorUid",
+        "actorEmail",
+        "title",
+        "description",
+        "severity",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/Admin" },
+      "description": "Trusted administrator registry keyed by UID."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profile and access control status."
+    },
+    "/wallets/{walletId}": {
+      "schema": { "$ref": "#/entities/Wallet" },
+      "description": "Sumber dana utama milik pengguna."
+    },
+    "/wallet_owners/{fundOwnerId}": {
+      "schema": { "$ref": "#/entities/WalletOwner" },
+      "description": "Kepemilikan dana di dalam suatu sumber dana (misal Mandiri -> Pribadi, Istri)."
+    },
+    "/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/Category" },
+      "description": "Daftar kategori pemasukan dan pengeluaran."
+    },
+    "/transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/Transaction" },
+      "description": "Transaksi pemasukan, pengeluaran, dan transfer antar kepemilikan dana."
+    },
+    "/budgets/{budgetId}": {
+      "schema": { "$ref": "#/entities/Budget" },
+      "description": "Monthly spending budgets per category."
+    },
+    "/activity_logs/{logId}": {
+      "schema": { "$ref": "#/entities/ActivityLog" },
+      "description": "System and user activity audit logs."
+    },
+    "/security_alerts/{alertId}": {
+      "schema": { "$ref": "#/entities/SecurityAlert" },
+      "description": "Real-time suspicious activity alerts for administrators."
+    }
+  }
+}
