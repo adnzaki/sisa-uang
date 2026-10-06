@@ -246,7 +246,7 @@ function getDateBadge(dateStr: string) {
           </h2>
         </div>
         <RouterLink
-          to="/wallets"
+          to="/ownership"
           class="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-0.5 shrink-0"
         >
           <span>Kelola</span>
@@ -258,7 +258,7 @@ function getDateBadge(dateStr: string) {
         <RouterLink
           v-for="owner in financeStore.ownershipSummary"
           :key="owner.rawHolderName"
-          to="/wallets"
+          to="/ownership"
           class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-2 hover:border-emerald-500/50 active:scale-[0.99] transition-all block"
         >
           <div class="flex items-center justify-between gap-2">
