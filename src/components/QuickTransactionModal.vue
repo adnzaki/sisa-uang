@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { X, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, Check } from 'lucide-vue-next';
+import { X, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, Check, Trash2 } from 'lucide-vue-next';
 import { useFinanceStore, formatHolderName } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
 
@@ -26,12 +26,20 @@ const note = ref<string>('');
 const date = ref<string>(new Date().toISOString().slice(0, 10));
 const errorMsg = ref<string | null>(null);
 const isSubmitting = ref(false);
+const isInitializing = ref(false);
 
-const categories = computed(() =>
-  txType.value === 'expense'
-    ? financeStore.expenseCategoryNames
-    : financeStore.incomeCategoryNames
-);
+const isEditMode = computed(() => Boolean(financeStore.editingTransaction));
+
+const categories = computed(() => {
+  const base =
+    txType.value === 'expense'
+      ? financeStore.expenseCategoryNames
+      : financeStore.incomeCategoryNames;
+  if (category.value && !base.includes(category.value) && txType.value !== 'transfer') {
+    return [category.value, ...base];
+  }
+  return base;
+});
 
 const availableSourceHolders = computed(() =>
   walletId.value ? financeStore.getHoldersByWalletId(walletId.value) : []
@@ -42,43 +50,84 @@ const availableDestHolders = computed(() =>
 );
 
 watch(
-  () => financeStore.quickModalOpen,
-  (isOpen) => {
-    if (isOpen) {
-      errorMsg.value = null;
-      if (!walletId.value && financeStore.wallets.length > 0) {
+  () => [financeStore.quickModalOpen, financeStore.editingTransaction] as const,
+  async ([isOpen, editingTx]) => {
+    if (!isOpen) return;
+    isInitializing.value = true;
+    errorMsg.value = null;
+
+    if (editingTx) {
+      txType.value = editingTx.type;
+      walletId.value = editingTx.walletId || financeStore.wallets[0]?.id || '';
+      const srcHolders = financeStore.getHoldersByWalletId(walletId.value);
+      fundOwnerId.value =
+        editingTx.fundOwnerId && srcHolders.some((h) => h.id === editingTx.fundOwnerId)
+          ? editingTx.fundOwnerId
+          : srcHolders[0]?.id || '';
+
+      toWalletId.value =
+        editingTx.toWalletId || editingTx.walletId || financeStore.wallets[0]?.id || '';
+      const dstHolders = financeStore.getHoldersByWalletId(toWalletId.value);
+      toFundOwnerId.value =
+        editingTx.toFundOwnerId && dstHolders.some((h) => h.id === editingTx.toFundOwnerId)
+          ? editingTx.toFundOwnerId
+          : dstHolders[0]?.id || '';
+
+      amount.value = editingTx.amount;
+      category.value =
+        editingTx.type === 'transfer'
+          ? 'Transfer Dana'
+          : editingTx.category || categories.value[0] || 'Lainnya';
+      note.value = editingTx.note || '';
+      date.value = editingTx.date || new Date().toISOString().slice(0, 10);
+    } else {
+      txType.value = 'expense';
+      if (financeStore.wallets.length > 0) {
         walletId.value = financeStore.wallets[0].id;
       }
       const holders = financeStore.getHoldersByWalletId(walletId.value);
-      if (holders.length > 0) {
-        fundOwnerId.value = holders[0].id;
-      }
-      if (!toWalletId.value && financeStore.wallets.length > 0) {
+      fundOwnerId.value = holders[0]?.id || '';
+
+      if (financeStore.wallets.length > 0) {
         toWalletId.value = financeStore.wallets[0].id;
       }
       const destHolders = financeStore.getHoldersByWalletId(toWalletId.value);
       if (destHolders.length > 1) {
         toFundOwnerId.value = destHolders[1].id;
-      } else if (destHolders.length > 0) {
-        toFundOwnerId.value = destHolders[0].id;
+      } else {
+        toFundOwnerId.value = destHolders[0]?.id || '';
       }
+      amount.value = '';
+      note.value = '';
+      date.value = new Date().toISOString().slice(0, 10);
       category.value = categories.value[0] || 'Lainnya';
     }
-  }
+
+    await nextTick();
+    isInitializing.value = false;
+  },
+  { immediate: true }
 );
 
 watch(walletId, (newWalletId) => {
+  if (isInitializing.value) return;
   const holders = financeStore.getHoldersByWalletId(newWalletId);
-  fundOwnerId.value = holders[0]?.id || '';
+  if (!holders.some((h) => h.id === fundOwnerId.value)) {
+    fundOwnerId.value = holders[0]?.id || '';
+  }
 });
 
 watch(toWalletId, (newToWalletId) => {
+  if (isInitializing.value) return;
   const holders = financeStore.getHoldersByWalletId(newToWalletId);
-  const diffHolder = holders.find((h) => h.id !== fundOwnerId.value);
-  toFundOwnerId.value = diffHolder?.id || holders[0]?.id || '';
+  if (!holders.some((h) => h.id === toFundOwnerId.value)) {
+    const diffHolder = holders.find((h) => h.id !== fundOwnerId.value);
+    toFundOwnerId.value = diffHolder?.id || holders[0]?.id || '';
+  }
 });
 
 watch(txType, () => {
+  if (isInitializing.value) return;
   category.value = categories.value[0] || 'Lainnya';
 });
 
@@ -89,6 +138,20 @@ function addQuickAmount(val: number) {
 
 function closeModal() {
   financeStore.quickModalOpen = false;
+  financeStore.editingTransaction = null;
+}
+
+async function handleDeleteCurrent() {
+  if (!financeStore.editingTransaction) return;
+  isSubmitting.value = true;
+  try {
+    await financeStore.removeTransaction(financeStore.editingTransaction.id);
+    closeModal();
+  } catch (err: any) {
+    errorMsg.value = err instanceof Error ? err.message : 'Gagal menghapus transaksi.';
+  } finally {
+    isSubmitting.value = false;
+  }
 }
 
 async function handleSubmit() {
@@ -109,7 +172,7 @@ async function handleSubmit() {
 
   isSubmitting.value = true;
   try {
-    await financeStore.addTransaction({
+    const payload = {
       walletId: walletId.value,
       fundOwnerId: fundOwnerId.value,
       toWalletId: txType.value === 'transfer' ? toWalletId.value : undefined,
@@ -121,10 +184,17 @@ async function handleSubmit() {
         note.value.trim() ||
         (txType.value === 'transfer' ? 'Transfer antar kepemilikan dana' : category.value),
       date: date.value,
-    });
+    };
+
+    if (financeStore.editingTransaction) {
+      await financeStore.updateTransaction(financeStore.editingTransaction.id, payload);
+    } else {
+      await financeStore.addTransaction(payload);
+    }
+
     amount.value = '';
     note.value = '';
-    financeStore.quickModalOpen = false;
+    closeModal();
   } catch (err: any) {
     errorMsg.value = err instanceof Error ? err.message : 'Gagal menyimpan transaksi.';
   } finally {
@@ -140,23 +210,27 @@ async function handleSubmit() {
     @click.self="closeModal"
   >
     <div
-      class="w-full max-w-lg max-h-[92dvh] overflow-y-auto rounded-t-3xl sm:rounded-2xl bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 p-5 sm:p-6 shadow-xl transition-transform duration-150"
+      class="w-full max-w-lg max-h-[92dvh] overflow-y-auto overflow-x-hidden rounded-t-3xl sm:rounded-2xl bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 p-4 sm:p-6 shadow-xl transition-transform duration-150"
     >
       <!-- Mobile drag handle -->
-      <div class="w-10 h-1.5 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto mb-4 sm:hidden"></div>
+      <div class="w-10 h-1.5 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto mb-3.5 sm:hidden"></div>
 
-      <div class="flex items-center justify-between mb-4">
-        <div>
-          <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
-            {{ t('dashboard.addTransaction') }}
+      <div class="flex items-start justify-between gap-3 mb-4">
+        <div class="min-w-0">
+          <h2 class="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 truncate">
+            {{ isEditMode ? 'Detail & Ubah Transaksi' : t('dashboard.addTransaction') }}
           </h2>
-          <p class="text-xs text-slate-500 dark:text-slate-400">
-            Urutan: Pilih Sumber Dana → Pilih Pemilik Dana → Input Transaksi
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            {{
+              isEditMode
+                ? 'Ubah rincian transaksi di bawah lalu ketuk Simpan Perubahan.'
+                : 'Pilih Sumber Dana → Pilih Pemilik Dana → Input Transaksi'
+            }}
           </p>
         </div>
         <button
           type="button"
-          class="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+          class="min-h-[42px] min-w-[42px] shrink-0 flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           @click="closeModal"
         >
           <X class="w-5 h-5" />
@@ -164,10 +238,10 @@ async function handleSubmit() {
       </div>
 
       <!-- Segmented 3-Way Type Control: Expense | Income | Transfer -->
-      <div class="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-xl mb-5">
+      <div class="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-xl mb-4">
         <button
           type="button"
-          class="min-h-[42px] flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap"
+          class="min-h-[42px] flex items-center justify-center gap-1 rounded-lg text-xs font-semibold transition-colors px-1"
           :class="
             txType === 'expense'
               ? 'bg-white dark:bg-slate-900 text-rose-600 dark:text-rose-400 shadow-xs'
@@ -175,12 +249,12 @@ async function handleSubmit() {
           "
           @click="txType = 'expense'"
         >
-          <ArrowUpRight class="w-4 h-4" />
-          <span>{{ t('transactions.expense') }}</span>
+          <ArrowUpRight class="w-4 h-4 shrink-0" />
+          <span class="truncate">{{ t('transactions.expense') }}</span>
         </button>
         <button
           type="button"
-          class="min-h-[42px] flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap"
+          class="min-h-[42px] flex items-center justify-center gap-1 rounded-lg text-xs font-semibold transition-colors px-1"
           :class="
             txType === 'income'
               ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
@@ -188,12 +262,12 @@ async function handleSubmit() {
           "
           @click="txType = 'income'"
         >
-          <ArrowDownLeft class="w-4 h-4" />
-          <span>{{ t('transactions.income') }}</span>
+          <ArrowDownLeft class="w-4 h-4 shrink-0" />
+          <span class="truncate">{{ t('transactions.income') }}</span>
         </button>
         <button
           type="button"
-          class="min-h-[42px] flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap"
+          class="min-h-[42px] flex items-center justify-center gap-1 rounded-lg text-xs font-semibold transition-colors px-1"
           :class="
             txType === 'transfer'
               ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
@@ -201,8 +275,8 @@ async function handleSubmit() {
           "
           @click="txType = 'transfer'"
         >
-          <ArrowLeftRight class="w-4 h-4" />
-          <span>{{ t('transactions.transfer') }}</span>
+          <ArrowLeftRight class="w-4 h-4 shrink-0" />
+          <span class="truncate">{{ t('transactions.transfer') }}</span>
         </button>
       </div>
 
@@ -210,16 +284,16 @@ async function handleSubmit() {
         <!-- STEP 1 & STEP 2: Pilih Sumber Dana -> Pilih Pemilik Dana -->
         <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/60 p-3.5 space-y-3">
           <div class="text-[11px] font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
-            {{ txType === 'transfer' ? 'Asal Dana (Sumber & Kepemilikan)' : 'Langkah 1 & 2 · Sumber & Kepemilikan Dana' }}
+            {{ txType === 'transfer' ? 'Asal Dana (Sumber & Kepemilikan)' : 'Sumber & Kepemilikan Dana' }}
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                1. Pilih Sumber Dana (Wallet)
+                1. Sumber Dana (Wallet)
               </label>
               <select
                 v-model="walletId"
-                class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+                class="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
               >
                 <option
                   v-for="w in financeStore.wallets"
@@ -233,12 +307,12 @@ async function handleSubmit() {
 
             <div>
               <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                2. Pilih Pemilik Sumber Dana
+                2. Pemilik Sumber Dana
               </label>
               <select
                 v-model="fundOwnerId"
                 :disabled="!walletId || availableSourceHolders.length === 0"
-                class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600 disabled:opacity-50"
+                class="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600 disabled:opacity-50"
               >
                 <option
                   v-for="holder in availableSourceHolders"
@@ -258,7 +332,7 @@ async function handleSubmit() {
           class="rounded-2xl border border-indigo-200/80 dark:border-indigo-900/50 bg-indigo-50/40 dark:bg-indigo-950/20 p-3.5 space-y-3"
         >
           <div class="text-[11px] font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-            Tujuan Transfer (Sumber & Kepemilikan Dana Tujuan)
+            Tujuan Transfer (Sumber & Kepemilikan Tujuan)
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -267,7 +341,7 @@ async function handleSubmit() {
               </label>
               <select
                 v-model="toWalletId"
-                class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-600"
+                class="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-600"
               >
                 <option
                   v-for="w in financeStore.wallets"
@@ -286,7 +360,7 @@ async function handleSubmit() {
               <select
                 v-model="toFundOwnerId"
                 :disabled="!toWalletId || availableDestHolders.length === 0"
-                class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-600 disabled:opacity-50"
+                class="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-600 disabled:opacity-50"
               >
                 <option
                   v-for="holder in availableDestHolders"
@@ -323,12 +397,12 @@ async function handleSubmit() {
               />
             </div>
             <!-- Quick nominal tap buttons -->
-            <div class="flex items-center gap-2 mt-2 overflow-x-auto pb-1">
+            <div class="flex items-center gap-1.5 mt-2 overflow-x-auto pb-1">
               <button
                 v-for="preset in [25000, 50000, 100000, 250000, 500000]"
                 :key="preset"
                 type="button"
-                class="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300 hover:border-emerald-500 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors whitespace-nowrap shrink-0"
+                class="min-h-[34px] px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300 hover:border-emerald-500 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors whitespace-nowrap shrink-0"
                 @click="addQuickAmount(preset)"
               >
                 +{{ (preset / 1000).toLocaleString('id-ID') }}rb
@@ -344,7 +418,7 @@ async function handleSubmit() {
               </label>
               <select
                 v-model="category"
-                class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+                class="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
               >
                 <option v-for="cat in categories" :key="cat" :value="cat">
                   {{ cat }}
@@ -360,7 +434,7 @@ async function handleSubmit() {
                 v-model="date"
                 type="date"
                 required
-                class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs sm:text-sm font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+                class="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs sm:text-sm font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
               />
             </div>
           </div>
@@ -378,7 +452,7 @@ async function handleSubmit() {
                   ? 'Contoh: Pindah dana belanja dari Pribadi ke Istri...'
                   : 'Contoh: Makan siang, Belanja dapur, Listrik...'
               "
-              class="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+              class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
             />
           </div>
         </div>
@@ -387,22 +461,37 @@ async function handleSubmit() {
           {{ errorMsg }}
         </p>
 
-        <div class="pt-2 flex items-center justify-end gap-2.5">
+        <div class="pt-2 flex items-center justify-between gap-2">
+          <!-- Enlarged Delete Button when in Edit Mode -->
           <button
+            v-if="isEditMode"
             type="button"
-            class="min-h-[42px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap"
-            @click="closeModal"
-          >
-            Batal
-          </button>
-          <button
-            type="submit"
             :disabled="isSubmitting"
-            class="min-h-[42px] px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap disabled:opacity-50"
+            class="min-h-[44px] px-3.5 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center gap-1.5 transition-colors shrink-0 disabled:opacity-50"
+            @click="handleDeleteCurrent"
           >
-            <Check class="w-4 h-4" />
-            <span>{{ t('transactions.save') }}</span>
+            <Trash2 class="w-4 h-4 shrink-0" />
+            <span>Hapus</span>
           </button>
+          <div v-else></div>
+
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              class="min-h-[44px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              @click="closeModal"
+            >
+              Batal
+            </button>
+            <button
+              type="submit"
+              :disabled="isSubmitting"
+              class="min-h-[44px] px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            >
+              <Check class="w-4 h-4 shrink-0" />
+              <span>{{ isEditMode ? 'Simpan Perubahan' : t('transactions.save') }}</span>
+            </button>
+          </div>
         </div>
       </form>
     </div>

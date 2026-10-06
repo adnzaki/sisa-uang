@@ -172,6 +172,26 @@ export function formatPeriodLabel(period: string, locale = 'id-ID'): string {
   return d.toLocaleDateString(locale, { month: 'long', year: 'numeric' });
 }
 
+export function formatTransactionDateBadge(
+  dateStr: string,
+  locale = 'id-ID'
+): { day: string; monthYear: string } {
+  const clean = String(dateStr || '').slice(0, 10);
+  const parts = clean.split('-');
+  if (parts.length === 3) {
+    const y = Number(parts[0]);
+    const m = Number(parts[1]);
+    const d = Number(parts[2]);
+    if (y && m && d) {
+      const dt = new Date(y, m - 1, d);
+      const day = String(d).padStart(2, '0');
+      const monthShort = dt.toLocaleDateString(locale, { month: 'short' });
+      return { day, monthYear: `${monthShort} ${y}` };
+    }
+  }
+  return { day: clean.slice(-2) || '--', monthYear: clean.slice(0, 7) || '' };
+}
+
 export const useFinanceStore = defineStore('finance', () => {
   const wallets = ref<WalletItem[]>([]);
   const walletOwners = ref<WalletOwnerItem[]>([]);
@@ -184,6 +204,17 @@ export const useFinanceStore = defineStore('finance', () => {
   const isSyncedWithFirestore = ref(false);
   const activeOwnerUid = ref<string>('');
   const quickModalOpen = ref(false);
+  const editingTransaction = ref<TransactionItem | null>(null);
+
+  function openAddTransactionModal() {
+    editingTransaction.value = null;
+    quickModalOpen.value = true;
+  }
+
+  function openEditTransactionModal(tx: TransactionItem) {
+    editingTransaction.value = { ...tx };
+    quickModalOpen.value = true;
+  }
 
   // Selected Period ('all' or 'YYYY-MM'). Automatically defaults to user's latest active month in Firestore.
   const selectedPeriod = ref<string>(getCurrentMonthPeriod());
@@ -1084,6 +1115,47 @@ export const useFinanceStore = defineStore('finance', () => {
     );
   }
 
+  async function updateCategory(
+    catId: string,
+    payload: { name: string; type: 'income' | 'expense'; color?: string }
+  ) {
+    const authStore = useAuthStore();
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
+    const target = userCategories.value.find((c) => c.id === catId);
+    if (!target) {
+      useNotificationStore().notifyError(
+        'Kategori Bawaan Sistem',
+        'Kategori bawaan sistem tidak dapat diubah. Silakan tambahkan kategori kustom baru.'
+      );
+      return;
+    }
+
+    const safeName = sanitizeString(payload.name, MAX_CATEGORY_LENGTH, target.name);
+    const safeColor = sanitizeString(
+      payload.color || target.color || (payload.type === 'income' ? 'emerald' : 'rose'),
+      20,
+      'emerald'
+    );
+
+    await ensureFirestoreSessionForUser(uid);
+    try {
+      await updateDoc(doc(db, 'categories', catId), {
+        name: safeName,
+        type: payload.type,
+        color: safeColor,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      useNotificationStore().notifyError('Gagal Memperbarui Kategori', err);
+      handleFirestoreError(err, OperationType.UPDATE, `categories/${catId}`);
+    }
+
+    useNotificationStore().notifySuccess(
+      'Kategori Diperbarui',
+      `Kategori "${safeName}" berhasil diperbarui di Firestore.`
+    );
+  }
+
   async function removeCategory(catId: string) {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
@@ -1272,6 +1344,179 @@ export const useFinanceStore = defineStore('finance', () => {
     useNotificationStore().notifySuccess('Transaksi Berhasil Dicatat', logMsg);
   }
 
+  async function updateTransaction(
+    txId: string,
+    payload: {
+      walletId: string;
+      fundOwnerId?: string;
+      toWalletId?: string;
+      toFundOwnerId?: string;
+      type: TransactionItem['type'];
+      category: string;
+      amount: number;
+      note: string;
+      date: string;
+    }
+  ) {
+    const authStore = useAuthStore();
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
+    const oldTx = transactions.value.find((t) => t.id === txId);
+    if (!oldTx) {
+      throw new Error('Data transaksi yang ingin diubah tidak ditemukan.');
+    }
+
+    const newWallet = wallets.value.find((w) => w.id === payload.walletId) || wallets.value[0];
+    if (!newWallet) {
+      throw new Error('Pilih sumber dana (wallet) terlebih dahulu.');
+    }
+
+    const newWalletHolders = getHoldersByWalletId(newWallet.id);
+    const newSourceHolder =
+      newWalletHolders.find((h) => h.id === payload.fundOwnerId) || newWalletHolders[0];
+
+    const numericAmount = Math.abs(Number(payload.amount) || 0);
+    if (numericAmount <= 0) {
+      throw new Error('Nominal transaksi harus lebih dari 0.');
+    }
+
+    const defaultCategory =
+      payload.type === 'transfer' ? 'Transfer Saldo' : payload.category || 'Lainnya';
+    const safeCategory = sanitizeString(defaultCategory, MAX_CATEGORY_LENGTH, 'Lainnya');
+    const safeNote = sanitizeString(payload.note, MAX_NOTE_LENGTH, safeCategory);
+    const safeDate = sanitizeString(payload.date || getTodayIsoDate(), 30, getTodayIsoDate());
+
+    let newDestWallet: WalletItem | undefined;
+    let newDestHolder: WalletOwnerItem | undefined;
+
+    if (payload.type === 'transfer') {
+      newDestWallet = wallets.value.find((w) => w.id === payload.toWalletId) || newWallet;
+      const destHolders = getHoldersByWalletId(newDestWallet.id);
+      newDestHolder =
+        destHolders.find((h) => h.id === payload.toFundOwnerId) || destHolders[0];
+
+      if (
+        newSourceHolder &&
+        newDestHolder &&
+        newSourceHolder.id === newDestHolder.id &&
+        newWallet.id === newDestWallet.id
+      ) {
+        throw new Error(
+          'Sumber dana & pemilik dana tujuan transfer tidak boleh sama persis dengan asal.'
+        );
+      }
+    }
+
+    // Compute exact net balance deltas for affected holders and wallets
+    const holderDeltas = new Map<string, number>();
+    const walletDeltas = new Map<string, number>();
+
+    const addDelta = (map: Map<string, number>, key: string | undefined, delta: number) => {
+      if (!key) return;
+      map.set(key, (map.get(key) || 0) + delta);
+    };
+
+    // 1. Reverse oldTx balance effect
+    const oldAmount = Number(oldTx.amount || 0);
+    if (oldTx.type === 'income') {
+      addDelta(holderDeltas, oldTx.fundOwnerId, -oldAmount);
+      addDelta(walletDeltas, oldTx.walletId, -oldAmount);
+    } else if (oldTx.type === 'expense') {
+      addDelta(holderDeltas, oldTx.fundOwnerId, oldAmount);
+      addDelta(walletDeltas, oldTx.walletId, oldAmount);
+    } else if (oldTx.type === 'transfer') {
+      addDelta(holderDeltas, oldTx.fundOwnerId, oldAmount);
+      addDelta(holderDeltas, oldTx.toFundOwnerId, -oldAmount);
+      if (oldTx.toWalletId && oldTx.toWalletId !== oldTx.walletId) {
+        addDelta(walletDeltas, oldTx.walletId, oldAmount);
+        addDelta(walletDeltas, oldTx.toWalletId, -oldAmount);
+      }
+    }
+
+    // 2. Apply new payload balance effect
+    if (payload.type === 'income') {
+      addDelta(holderDeltas, newSourceHolder?.id, numericAmount);
+      addDelta(walletDeltas, newWallet.id, numericAmount);
+    } else if (payload.type === 'expense') {
+      addDelta(holderDeltas, newSourceHolder?.id, -numericAmount);
+      addDelta(walletDeltas, newWallet.id, -numericAmount);
+    } else if (payload.type === 'transfer' && newDestWallet) {
+      addDelta(holderDeltas, newSourceHolder?.id, -numericAmount);
+      addDelta(holderDeltas, newDestHolder?.id, numericAmount);
+      if (newDestWallet.id !== newWallet.id) {
+        addDelta(walletDeltas, newWallet.id, -numericAmount);
+        addDelta(walletDeltas, newDestWallet.id, numericAmount);
+      }
+    }
+
+    await ensureFirestoreSessionForUser(uid);
+    const txPath = `transactions/${txId}`;
+    try {
+      const updatePayload: Record<string, any> = {
+        walletId: newWallet.id,
+        walletName: newWallet.name,
+        fundOwnerId: newSourceHolder?.id || 'default',
+        fundOwnerName: newSourceHolder?.holderName || 'Pribadi',
+        type: payload.type,
+        category: safeCategory,
+        amount: numericAmount,
+        note: safeNote,
+        date: safeDate,
+        updatedAt: serverTimestamp(),
+      };
+      if (payload.type === 'transfer' && newDestWallet) {
+        updatePayload.toWalletId = newDestWallet.id;
+        updatePayload.toWalletName = newDestWallet.name;
+        updatePayload.toFundOwnerId = newDestHolder?.id || 'default';
+        updatePayload.toFundOwnerName = newDestHolder?.holderName || 'Pribadi';
+      }
+
+      await updateDoc(doc(db, 'transactions', txId), updatePayload);
+
+      // Apply holder balance deltas
+      for (const [hId, delta] of holderDeltas.entries()) {
+        if (delta === 0) continue;
+        const holderDoc = walletOwners.value.find((h) => h.id === hId);
+        if (holderDoc) {
+          await updateDoc(doc(db, 'wallet_owners', hId), {
+            balance: Number(holderDoc.balance || 0) + delta,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+
+      // Apply wallet balance deltas
+      for (const [wId, delta] of walletDeltas.entries()) {
+        if (delta === 0) continue;
+        const walletDoc = wallets.value.find((w) => w.id === wId);
+        if (walletDoc) {
+          await updateDoc(doc(db, 'wallets', wId), {
+            balance: Number(walletDoc.balance || 0) + delta,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+    } catch (err) {
+      useNotificationStore().notifyError('Gagal Memperbarui Transaksi', err);
+      handleFirestoreError(err, OperationType.UPDATE, txPath);
+    }
+
+    const txMonth = safeDate.slice(0, 7);
+    if (selectedPeriod.value !== 'all' && /^\d{4}-\d{2}$/.test(txMonth)) {
+      selectedPeriod.value = txMonth;
+    }
+
+    await authStore.recordAuditLog(
+      'transaction_updated',
+      `Memperbarui transaksi "${safeNote}" (${safeCategory}) sebesar Rp ${numericAmount.toLocaleString('id-ID')}.`,
+      'info',
+      numericAmount
+    );
+    useNotificationStore().notifySuccess(
+      'Transaksi Diperbarui',
+      `Perubahan pada transaksi "${safeNote}" (Rp ${numericAmount.toLocaleString('id-ID')}) telah disimpan.`
+    );
+  }
+
   async function removeTransaction(txId: string) {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
@@ -1451,6 +1696,9 @@ export const useFinanceStore = defineStore('finance', () => {
     isLoading,
     isSyncedWithFirestore,
     quickModalOpen,
+    editingTransaction,
+    openAddTransactionModal,
+    openEditTransactionModal,
     totalBalance,
     monthlyIncome,
     monthlyExpense,
@@ -1463,6 +1711,7 @@ export const useFinanceStore = defineStore('finance', () => {
     savingsRate,
     formatHolderName,
     formatPeriodLabel,
+    formatTransactionDateBadge,
     initFinanceData,
     cleanupListeners,
     getHoldersByWalletId,
@@ -1474,8 +1723,10 @@ export const useFinanceStore = defineStore('finance', () => {
     removeWalletOwner,
     removeWallet,
     addCategory,
+    updateCategory,
     removeCategory,
     addTransaction,
+    updateTransaction,
     removeTransaction,
     saveBudget,
     removeBudget,

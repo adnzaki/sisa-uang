@@ -105,15 +105,15 @@ function formatTimestamp(iso: string): string {
 </script>
 
 <template>
-  <div class="space-y-6">
+  <div class="space-y-5 sm:space-y-6 max-w-full overflow-x-hidden">
     <!-- Control Panel Header -->
     <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-      <div>
+      <div class="min-w-0">
         <div class="flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400 font-medium mb-1">
-          <Lock class="w-3.5 h-3.5" />
-          <span>Endpoint Terproteksi Middleware · /control-panel · {{ authStore.user?.email }}</span>
+          <Lock class="w-3.5 h-3.5 shrink-0" />
+          <span class="truncate">Endpoint Terproteksi · /control-panel · {{ authStore.user?.email }}</span>
         </div>
-        <h1 class="text-2xl sm:text-3xl font-display italic text-slate-900 dark:text-slate-100">
+        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
           {{ t('admin.title') }}
         </h1>
         <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
@@ -122,22 +122,22 @@ function formatTimestamp(iso: string): string {
       </div>
 
       <!-- Instant Suspicious Activity Simulation Controls -->
-      <div class="flex flex-wrap items-center gap-2">
+      <div class="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2 w-full sm:w-auto">
         <button
           type="button"
-          class="min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 flex items-center gap-1.5 transition-colors whitespace-nowrap"
+          class="w-full sm:w-auto min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1.5 transition-colors"
           @click="adminStore.fetchAdminOverview(false)"
         >
-          <RefreshCw class="w-3.5 h-3.5" :class="adminStore.isLoading ? 'animate-spin' : ''" />
+          <RefreshCw class="w-4 h-4 shrink-0" :class="adminStore.isLoading ? 'animate-spin' : ''" />
           <span>Segarkan Data</span>
         </button>
 
         <button
           type="button"
-          class="min-h-[42px] px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+          class="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
           @click="adminStore.simulateSuspiciousActivity('brute_force')"
         >
-          <Zap class="w-3.5 h-3.5" />
+          <Zap class="w-4 h-4 shrink-0" />
           <span>{{ t('admin.simulateAlert') }}</span>
         </button>
       </div>
@@ -325,11 +325,11 @@ function formatTimestamp(iso: string): string {
           <!-- Real-Time Action Buttons (Block / Unblock & Delete) -->
           <div
             v-if="u.email.toLowerCase() !== 'vuedevo@gmail.com'"
-            class="flex items-center gap-2 self-end sm:self-center shrink-0"
+            class="flex items-center gap-2 w-full sm:w-auto justify-end shrink-0"
           >
             <button
               type="button"
-              class="min-h-[40px] px-3.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+              class="flex-1 sm:flex-initial min-h-[44px] px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
               :class="
                 u.status === 'active'
                   ? 'border-amber-200 dark:border-amber-900/60 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40'
@@ -337,17 +337,17 @@ function formatTimestamp(iso: string): string {
               "
               @click="adminStore.toggleUserBlockStatus(u)"
             >
-              <Ban v-if="u.status === 'active'" class="w-3.5 h-3.5" />
-              <CheckCircle2 v-else class="w-3.5 h-3.5" />
+              <Ban v-if="u.status === 'active'" class="w-4 h-4 shrink-0" />
+              <CheckCircle2 v-else class="w-4 h-4 shrink-0" />
               <span>{{ u.status === 'active' ? t('admin.blockUser') : t('admin.unblockUser') }}</span>
             </button>
 
             <button
               type="button"
-              class="min-h-[40px] px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+              class="min-h-[44px] px-4 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
               @click="adminStore.removeUserAccount(u)"
             >
-              <Trash2 class="w-3.5 h-3.5" />
+              <Trash2 class="w-4 h-4 shrink-0" />
               <span>{{ t('admin.deleteUser') }}</span>
             </button>
           </div>
