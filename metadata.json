@@ -1,0 +1,6 @@
+{
+  "name": "Sisa Uang",
+  "description": "Aplikasi pengelola keuangan personal modern berbasis mobile-first dengan sinkronisasi real-time Firestore, multi-bahasa, dan panel kontrol administrator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
