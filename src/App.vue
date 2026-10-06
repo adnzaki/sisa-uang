@@ -157,7 +157,7 @@ async function handleLogout() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col">
+  <div class="min-h-screen w-full max-w-full overflow-x-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col">
     <!-- Instant Suspicious Activity Notification Banner (Super Admin Real-Time Alert) -->
     <div
       v-if="adminStore.instantAlertNotification && authStore.isSuperAdmin"
@@ -499,7 +499,7 @@ async function handleLogout() {
       </aside>
 
       <!-- Main Column -->
-      <div class="flex-1 flex flex-col min-w-0 pb-20 md:pb-0">
+      <div class="flex-1 flex flex-col min-w-0 max-w-full overflow-x-hidden pb-24 md:pb-0">
         <!-- Desktop Top Bar: Only Brand Title and "+ Catat Transaksi" (for regular users) -->
         <header
           class="hidden md:flex items-center justify-between px-8 py-3.5 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md sticky top-0 z-30"
@@ -517,7 +517,7 @@ async function handleLogout() {
               v-if="!authStore.isSuperAdmin"
               type="button"
               class="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors whitespace-nowrap flex items-center gap-1.5"
-              @click="financeStore.quickModalOpen = true"
+              @click="financeStore.openAddTransactionModal()"
             >
               <Plus class="w-4 h-4" />
               <span>{{ t('dashboard.addTransaction') }}</span>
@@ -525,13 +525,13 @@ async function handleLogout() {
           </div>
         </header>
 
-        <!-- Mobile Top App Bar (< md) - Compact 52px Sticky Header -->
+        <!-- Mobile Top App Bar (< md) - Compact Sticky Header -->
         <header
-          class="md:hidden sticky top-0 z-30 h-13 px-4 flex items-center justify-between bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80"
+          class="md:hidden sticky top-0 z-30 h-14 px-3.5 flex items-center justify-between gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80"
         >
           <button
             type="button"
-            class="min-h-[44px] min-w-[44px] -ml-2 flex items-center justify-center rounded-xl text-slate-700 dark:text-slate-200"
+            class="min-h-[44px] min-w-[44px] -ml-1.5 flex items-center justify-center rounded-xl text-slate-700 dark:text-slate-200 shrink-0"
             aria-label="Menu"
             @click="mobileDrawerOpen = true"
           >
@@ -545,15 +545,15 @@ async function handleLogout() {
             Sisa Uang
           </RouterLink>
 
-          <div class="flex items-center -mr-2">
+          <div class="flex items-center shrink-0">
             <!-- Mobile Navbar Quick Add Transaction button for regular users, or theme button for admin -->
             <button
               v-if="!authStore.isSuperAdmin"
               type="button"
-              class="min-h-[38px] px-3 py-1.5 mr-1 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1 whitespace-nowrap"
-              @click="financeStore.quickModalOpen = true"
+              class="min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1 whitespace-nowrap shadow-2xs"
+              @click="financeStore.openAddTransactionModal()"
             >
-              <Plus class="w-3.5 h-3.5" />
+              <Plus class="w-3.5 h-3.5 shrink-0" />
               <span>{{ t('nav.quickAdd') }}</span>
             </button>
             <button
@@ -571,7 +571,7 @@ async function handleLogout() {
         </header>
 
         <!-- Main View Content -->
-        <main class="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 md:px-8 py-5 sm:py-7">
+        <main class="flex-1 w-full max-w-6xl mx-auto px-3.5 sm:px-6 md:px-8 py-4 sm:py-7 overflow-x-hidden">
           <RouterView />
         </main>
       </div>
@@ -768,7 +768,7 @@ async function handleLogout() {
             type="button"
             class="h-11 w-11 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center shadow-md active:scale-95 transition-transform"
             :aria-label="t('nav.quickAdd')"
-            @click="financeStore.quickModalOpen = true"
+            @click="financeStore.openAddTransactionModal()"
           >
             <Plus class="w-5 h-5" />
           </button>

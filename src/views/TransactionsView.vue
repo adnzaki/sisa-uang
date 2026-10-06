@@ -4,13 +4,13 @@ import { useI18n } from 'vue-i18n';
 import {
   Search,
   Plus,
-  ArrowDownLeft,
-  ArrowUpRight,
-  ArrowLeftRight,
   Trash2,
-  Calendar,
 } from 'lucide-vue-next';
-import { useFinanceStore, formatPeriodLabel } from '../stores/finance';
+import {
+  useFinanceStore,
+  formatPeriodLabel,
+  formatTransactionDateBadge,
+} from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
 
 const { t, locale } = useI18n();
@@ -79,116 +79,120 @@ const filteredTotalExpense = computed(() =>
     .reduce((acc, tx) => acc + Number(tx.amount || 0), 0)
 );
 
-const filteredTotalTransfer = computed(() =>
-  filteredTransactions.value
-    .filter((tx) => tx.type === 'transfer')
-    .reduce((acc, tx) => acc + Number(tx.amount || 0), 0)
+const filteredNetDifference = computed(
+  () => filteredTotalIncome.value - filteredTotalExpense.value
 );
+
+function getDateBadge(dateStr: string) {
+  return formatTransactionDateBadge(dateStr, locale.value === 'id' ? 'id-ID' : 'en-US');
+}
 </script>
 
 <template>
-  <div class="space-y-6">
+  <div class="space-y-4 sm:space-y-6 max-w-full overflow-x-hidden">
     <!-- Header -->
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-      <div>
-        <h1 class="text-2xl sm:text-3xl font-display italic text-slate-900 dark:text-slate-100">
+      <div class="min-w-0">
+        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
           {{ t('transactions.title') }}
         </h1>
-        <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-          Catatan arus kas masuk, keluar, dan transfer antar kepemilikan sumber dana dari database Firestore.
+        <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          Catat dan pantau seluruh arus kas secara cepat. Ketuk transaksi untuk melihat detail atau mengubah data.
         </p>
       </div>
 
-      <div class="flex flex-wrap items-center gap-2 self-start sm:self-auto">
-        <!-- Period Selector -->
-        <div class="relative flex items-center">
-          <Calendar class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 absolute left-3 pointer-events-none" />
-          <select
-            v-model="financeStore.selectedPeriod"
-            aria-label="Pilih Periode Bulan"
-            class="min-h-[44px] pl-8 pr-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600"
-          >
-            <option value="all">Semua Periode ({{ financeStore.transactions.length }})</option>
-            <option
-              v-for="p in financeStore.availablePeriods"
-              :key="p"
-              :value="p"
-            >
-              {{ formatPeriodLabel(p, locale === 'id' ? 'id-ID' : 'en-US') }}
-            </option>
-          </select>
-        </div>
+      <button
+        type="button"
+        class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs"
+        @click="financeStore.openAddTransactionModal()"
+      >
+        <Plus class="w-4 h-4 shrink-0" />
+        <span>{{ t('dashboard.addTransaction') }}</span>
+      </button>
+    </div>
 
-        <button
-          type="button"
-          class="min-h-[44px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
-          @click="financeStore.quickModalOpen = true"
+    <!-- 3 Summary Cards (Matching Published Mobile Reference) -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-4">
+      <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
+        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          TOTAL PEMASUKAN
+        </div>
+        <div class="text-xl sm:text-2xl font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400 mt-1 truncate">
+          {{ themeStore.formatMoney(filteredTotalIncome) }}
+        </div>
+      </div>
+
+      <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
+        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          TOTAL PENGELUARAN
+        </div>
+        <div class="text-xl sm:text-2xl font-mono font-bold tabular-nums text-rose-600 dark:text-rose-400 mt-1 truncate">
+          {{ themeStore.formatMoney(filteredTotalExpense) }}
+        </div>
+      </div>
+
+      <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
+        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          SELISIH BERSIH
+        </div>
+        <div
+          class="text-xl sm:text-2xl font-mono font-bold tabular-nums mt-1 truncate"
+          :class="
+            filteredNetDifference >= 0
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : 'text-slate-900 dark:text-slate-100'
+          "
         >
-          <Plus class="w-4 h-4" />
-          <span>{{ t('dashboard.addTransaction') }}</span>
-        </button>
+          {{ filteredNetDifference >= 0 ? '+' : '-' }}{{ themeStore.formatMoney(Math.abs(filteredNetDifference)) }}
+        </div>
       </div>
     </div>
 
-    <!-- Filter Bar & Search -->
-    <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
-      <!-- Interactive Segmented Filter Tabs (All, Expense, Income, Transfer) -->
-      <div class="md:col-span-5 flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-xl overflow-x-auto">
-        <button
-          type="button"
-          class="flex-1 min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap"
-          :class="
-            typeFilter === 'all'
-              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-          "
-          @click="typeFilter = 'all'"
-        >
-          {{ t('transactions.all') }}
-        </button>
-        <button
-          type="button"
-          class="flex-1 min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap"
-          :class="
-            typeFilter === 'expense'
-              ? 'bg-white dark:bg-slate-900 text-rose-600 dark:text-rose-400 shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-          "
-          @click="typeFilter = 'expense'"
-        >
-          {{ t('transactions.expense') }}
-        </button>
-        <button
-          type="button"
-          class="flex-1 min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap"
-          :class="
-            typeFilter === 'income'
-              ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-          "
-          @click="typeFilter = 'income'"
-        >
-          {{ t('transactions.income') }}
-        </button>
-        <button
-          type="button"
-          class="flex-1 min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap"
-          :class="
-            typeFilter === 'transfer'
-              ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-          "
-          @click="typeFilter = 'transfer'"
-        >
-          {{ t('transactions.transfer') }}
-        </button>
+    <!-- Search & Filter Box -->
+    <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-4 space-y-3">
+      <!-- Search Input -->
+      <div class="relative">
+        <Search class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <input
+          v-model="searchQuery"
+          type="text"
+          :placeholder="t('transactions.searchPlaceholder')"
+          class="w-full min-h-[44px] pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+        />
       </div>
 
-      <!-- Wallet Filter -->
-      <div class="md:col-span-2">
+      <!-- 2x2 Filter Grid on Mobile, 4 Columns on Desktop -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        <select
+          v-model="financeStore.selectedPeriod"
+          aria-label="Pilih Periode Bulan"
+          class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600 truncate"
+        >
+          <option value="all">Semua Periode</option>
+          <option
+            v-for="p in financeStore.availablePeriods"
+            :key="p"
+            :value="p"
+          >
+            {{ formatPeriodLabel(p, locale === 'id' ? 'id-ID' : 'en-US') }}
+          </option>
+        </select>
+
+        <select
+          v-model="typeFilter"
+          aria-label="Filter Jenis Transaksi"
+          class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600 truncate"
+        >
+          <option value="all">Semua Jenis</option>
+          <option value="expense">{{ t('transactions.expense') }}</option>
+          <option value="income">{{ t('transactions.income') }}</option>
+          <option value="transfer">{{ t('transactions.transfer') }}</option>
+        </select>
+
         <select
           v-model="selectedWalletId"
-          class="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600"
+          aria-label="Filter Sumber Dana"
+          class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600 truncate"
         >
           <option value="all">Semua Sumber Dana</option>
           <option
@@ -199,15 +203,13 @@ const filteredTotalTransfer = computed(() =>
             {{ w.name }}
           </option>
         </select>
-      </div>
 
-      <!-- Fund Owner Filter -->
-      <div class="md:col-span-2">
         <select
           v-model="selectedHolderFilter"
-          class="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600"
+          aria-label="Filter Kepemilikan"
+          class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600 truncate"
         >
-          <option value="all">Semua Pemilik Dana</option>
+          <option value="all">Semua Kepemilikan</option>
           <option
             v-for="holderName in uniqueHolderNames"
             :key="holderName"
@@ -217,135 +219,122 @@ const filteredTotalTransfer = computed(() =>
           </option>
         </select>
       </div>
-
-      <!-- Search Input -->
-      <div class="md:col-span-3 relative">
-        <Search class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-        <input
-          v-model="searchQuery"
-          type="text"
-          :placeholder="t('transactions.searchPlaceholder')"
-          class="w-full min-h-[44px] pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-        />
-      </div>
     </div>
 
-    <!-- Filtered Summary Strip -->
-    <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs">
-      <div class="text-slate-500 dark:text-slate-400">
-        Menampilkan <strong class="font-mono tabular-nums text-slate-900 dark:text-slate-100">{{ filteredTransactions.length }}</strong> transaksi
-        ({{ formatPeriodLabel(financeStore.selectedPeriod, locale === 'id' ? 'id-ID' : 'en-US') }})
-      </div>
-      <div class="flex flex-wrap items-center gap-3 font-mono tabular-nums">
-        <span class="text-emerald-600 dark:text-emerald-400">
-          Masuk: +{{ themeStore.formatMoney(filteredTotalIncome) }}
-        </span>
-        <span aria-hidden="true" class="text-slate-300 dark:text-slate-700">·</span>
-        <span class="text-rose-600 dark:text-rose-400">
-          Keluar: -{{ themeStore.formatMoney(filteredTotalExpense) }}
-        </span>
-        <template v-if="filteredTotalTransfer > 0">
-          <span aria-hidden="true" class="text-slate-300 dark:text-slate-700">·</span>
-          <span class="text-indigo-600 dark:text-indigo-400">
-            Transfer: ⇄ {{ themeStore.formatMoney(filteredTotalTransfer) }}
-          </span>
-        </template>
-      </div>
-    </div>
-
-    <!-- Transaction List -->
+    <!-- Empty State -->
     <div
-      class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-100 dark:divide-slate-800/80"
+      v-if="filteredTransactions.length === 0"
+      class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-8 sm:p-10 text-center space-y-3"
     >
-      <div
-        v-if="filteredTransactions.length === 0"
-        class="p-10 text-center space-y-3"
-      >
-        <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-          Tidak ada transaksi yang cocok dengan filter pencarian atau periode Anda.
-        </p>
-        <div class="flex items-center justify-center gap-2">
-          <button
-            v-if="financeStore.selectedPeriod !== 'all' && financeStore.transactions.length > 0"
-            type="button"
-            class="min-h-[42px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200"
-            @click="financeStore.selectedPeriod = 'all'"
-          >
-            Tampilkan Semua Periode ({{ financeStore.transactions.length }})
-          </button>
-          <button
-            type="button"
-            class="min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold"
-            @click="financeStore.quickModalOpen = true"
-          >
-            {{ t('dashboard.addTransaction') }}
-          </button>
-        </div>
+      <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+        Tidak ada transaksi yang cocok dengan filter pencarian atau periode Anda.
+      </p>
+      <div class="flex flex-wrap items-center justify-center gap-2">
+        <button
+          v-if="financeStore.selectedPeriod !== 'all' && financeStore.transactions.length > 0"
+          type="button"
+          class="min-h-[42px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200"
+          @click="financeStore.selectedPeriod = 'all'"
+        >
+          Tampilkan Semua Periode ({{ financeStore.transactions.length }})
+        </button>
+        <button
+          type="button"
+          class="min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold"
+          @click="financeStore.openAddTransactionModal()"
+        >
+          {{ t('dashboard.addTransaction') }}
+        </button>
       </div>
+    </div>
 
+    <!-- Clean Mobile-First Transaction Cards (Tap anywhere on card to View/Edit, enlarged Delete button on right) -->
+    <div v-else class="space-y-2.5">
       <div
         v-for="tx in filteredTransactions"
         :key="tx.id"
-        class="min-h-[64px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-4 hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
+        role="button"
+        tabindex="0"
+        class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-4 flex items-center justify-between gap-3 hover:border-emerald-500/50 hover:shadow-xs active:scale-[0.995] transition-all cursor-pointer"
+        @click="financeStore.openEditTransactionModal(tx)"
+        @keydown.enter="financeStore.openEditTransactionModal(tx)"
       >
-        <div class="flex items-center gap-3.5 min-w-0">
+        <div class="flex items-center gap-3 sm:gap-3.5 min-w-0 flex-1">
+          <!-- Date Badge Box -->
           <div
-            class="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+            class="w-14 h-14 sm:w-15 sm:h-15 rounded-2xl flex flex-col items-center justify-center shrink-0 border"
             :class="
               tx.type === 'income'
-                ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
+                ? 'bg-emerald-50/90 dark:bg-emerald-950/40 border-emerald-200/60 dark:border-emerald-900/50 text-emerald-600 dark:text-emerald-400'
                 : tx.type === 'transfer'
-                ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400'
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                ? 'bg-indigo-50/90 dark:bg-indigo-950/40 border-indigo-200/60 dark:border-indigo-900/50 text-indigo-600 dark:text-indigo-400'
+                : 'bg-rose-50/90 dark:bg-rose-950/40 border-rose-200/60 dark:border-rose-900/50 text-rose-600 dark:text-rose-400'
             "
           >
-            <ArrowDownLeft v-if="tx.type === 'income'" class="w-4 h-4" />
-            <ArrowLeftRight v-else-if="tx.type === 'transfer'" class="w-4 h-4" />
-            <ArrowUpRight v-else class="w-4 h-4" />
+            <span class="text-base sm:text-lg font-bold font-mono leading-none">
+              {{ getDateBadge(tx.date).day }}
+            </span>
+            <span class="text-[10px] font-semibold leading-tight mt-1 text-center px-0.5 truncate max-w-full">
+              {{ getDateBadge(tx.date).monthYear }}
+            </span>
           </div>
 
-          <div class="min-w-0">
-            <div class="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">
+          <!-- Transaction Details -->
+          <div class="min-w-0 flex-1">
+            <!-- Category Badge + Wallet & Holder -->
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span
+                class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold shrink-0"
+                :class="
+                  tx.type === 'income'
+                    ? 'bg-emerald-100/80 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300'
+                    : tx.type === 'transfer'
+                    ? 'bg-indigo-100/80 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300'
+                    : 'bg-rose-100/80 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300'
+                "
+              >
+                {{ tx.category }}
+              </span>
+              <span class="text-xs text-slate-500 dark:text-slate-400 truncate">
+                <template v-if="tx.type === 'transfer'">
+                  {{ tx.walletName }} · {{ tx.fundOwnerName || 'Pribadi' }} → {{ tx.toWalletName || tx.walletName }} · {{ tx.toFundOwnerName || 'Pribadi' }}
+                </template>
+                <template v-else>
+                  {{ tx.walletName }} · {{ tx.fundOwnerName || 'Pribadi' }}
+                </template>
+              </span>
+            </div>
+
+            <!-- Note / Title -->
+            <div class="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 truncate mt-1">
               {{ tx.note }}
             </div>
-            <!-- Unboxed metadata with separators showing Wallet + Fund Owner (and Transfer target if transfer) -->
-            <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              <span>{{ tx.category }}</span>
-              <span aria-hidden="true">·</span>
-              <span v-if="tx.type === 'transfer'">
-                {{ tx.walletName }} ({{ tx.fundOwnerName || 'Pribadi' }}) → {{ tx.toWalletName || tx.walletName }} ({{ tx.toFundOwnerName || 'Pribadi' }})
-              </span>
-              <span v-else>
-                {{ tx.walletName }} ({{ tx.fundOwnerName || 'Pribadi' }})
-              </span>
-              <span aria-hidden="true">·</span>
-              <span class="font-mono tabular-nums">{{ tx.date }}</span>
+
+            <!-- Amount -->
+            <div
+              class="text-sm sm:text-base font-mono font-bold tabular-nums mt-0.5"
+              :class="
+                tx.type === 'income'
+                  ? 'text-emerald-600 dark:text-emerald-400'
+                  : tx.type === 'transfer'
+                  ? 'text-indigo-600 dark:text-indigo-400'
+                  : 'text-rose-600 dark:text-rose-400'
+              "
+            >
+              {{ tx.type === 'income' ? '+' : tx.type === 'transfer' ? '⇄ ' : '-' }}{{ themeStore.formatMoney(tx.amount) }}
             </div>
           </div>
         </div>
 
-        <div class="flex items-center gap-3 shrink-0">
-          <span
-            class="text-sm sm:text-base font-mono font-semibold tabular-nums"
-            :class="
-              tx.type === 'income'
-                ? 'text-emerald-600 dark:text-emerald-400'
-                : tx.type === 'transfer'
-                ? 'text-indigo-600 dark:text-indigo-400'
-                : 'text-slate-900 dark:text-slate-100'
-            "
-          >
-            {{ tx.type === 'income' ? '+' : tx.type === 'transfer' ? '⇄ ' : '-' }}{{ themeStore.formatMoney(tx.amount) }}
-          </span>
-          <button
-            type="button"
-            class="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
-            :title="t('transactions.delete')"
-            @click="financeStore.removeTransaction(tx.id)"
-          >
-            <Trash2 class="w-4 h-4" />
-          </button>
-        </div>
+        <!-- Enlarged Delete Button -->
+        <button
+          type="button"
+          class="w-11 h-11 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl border border-rose-200/70 dark:border-rose-900/50 bg-rose-50/70 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 shrink-0 transition-colors"
+          :title="t('transactions.delete')"
+          @click.stop="financeStore.removeTransaction(tx.id)"
+        >
+          <Trash2 class="w-5 h-5" />
+        </button>
       </div>
     </div>
   </div>

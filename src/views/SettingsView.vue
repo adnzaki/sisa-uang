@@ -412,13 +412,13 @@ async function confirmAndExecuteImport() {
 </script>
 
 <template>
-  <div class="space-y-6 max-w-5xl">
+  <div class="space-y-5 sm:space-y-6 max-w-5xl w-full overflow-x-hidden">
     <div>
-      <h1 class="text-2xl sm:text-3xl font-display italic text-slate-900 dark:text-slate-100">
+      <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
         {{ t('nav.settings') }}
       </h1>
-      <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-        Sesuaikan tema tampilan, bahasa antarmuka (Intlify), dan konfigurasi sistem Anda.
+      <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+        Sesuaikan tema tampilan, bahasa antarmuka, dan profil akun Anda.
       </p>
     </div>
 
@@ -427,16 +427,16 @@ async function confirmAndExecuteImport() {
     <!-- ===================================================================== -->
     <section
       v-if="authStore.isSuperAdmin"
-      class="rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-7 space-y-6"
+      class="rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-7 space-y-6 overflow-x-hidden"
     >
       <!-- Top Header -->
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
-        <div class="space-y-1">
+        <div class="space-y-1 min-w-0">
           <div class="flex items-center gap-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
-            <FileJson class="w-4 h-4" />
-            <span>Migrasi Database PHPMyAdmin (JSON) → Cloud Firestore</span>
+            <FileJson class="w-4 h-4 shrink-0" />
+            <span class="truncate">Migrasi Database PHPMyAdmin (JSON) → Cloud Firestore</span>
           </div>
-          <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
+          <h2 class="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100">
             Perancang Struktur Database Baru & Kalkulator Kuota Write Firestore
           </h2>
           <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
@@ -444,24 +444,24 @@ async function confirmAndExecuteImport() {
           </p>
         </div>
 
-        <div class="flex items-center gap-2 shrink-0 self-start sm:self-center">
+        <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto shrink-0">
           <button
             type="button"
-            class="min-h-[40px] px-3.5 py-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/40 hover:bg-emerald-100/70 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+            class="flex-1 sm:flex-initial min-h-[44px] px-3.5 py-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/40 hover:bg-emerald-100/70 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
             @click="handleLoadSamplePhpMyAdminJson"
           >
-            <Sparkles class="w-3.5 h-3.5" />
+            <Sparkles class="w-3.5 h-3.5 shrink-0" />
             <span>Muat Contoh JSON PHPMyAdmin</span>
           </button>
 
           <button
             v-if="rawTables.length > 0 || initialParsedTablesSnapshot.length > 0"
             type="button"
-            class="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-500 hover:text-rose-600 transition-colors"
+            class="min-h-[44px] min-w-[44px] px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50/60 dark:bg-rose-950/30 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-100 transition-colors flex items-center justify-center"
             title="Bersihkan proses migrasi"
             @click="resetJsonImporter"
           >
-            <Trash2 class="w-4 h-4" />
+            <Trash2 class="w-4.5 h-4.5" />
           </button>
         </div>
       </div>
@@ -714,10 +714,10 @@ async function confirmAndExecuteImport() {
             <!-- STEP 4 Button: Klik buat generate struktur database baru -->
             <button
               type="button"
-              class="min-h-[42px] px-4 py-2 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:opacity-90 text-white text-xs font-semibold flex items-center gap-2 transition-opacity whitespace-nowrap self-start sm:self-auto"
+              class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:opacity-90 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-opacity"
               @click="handleGenerateNewDatabaseSchema"
             >
-              <Layers class="w-4 h-4" />
+              <Layers class="w-4 h-4 shrink-0" />
               <span>Generate Rancangan Struktur Database Baru</span>
             </button>
           </div>
@@ -997,11 +997,11 @@ async function confirmAndExecuteImport() {
             <!-- STEP 7 Button: Klik "Konversi struktur dan isi database lama ke format database baru" -->
             <button
               type="button"
-              class="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap self-start sm:self-auto shadow-xs"
+              class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors shadow-xs text-left sm:text-center"
               @click="handleConvertLegacyToNewFormat"
             >
-              <GitCompareArrows class="w-4 h-4" />
-              <span>Konversi struktur dan isi database lama ke format database baru</span>
+              <GitCompareArrows class="w-4 h-4 shrink-0" />
+              <span>Konversi struktur & isi database lama ke format baru</span>
             </button>
           </div>
 
@@ -1159,10 +1159,10 @@ async function confirmAndExecuteImport() {
               <button
                 type="button"
                 :disabled="migrationAnalysis.writeEstimation.optimizedFirestoreWrites === 0 || isImporting"
-                class="min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap disabled:opacity-50 shadow-sm"
+                class="w-full sm:w-auto min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-sm"
                 @click="showConfirmModal = true"
               >
-                <Database class="w-4 h-4" />
+                <Database class="w-4 h-4 shrink-0" />
                 <span>Import Database ke Firestore</span>
               </button>
             </div>
@@ -1518,9 +1518,9 @@ async function confirmAndExecuteImport() {
           <button
             type="submit"
             :disabled="authStore.isLoading"
-            class="min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-2 transition-colors disabled:opacity-50"
+            class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
           >
-            <Save class="w-3.5 h-3.5" />
+            <Save class="w-4 h-4 shrink-0" />
             <span>Simpan Perubahan Profil</span>
           </button>
         </div>
