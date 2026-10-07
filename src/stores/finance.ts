@@ -83,6 +83,7 @@ export interface TransactionItem {
   type: 'income' | 'expense' | 'transfer';
   category: string;
   amount: number;
+  adminFee?: number;
   note: string;
   date: string;
   deleted?: boolean;
@@ -797,9 +798,13 @@ export const useFinanceStore = defineStore('finance', () => {
   );
 
   const monthlyExpense = computed(() =>
-    periodTransactions.value
-      .filter((t) => t.type === 'expense')
-      .reduce((acc, t) => acc + Number(t.amount || 0), 0)
+    periodTransactions.value.reduce((acc, t) => {
+      if (t.type === 'expense') return acc + Number(t.amount || 0);
+      if (t.type === 'transfer' && Number(t.adminFee || 0) > 0) {
+        return acc + Number(t.adminFee || 0);
+      }
+      return acc;
+    }, 0)
   );
 
   const monthlyTransfer = computed(() =>
@@ -1279,6 +1284,7 @@ export const useFinanceStore = defineStore('finance', () => {
     type: TransactionItem['type'];
     category: string;
     amount: number;
+    adminFee?: number;
     note: string;
     date: string;
   }) {
@@ -1298,6 +1304,8 @@ export const useFinanceStore = defineStore('finance', () => {
     if (numericAmount <= 0) {
       throw new Error('Nominal transaksi harus lebih dari 0.');
     }
+    const numericAdminFee =
+      payload.type === 'transfer' ? Math.max(0, Math.abs(Number(payload.adminFee) || 0)) : 0;
 
     const defaultCategory =
       payload.type === 'transfer' ? 'Transfer Saldo' : payload.category || 'Lainnya';
@@ -1339,14 +1347,14 @@ export const useFinanceStore = defineStore('finance', () => {
       newSourceHolderBalance -= numericAmount;
       newSourceWalletBalance -= numericAmount;
     } else if (payload.type === 'transfer') {
-      newSourceHolderBalance -= numericAmount;
-      newSourceWalletBalance -= numericAmount;
+      newSourceHolderBalance -= numericAmount + numericAdminFee;
+      newSourceWalletBalance -= numericAmount + numericAdminFee;
       newDestHolderBalance += numericAmount;
       if (destWallet && destWallet.id !== wallet.id) {
         newDestWalletBalance += numericAmount;
       } else {
-        // Same wallet, different fund owner -> wallet total balance stays unchanged
-        newSourceWalletBalance = Number(wallet.balance || 0);
+        // Same wallet, different fund owner -> wallet total balance only reduced by adminFee
+        newSourceWalletBalance = Number(wallet.balance || 0) - numericAdminFee;
       }
     }
 
@@ -1362,6 +1370,7 @@ export const useFinanceStore = defineStore('finance', () => {
         type: payload.type,
         category: safeCategory,
         amount: numericAmount,
+        adminFee: numericAdminFee,
         note: safeNote,
         date: safeDate,
         deleted: false,
@@ -1441,6 +1450,7 @@ export const useFinanceStore = defineStore('finance', () => {
       type: TransactionItem['type'];
       category: string;
       amount: number;
+      adminFee?: number;
       note: string;
       date: string;
     }
@@ -1465,6 +1475,8 @@ export const useFinanceStore = defineStore('finance', () => {
     if (numericAmount <= 0) {
       throw new Error('Nominal transaksi harus lebih dari 0.');
     }
+    const numericAdminFee =
+      payload.type === 'transfer' ? Math.max(0, Math.abs(Number(payload.adminFee) || 0)) : 0;
 
     const defaultCategory =
       payload.type === 'transfer' ? 'Transfer Saldo' : payload.category || 'Lainnya';
@@ -1504,6 +1516,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
     // 1. Reverse oldTx balance effect
     const oldAmount = Number(oldTx.amount || 0);
+    const oldAdminFee = oldTx.type === 'transfer' ? Number(oldTx.adminFee || 0) : 0;
     if (oldTx.type === 'income') {
       addDelta(holderDeltas, oldTx.fundOwnerId, -oldAmount);
       addDelta(walletDeltas, oldTx.walletId, -oldAmount);
@@ -1511,11 +1524,13 @@ export const useFinanceStore = defineStore('finance', () => {
       addDelta(holderDeltas, oldTx.fundOwnerId, oldAmount);
       addDelta(walletDeltas, oldTx.walletId, oldAmount);
     } else if (oldTx.type === 'transfer') {
-      addDelta(holderDeltas, oldTx.fundOwnerId, oldAmount);
+      addDelta(holderDeltas, oldTx.fundOwnerId, oldAmount + oldAdminFee);
       addDelta(holderDeltas, oldTx.toFundOwnerId, -oldAmount);
       if (oldTx.toWalletId && oldTx.toWalletId !== oldTx.walletId) {
-        addDelta(walletDeltas, oldTx.walletId, oldAmount);
+        addDelta(walletDeltas, oldTx.walletId, oldAmount + oldAdminFee);
         addDelta(walletDeltas, oldTx.toWalletId, -oldAmount);
+      } else if (oldAdminFee > 0) {
+        addDelta(walletDeltas, oldTx.walletId, oldAdminFee);
       }
     }
 
@@ -1527,11 +1542,13 @@ export const useFinanceStore = defineStore('finance', () => {
       addDelta(holderDeltas, newSourceHolder?.id, -numericAmount);
       addDelta(walletDeltas, newWallet.id, -numericAmount);
     } else if (payload.type === 'transfer' && newDestWallet) {
-      addDelta(holderDeltas, newSourceHolder?.id, -numericAmount);
+      addDelta(holderDeltas, newSourceHolder?.id, -(numericAmount + numericAdminFee));
       addDelta(holderDeltas, newDestHolder?.id, numericAmount);
       if (newDestWallet.id !== newWallet.id) {
-        addDelta(walletDeltas, newWallet.id, -numericAmount);
+        addDelta(walletDeltas, newWallet.id, -(numericAmount + numericAdminFee));
         addDelta(walletDeltas, newDestWallet.id, numericAmount);
+      } else if (numericAdminFee > 0) {
+        addDelta(walletDeltas, newWallet.id, -numericAdminFee);
       }
     }
 
@@ -1546,6 +1563,7 @@ export const useFinanceStore = defineStore('finance', () => {
         type: payload.type,
         category: safeCategory,
         amount: numericAmount,
+        adminFee: numericAdminFee,
         note: safeNote,
         date: safeDate,
         updatedAt: serverTimestamp(),
@@ -1658,9 +1676,10 @@ export const useFinanceStore = defineStore('finance', () => {
           });
         }
       } else if (tx.type === 'transfer') {
+        const txAdminFee = Number(tx.adminFee || 0);
         if (sourceHolder) {
           await updateDoc(doc(db, 'wallet_owners', sourceHolder.id), {
-            balance: Number(sourceHolder.balance || 0) + tx.amount,
+            balance: Number(sourceHolder.balance || 0) + tx.amount + txAdminFee,
             updatedAt: serverTimestamp(),
           });
         }
@@ -1672,11 +1691,16 @@ export const useFinanceStore = defineStore('finance', () => {
         }
         if (wallet && destWallet && wallet.id !== destWallet.id) {
           await updateDoc(doc(db, 'wallets', wallet.id), {
-            balance: Number(wallet.balance || 0) + tx.amount,
+            balance: Number(wallet.balance || 0) + tx.amount + txAdminFee,
             updatedAt: serverTimestamp(),
           });
           await updateDoc(doc(db, 'wallets', destWallet.id), {
             balance: Number(destWallet.balance || 0) - tx.amount,
+            updatedAt: serverTimestamp(),
+          });
+        } else if (wallet && txAdminFee > 0) {
+          await updateDoc(doc(db, 'wallets', wallet.id), {
+            balance: Number(wallet.balance || 0) + txAdminFee,
             updatedAt: serverTimestamp(),
           });
         }

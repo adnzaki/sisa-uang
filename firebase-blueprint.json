@@ -350,6 +350,10 @@
           "type": "number",
           "description": "Nominal transaksi positif"
         },
+        "adminFee": {
+          "type": "number",
+          "description": "Biaya admin tambahan untuk transaksi transfer (opsional)"
+        },
         "note": {
           "type": "string",
           "description": "Catatan transaksi",
