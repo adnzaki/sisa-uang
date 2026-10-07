@@ -1292,16 +1292,13 @@ async function confirmAndExecuteImport() {
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
           <!-- Global LIKE Search -->
           <div class="sm:col-span-2 lg:col-span-4">
-            <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-              Pencarian Global (LIKE %kata_kunci% di Semua Kolom)
-            </label>
             <div class="relative">
-              <Search class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Search class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 v-model="explorerGlobalLikeSearch"
                 type="text"
-                placeholder="Cari ID, nama, saldo, walletId, email..."
-                class="w-full min-h-[40px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+                placeholder="Pencarian Global LIKE (ID, nama, saldo, email...)"
+                class="w-full min-h-[44px] sm:min-h-[40px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
                 @input="explorerCurrentPage = 1"
               />
             </div>
@@ -1309,12 +1306,10 @@ async function confirmAndExecuteImport() {
 
           <!-- Soft Delete Status Filter -->
           <div class="lg:col-span-2">
-            <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-              Status Soft Delete
-            </label>
             <CustomSelect
               v-model="explorerSoftDeleteFilter"
               :options="explorerSoftDeleteOptions"
+              placeholder="Status Soft Delete"
               size="sm"
               @change="explorerCurrentPage = 1"
             />
@@ -1322,12 +1317,10 @@ async function confirmAndExecuteImport() {
 
           <!-- Sort Field (ORDER BY) -->
           <div class="lg:col-span-3">
-            <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-              Urutkan Kolom (ORDER BY)
-            </label>
             <CustomSelect
               v-model="explorerSortField"
               :options="explorerFieldSelectOptions"
+              placeholder="Urutkan Kolom (ORDER BY)"
               searchable
               size="sm"
             />
@@ -1335,12 +1328,9 @@ async function confirmAndExecuteImport() {
 
           <!-- Sort Direction (ASC / DESC) -->
           <div class="lg:col-span-2">
-            <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-              Arah Urutan (SORT)
-            </label>
             <button
               type="button"
-              class="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-800 dark:text-slate-200 flex items-center justify-between gap-2 hover:border-emerald-500 transition-colors"
+              class="w-full min-h-[44px] sm:min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-800 dark:text-slate-200 flex items-center justify-between gap-2 hover:border-emerald-500 transition-colors"
               @click="explorerSortOrder = explorerSortOrder === 'asc' ? 'desc' : 'asc'"
             >
               <span>{{ explorerSortOrder === 'asc' ? 'ASC (A-Z / 0-9)' : 'DESC (Z-A / 9-0)' }}</span>
@@ -1351,12 +1341,10 @@ async function confirmAndExecuteImport() {
 
           <!-- Page Size (LIMIT) -->
           <div class="lg:col-span-1">
-            <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-              Limit
-            </label>
             <CustomSelect
               v-model="explorerLimitPerPage"
               :options="explorerLimitSelectOptions"
+              placeholder="Limit"
               size="sm"
               @change="explorerCurrentPage = 1"
             />

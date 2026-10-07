@@ -229,12 +229,12 @@ function confirmSelection() {
     <button
       type="button"
       :disabled="disabled"
-      class="w-full min-h-[50px] sm:min-h-[46px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-500/60 text-left flex items-center justify-between gap-2.5 transition-colors focus:outline-none focus:border-emerald-600 disabled:opacity-50"
+      class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 hover:border-emerald-500/60 text-left flex items-center justify-between gap-2.5 transition-colors focus:outline-none focus:border-emerald-600 disabled:opacity-50"
       @click="openPicker"
     >
-      <div class="flex items-center gap-2.5 min-w-0">
-        <Calendar class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-        <span class="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">
+      <div class="flex items-center gap-3 min-w-0">
+        <Calendar class="w-4.5 h-4.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+        <span class="text-sm sm:text-base font-medium text-slate-900 dark:text-slate-100 truncate">
           {{ formattedTriggerDate }}
         </span>
       </div>

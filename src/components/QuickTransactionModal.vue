@@ -118,26 +118,15 @@ watch(
       date.value = editingTx.date || new Date().toISOString().slice(0, 10);
     } else {
       txType.value = 'expense';
-      if (financeStore.wallets.length > 0) {
-        walletId.value = financeStore.wallets[0].id;
-      }
-      const holders = financeStore.getHoldersByWalletId(walletId.value);
-      fundOwnerId.value = holders[0]?.id || '';
-
-      if (financeStore.wallets.length > 0) {
-        toWalletId.value = financeStore.wallets[0].id;
-      }
-      const destHolders = financeStore.getHoldersByWalletId(toWalletId.value);
-      if (destHolders.length > 1) {
-        toFundOwnerId.value = destHolders[1].id;
-      } else {
-        toFundOwnerId.value = destHolders[0]?.id || '';
-      }
+      walletId.value = '';
+      fundOwnerId.value = '';
+      toWalletId.value = '';
+      toFundOwnerId.value = '';
       amount.value = '';
       adminFee.value = '';
       note.value = '';
       date.value = new Date().toISOString().slice(0, 10);
-      category.value = categories.value[0] || 'Lainnya';
+      category.value = '';
     }
 
     await nextTick();
@@ -148,35 +137,38 @@ watch(
 
 watch(walletId, (newWalletId) => {
   if (isInitializing.value) return;
+  if (!newWalletId) {
+    fundOwnerId.value = '';
+    return;
+  }
   const holders = financeStore.getHoldersByWalletId(newWalletId);
   if (!holders.some((h) => h.id === fundOwnerId.value)) {
-    fundOwnerId.value = holders[0]?.id || '';
+    fundOwnerId.value = holders.length === 1 ? holders[0].id : '';
   }
 });
 
 watch(toWalletId, (newToWalletId) => {
   if (isInitializing.value) return;
+  if (!newToWalletId) {
+    toFundOwnerId.value = '';
+    return;
+  }
   const holders = financeStore.getHoldersByWalletId(newToWalletId);
   if (!holders.some((h) => h.id === toFundOwnerId.value)) {
-    const diffHolder = holders.find((h) => h.id !== fundOwnerId.value);
-    toFundOwnerId.value = diffHolder?.id || holders[0]?.id || '';
+    toFundOwnerId.value = holders.length === 1 ? holders[0].id : '';
   }
 });
 
 watch(txType, () => {
   if (isInitializing.value) return;
-  category.value = categories.value[0] || 'Lainnya';
+  if (
+    category.value &&
+    !categories.value.includes(category.value) &&
+    txType.value !== 'transfer'
+  ) {
+    category.value = '';
+  }
 });
-
-function addQuickAmount(val: number) {
-  const current = Number(amount.value || 0);
-  amount.value = current + val;
-}
-
-function addQuickAdminFee(val: number) {
-  const current = Number(adminFee.value || 0);
-  adminFee.value = current + val;
-}
 
 function closeModal() {
   financeStore.quickModalOpen = false;
@@ -198,37 +190,55 @@ async function handleDeleteCurrent() {
 
 async function handleSubmit() {
   errorMsg.value = null;
+  if (!walletId.value) {
+    errorMsg.value = 'Pilih Sumber Dana terlebih dahulu.';
+    return;
+  }
+  if (availableSourceHolders.value.length > 0 && !fundOwnerId.value) {
+    errorMsg.value = 'Pilih Pemilik terlebih dahulu.';
+    return;
+  }
+
   const numericAmount = Number(amount.value || 0);
   if (numericAmount <= 0) {
-    errorMsg.value = 'Masukkan nominal transaksi yang valid (lebih dari 0).';
+    errorMsg.value = 'Masukkan Nominal transaksi yang valid (lebih dari 0).';
     return;
   }
   const numericAdminFee =
     txType.value === 'transfer' ? Math.max(0, Number(adminFee.value || 0)) : 0;
 
-  if (!walletId.value) {
-    errorMsg.value = 'Langkah 1: Pilih sumber dana terlebih dahulu.';
+  if (txType.value !== 'transfer' && !category.value.trim()) {
+    errorMsg.value = 'Pilih Kategori terlebih dahulu.';
     return;
   }
-  if (availableSourceHolders.value.length > 0 && !fundOwnerId.value) {
-    errorMsg.value = 'Langkah 2: Pilih pemilik sumber dana terlebih dahulu.';
-    return;
+
+  if (txType.value === 'transfer') {
+    if (!toWalletId.value) {
+      errorMsg.value = 'Pilih Sumber Dana Tujuan terlebih dahulu.';
+      return;
+    }
+    if (availableDestHolders.value.length > 0 && !toFundOwnerId.value) {
+      errorMsg.value = 'Pilih Pemilik Tujuan terlebih dahulu.';
+      return;
+    }
   }
 
   isSubmitting.value = true;
   try {
+    const resolvedCategory =
+      txType.value === 'transfer' ? 'Transfer Dana' : category.value.trim() || 'Lainnya';
     const payload = {
       walletId: walletId.value,
       fundOwnerId: fundOwnerId.value,
       toWalletId: txType.value === 'transfer' ? toWalletId.value : undefined,
       toFundOwnerId: txType.value === 'transfer' ? toFundOwnerId.value : undefined,
       type: txType.value,
-      category: txType.value === 'transfer' ? 'Transfer Dana' : category.value,
+      category: resolvedCategory,
       amount: numericAmount,
       adminFee: numericAdminFee,
       note:
         note.value.trim() ||
-        (txType.value === 'transfer' ? 'Transfer antar kepemilikan dana' : category.value),
+        (txType.value === 'transfer' ? 'Transfer antar kepemilikan dana' : resolvedCategory),
       date: date.value,
     };
 
@@ -257,256 +267,133 @@ async function handleSubmit() {
     max-width="lg"
     @close="closeModal"
   >
-    <div class="space-y-4">
-      <!-- Segmented 3-Way Type Control: Expense | Income | Transfer -->
-      <div class="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-xl">
+    <div class="space-y-3.5">
+      <!-- 1. Sumber Dana -->
+      <CustomSelect
+        v-model="walletId"
+        :options="walletOptions"
+        placeholder="Sumber Dana"
+      />
+
+      <!-- 2. Pemilik Sumber Dana -->
+      <CustomSelect
+        v-model="fundOwnerId"
+        :options="sourceHolderOptions"
+        :disabled="!walletId || availableSourceHolders.length === 0"
+        placeholder="Pemilik"
+      />
+
+      <!-- 3. Segmented 3-Way Type Control: Income | Expense | Transfer -->
+      <div class="grid grid-cols-3 rounded-full overflow-hidden border border-emerald-600/20 dark:border-emerald-500/20 bg-emerald-600/10 dark:bg-slate-800 p-1 gap-1">
         <button
           type="button"
-          class="min-h-[44px] flex items-center justify-center gap-1 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-150 px-1.5"
-          :class="
-            txType === 'expense'
-              ? 'bg-white dark:bg-slate-900 text-rose-600 dark:text-rose-400 shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-          "
-          @click="txType = 'expense'"
-        >
-          <ArrowUpRight class="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-          <span class="truncate">{{ t('transactions.expense') }}</span>
-        </button>
-        <button
-          type="button"
-          class="min-h-[44px] flex items-center justify-center gap-1 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-150 px-1.5"
+          class="min-h-[44px] flex items-center justify-center gap-1 rounded-full text-xs sm:text-sm font-bold uppercase tracking-wide transition-all duration-150 px-2"
           :class="
             txType === 'income'
-              ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              ? 'bg-emerald-600 text-white shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
           "
           @click="txType = 'income'"
         >
-          <ArrowDownLeft class="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+          <ArrowDownLeft class="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
           <span class="truncate">{{ t('transactions.income') }}</span>
         </button>
         <button
           type="button"
-          class="min-h-[44px] flex items-center justify-center gap-1 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-150 px-1.5"
+          class="min-h-[44px] flex items-center justify-center gap-1 rounded-full text-xs sm:text-sm font-bold uppercase tracking-wide transition-all duration-150 px-2"
+          :class="
+            txType === 'expense'
+              ? 'bg-rose-600 text-white shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+          "
+          @click="txType = 'expense'"
+        >
+          <ArrowUpRight class="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
+          <span class="truncate">{{ t('transactions.expense') }}</span>
+        </button>
+        <button
+          type="button"
+          class="min-h-[44px] flex items-center justify-center gap-1 rounded-full text-xs sm:text-sm font-bold uppercase tracking-wide transition-all duration-150 px-2"
           :class="
             txType === 'transfer'
-              ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
           "
           @click="txType = 'transfer'"
         >
-          <ArrowLeftRight class="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+          <ArrowLeftRight class="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
           <span class="truncate">{{ t('transactions.transfer') }}</span>
         </button>
       </div>
 
-      <!-- STEP 1 & STEP 2: Pilih Sumber Dana -> Pilih Pemilik Dana (Full-width on mobile) -->
-      <div class="sm:rounded-2xl sm:border sm:border-slate-200/80 sm:dark:border-slate-800 sm:bg-slate-50/60 sm:dark:bg-slate-950/60 sm:p-3.5 space-y-3">
-        <div class="text-[11px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
-          {{ txType === 'transfer' ? 'Asal Dana (Sumber & Kepemilikan)' : 'Sumber & Kepemilikan Dana' }}
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-          <div>
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-              1. Sumber Dana (Wallet)
-            </label>
-            <CustomSelect
-              v-model="walletId"
-              :options="walletOptions"
-              placeholder="Pilih Sumber Dana..."
-              aria-label="Sumber Dana"
-            />
-          </div>
+      <!-- 4. Tanggal Transaksi (Google Material Date Picker) -->
+      <MaterialDatePicker
+        v-model="date"
+        :label="t('transactions.date')"
+      />
 
-          <div>
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-              2. Pemilik Sumber Dana
-            </label>
-            <CustomSelect
-              v-model="fundOwnerId"
-              :options="sourceHolderOptions"
-              :disabled="!walletId || availableSourceHolders.length === 0"
-              placeholder="Pilih Pemilik Dana..."
-              aria-label="Pemilik Sumber Dana"
-            />
-          </div>
-        </div>
+      <!-- 5. Deskripsi / Catatan -->
+      <input
+        v-model="note"
+        type="text"
+        maxlength="200"
+        placeholder="Deskripsi"
+        class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+      />
+
+      <!-- 6. Nominal Transaksi -->
+      <input
+        v-model.number="amount"
+        type="number"
+        min="1"
+        step="any"
+        placeholder="Nominal (Rp)"
+        required
+        class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+      />
+
+      <!-- 7A. Kategori (Untuk Income / Expense) -->
+      <div v-if="txType !== 'transfer'">
+        <CustomSelect
+          v-model="category"
+          :options="categoryOptions"
+          searchable
+          allow-custom-value
+          search-placeholder="Ketik untuk mencari kategori..."
+          placeholder="Kategori"
+        />
       </div>
 
-      <!-- TRANSFER DESTINATION: Pilih Sumber Dana Tujuan -> Pilih Pemilik Dana Tujuan (Full-width on mobile) -->
+      <!-- 7B. Biaya Admin + Sumber Dana Tujuan + Pemilik Tujuan (Untuk Transfer) -->
       <Transition name="fade-slide">
-        <div
-          v-if="txType === 'transfer'"
-          class="pt-2 border-t border-slate-200/70 dark:border-slate-800 sm:pt-3.5 sm:rounded-2xl sm:border sm:border-indigo-200/80 sm:dark:border-indigo-900/50 sm:bg-indigo-50/40 sm:dark:bg-indigo-950/20 sm:p-3.5 space-y-3"
-        >
-          <div class="text-[11px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-            Tujuan Transfer (Sumber & Kepemilikan Tujuan)
-          </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <div>
-              <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                Sumber Dana Tujuan
-              </label>
-              <CustomSelect
-                v-model="toWalletId"
-                :options="walletOptions"
-                accent-color="indigo"
-                placeholder="Pilih Dompet Tujuan..."
-                aria-label="Sumber Dana Tujuan"
-              />
-            </div>
+        <div v-if="txType === 'transfer'" class="space-y-3.5">
+          <input
+            v-model.number="adminFee"
+            type="number"
+            min="0"
+            step="any"
+            placeholder="Biaya Admin (Rp · Opsional)"
+            class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-indigo-600"
+          />
 
-            <div>
-              <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                Pemilik Dana Tujuan
-              </label>
-              <CustomSelect
-                v-model="toFundOwnerId"
-                :options="destHolderOptions"
-                :disabled="!toWalletId || availableDestHolders.length === 0"
-                accent-color="indigo"
-                placeholder="Pilih Pemilik Tujuan..."
-                aria-label="Pemilik Dana Tujuan"
-              />
-            </div>
-          </div>
+          <CustomSelect
+            v-model="toWalletId"
+            :options="walletOptions"
+            accent-color="indigo"
+            placeholder="Sumber Dana Tujuan"
+          />
+
+          <CustomSelect
+            v-model="toFundOwnerId"
+            :options="destHolderOptions"
+            :disabled="!toWalletId || availableDestHolders.length === 0"
+            accent-color="indigo"
+            placeholder="Pemilik Tujuan"
+          />
         </div>
       </Transition>
 
-      <!-- STEP 3: Input Detail Transaksi -->
-      <div class="space-y-3.5 pt-2 border-t border-slate-200/70 dark:border-slate-800 sm:pt-0 sm:border-t-0">
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-            3. {{ t('transactions.amount') }} Transaksi (IDR)
-          </label>
-          <div class="relative">
-            <span
-              class="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-money font-semibold text-slate-400"
-            >
-              Rp
-            </span>
-            <input
-              v-model.number="amount"
-              type="number"
-              min="1"
-              step="any"
-              placeholder="0"
-              required
-              class="w-full min-h-[52px] sm:min-h-[48px] pl-11 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-lg font-money font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-            />
-          </div>
-          <!-- Quick nominal tap buttons -->
-          <div class="flex items-center gap-1.5 mt-2 overflow-x-auto pb-1">
-            <button
-              v-for="preset in [25000, 50000, 100000, 250000, 500000]"
-              :key="preset"
-              type="button"
-              class="min-h-[36px] px-3 py-1 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-money text-slate-600 dark:text-slate-300 hover:border-emerald-500 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors whitespace-nowrap shrink-0"
-              @click="addQuickAmount(preset)"
-            >
-              +{{ (preset / 1000).toLocaleString('id-ID') }}rb
-            </button>
-          </div>
-        </div>
-
-        <!-- Biaya Admin Transfer (Shown ONLY for Transfer Type) -->
-        <Transition name="fade-slide">
-          <div
-            v-if="txType === 'transfer'"
-            class="sm:rounded-2xl sm:border sm:border-indigo-200/70 sm:dark:border-indigo-900/50 sm:bg-indigo-50/30 sm:dark:bg-indigo-950/15 sm:p-3.5 space-y-2"
-          >
-            <div class="flex items-center justify-between gap-2">
-              <label class="block text-xs font-semibold text-indigo-700 dark:text-indigo-300">
-                {{ t('transactions.adminFee') }} (Opsional · IDR)
-              </label>
-              <span class="text-[11px] text-slate-500 dark:text-slate-400">
-                Dipotong dari saldo asal
-              </span>
-            </div>
-            <div class="relative">
-              <span
-                class="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-money font-semibold text-slate-400"
-              >
-                Rp
-              </span>
-              <input
-                v-model.number="adminFee"
-                type="number"
-                min="0"
-                step="any"
-                placeholder="0 (Tanpa biaya admin)"
-                class="w-full min-h-[50px] sm:min-h-[46px] pl-11 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm sm:text-base font-money font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-600"
-              />
-            </div>
-            <div class="flex items-center gap-1.5 overflow-x-auto pb-0.5">
-              <button
-                type="button"
-                class="min-h-[34px] px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-500 hover:border-indigo-500 hover:text-indigo-600 transition-colors whitespace-nowrap shrink-0"
-                @click="adminFee = ''"
-              >
-                Gratis (Rp 0)
-              </button>
-              <button
-                v-for="feePreset in [1000, 2500, 6500]"
-                :key="feePreset"
-                type="button"
-                class="min-h-[34px] px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-money text-slate-600 dark:text-slate-300 hover:border-indigo-500 hover:text-indigo-600 transition-colors whitespace-nowrap shrink-0"
-                @click="addQuickAdminFee(feePreset)"
-              >
-                +Rp {{ feePreset.toLocaleString('id-ID') }}
-              </button>
-            </div>
-          </div>
-        </Transition>
-
-        <!-- Searchable Category Select (Shown for Income & Expense) + Google Material Date Picker -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-          <div v-if="txType !== 'transfer'">
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-              {{ t('transactions.category') }} (Ketik untuk mencari)
-            </label>
-            <CustomSelect
-              v-model="category"
-              :options="categoryOptions"
-              searchable
-              allow-custom-value
-              search-placeholder="Ketik nama kategori..."
-              placeholder="Pilih atau cari kategori..."
-              aria-label="Pilih Kategori Transaksi"
-            />
-          </div>
-
-          <div :class="txType === 'transfer' ? 'sm:col-span-2' : ''">
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-              {{ t('transactions.date') }}
-            </label>
-            <MaterialDatePicker
-              v-model="date"
-              :label="t('transactions.date')"
-            />
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-            {{ t('transactions.note') }}
-          </label>
-          <input
-            v-model="note"
-            type="text"
-            maxlength="200"
-            :placeholder="
-              txType === 'transfer'
-                ? 'Contoh: Pindah dana belanja dari Pribadi ke Istri...'
-                : 'Contoh: Makan siang, Belanja dapur, Listrik...'
-            "
-            class="w-full min-h-[50px] sm:min-h-[46px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
-      </div>
-
-      <p v-if="errorMsg" class="text-xs text-rose-600 dark:text-rose-400 font-medium">
+      <p v-if="errorMsg" class="text-xs text-rose-600 dark:text-rose-400 font-medium px-1">
         {{ errorMsg }}
       </p>
     </div>

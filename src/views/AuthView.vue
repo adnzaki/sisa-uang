@@ -18,6 +18,7 @@ import {
 } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useThemeStore, ThemeMode } from '../stores/theme';
+import PWAInstallButton from '../components/PWAInstallButton.vue';
 
 const { t, locale } = useI18n();
 const route = useRoute();
@@ -159,6 +160,7 @@ async function cancelOtpAndLogout() {
         </span>
       </div>
       <div class="flex items-center gap-2">
+        <PWAInstallButton variant="topbar" />
         <button
           type="button"
           class="min-h-[40px] px-3 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-mono font-medium text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-900 transition-colors"
@@ -231,20 +233,15 @@ async function cancelOtpAndLogout() {
         </div>
 
         <form class="space-y-4" @submit.prevent="handleVerifyOtp">
-          <div>
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-              Kode Verifikasi 6 Digit
-            </label>
-            <input
-              v-model="otpCode"
-              type="text"
-              inputmode="numeric"
-              maxlength="6"
-              required
-              :placeholder="t('auth.otpPlaceholder')"
-              class="w-full min-h-[52px] px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-center text-2xl font-mono font-semibold tracking-[0.35em] tabular-nums text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-            />
-          </div>
+          <input
+            v-model="otpCode"
+            type="text"
+            inputmode="numeric"
+            maxlength="6"
+            required
+            placeholder="Kode Verifikasi 6 Digit (000000)"
+            class="w-full min-h-[54px] px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 text-center text-2xl font-mono font-semibold tracking-[0.35em] tabular-nums text-slate-900 dark:text-slate-100 placeholder:text-sm placeholder:tracking-normal placeholder:font-sans focus:outline-none focus:border-emerald-600"
+          />
 
           <p v-if="authStore.error" class="text-xs text-rose-600 dark:text-rose-400">
             {{ authStore.error }}
@@ -358,75 +355,55 @@ async function cancelOtpAndLogout() {
         </div>
 
         <!-- Email / Username & Password Form -->
-        <form class="space-y-4" @submit.prevent="handleEmailSubmit">
-          <div v-if="activeTab === 'register'" class="space-y-4">
-            <div>
-              <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                Nama Tampilan (Display Name)
-              </label>
-              <div class="relative">
-                <UserIcon class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  v-model="displayName"
-                  type="text"
-                  required
-                  maxlength="80"
-                  placeholder="Contoh: Andika Pratama (Bebas spasi & karakter)"
-                  class="w-full min-h-[46px] pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                Username (Untuk Login)
-              </label>
-              <div class="relative">
-                <UserIcon class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  v-model="username"
-                  type="text"
-                  required
-                  maxlength="60"
-                  placeholder="Contoh: andika_keluarga"
-                  class="w-full min-h-[46px] pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-              {{ activeTab === 'login' ? 'Email atau Username' : t('auth.emailLabel') }}
-            </label>
+        <form class="space-y-3.5" @submit.prevent="handleEmailSubmit">
+          <div v-if="activeTab === 'register'" class="space-y-3.5">
             <div class="relative">
-              <Mail class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <UserIcon class="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
               <input
-                v-model="email"
-                :type="activeTab === 'login' ? 'text' : 'email'"
+                v-model="displayName"
+                type="text"
                 required
-                maxlength="120"
-                :placeholder="activeTab === 'login' ? 'nama@email.com atau username' : 'nama@email.com'"
-                class="w-full min-h-[46px] pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+                maxlength="80"
+                placeholder="Nama Tampilan (Misal: Andika Pratama)"
+                class="w-full min-h-[52px] pl-11 pr-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 text-sm sm:text-base text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+              />
+            </div>
+
+            <div class="relative">
+              <UserIcon class="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+              <input
+                v-model="username"
+                type="text"
+                required
+                maxlength="60"
+                placeholder="Username Login (Misal: andika_keluarga)"
+                class="w-full min-h-[52px] pl-11 pr-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 text-sm sm:text-base font-mono text-slate-900 dark:text-slate-100 placeholder:font-sans focus:outline-none focus:border-emerald-600"
               />
             </div>
           </div>
 
-          <div>
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-              {{ t('auth.passwordLabel') }}
-            </label>
-            <div class="relative">
-              <Lock class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                v-model="password"
-                type="password"
-                required
-                minlength="6"
-                placeholder="••••••••"
-                class="w-full min-h-[46px] pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-              />
-            </div>
+          <div class="relative">
+            <Mail class="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+            <input
+              v-model="email"
+              :type="activeTab === 'login' ? 'text' : 'email'"
+              required
+              maxlength="120"
+              :placeholder="activeTab === 'login' ? 'Email atau Username' : 'Alamat Email (nama@email.com)'"
+              class="w-full min-h-[52px] pl-11 pr-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 text-sm sm:text-base text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+            />
+          </div>
+
+          <div class="relative">
+            <Lock class="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+            <input
+              v-model="password"
+              type="password"
+              required
+              minlength="6"
+              :placeholder="t('auth.passwordLabel')"
+              class="w-full min-h-[52px] pl-11 pr-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 text-sm sm:text-base text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+            />
           </div>
 
           <p v-if="authStore.error" class="text-xs text-rose-600 dark:text-rose-400">

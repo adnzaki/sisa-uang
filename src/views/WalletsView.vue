@@ -48,7 +48,7 @@ function openAddWalletModal() {
   name.value = '';
   type.value = 'bank';
   balance.value = '';
-  initialHolderName.value = 'Pribadi';
+  initialHolderName.value = '';
   showAddForm.value = true;
 }
 
@@ -228,61 +228,39 @@ async function handleDeleteEditingWallet() {
     <AppModal
       v-model="showAddForm"
       title="Tambah Dompet / Sumber Dana Baru"
-      subtitle="Tambahkan rekening bank, e-wallet, atau kas tunai ke akun Anda"
     >
-      <form id="add-wallet-form" class="space-y-4" @submit.prevent="handleCreateWallet">
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Nama Sumber Dana
-          </label>
-          <input
-            v-model="name"
-            type="text"
-            required
-            maxlength="60"
-            placeholder="Contoh: Bank Mandiri, BCA, GoPay..."
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+      <form id="add-wallet-form" class="space-y-3.5" @submit.prevent="handleCreateWallet">
+        <input
+          v-model="name"
+          type="text"
+          required
+          maxlength="60"
+          placeholder="Nama Sumber Dana (Misal: Bank Mandiri, BCA, GoPay)"
+          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        />
 
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            {{ t('wallets.walletType') }}
-          </label>
-          <CustomSelect
-            v-model="type"
-            :options="walletTypeOptions"
-            placeholder="Pilih jenis sumber dana"
-          />
-        </div>
+        <CustomSelect
+          v-model="type"
+          :options="walletTypeOptions"
+          :placeholder="t('wallets.walletType')"
+        />
 
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Pemilik Dana Pertama
-          </label>
-          <input
-            v-model="initialHolderName"
-            type="text"
-            required
-            maxlength="60"
-            placeholder="Contoh: Pribadi / Istri / Tabungan"
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+        <input
+          v-model="initialHolderName"
+          type="text"
+          maxlength="60"
+          placeholder="Pemilik Dana Pertama (Misal: Pribadi, Istri, Tabungan)"
+          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        />
 
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Saldo Awal (IDR)
-          </label>
-          <input
-            v-model.number="balance"
-            type="number"
-            step="any"
-            required
-            placeholder="0"
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-base font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+        <input
+          v-model.number="balance"
+          type="number"
+          step="any"
+          required
+          placeholder="Saldo Awal (Rp)"
+          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        />
       </form>
 
       <template #footer>
@@ -290,7 +268,7 @@ async function handleDeleteEditingWallet() {
           <button
             type="submit"
             form="add-wallet-form"
-            class="w-full sm:w-auto min-h-[46px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+            class="w-full sm:w-auto min-h-[48px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
           >
             <Check class="w-4 h-4 shrink-0" />
             <span>{{ t('wallets.saveWallet') }}</span>
@@ -305,39 +283,29 @@ async function handleDeleteEditingWallet() {
     <AppModal
       v-model="isEditWalletOpen"
       title="Detail & Ubah Dompet"
-      :subtitle="editingWallet ? `ID: ${editingWallet.id}` : ''"
     >
       <form
         v-if="editingWallet"
         id="edit-wallet-form"
-        class="space-y-4"
+        class="space-y-3.5"
         @submit.prevent="handleSaveEditWallet"
       >
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Nama Sumber Dana
-          </label>
-          <input
-            v-model="editWalletName"
-            type="text"
-            required
-            maxlength="60"
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+        <input
+          v-model="editWalletName"
+          type="text"
+          required
+          maxlength="60"
+          placeholder="Nama Sumber Dana"
+          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        />
 
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            {{ t('wallets.walletType') }}
-          </label>
-          <CustomSelect
-            v-model="editWalletType"
-            :options="walletTypeOptions"
-            placeholder="Pilih jenis sumber dana"
-          />
-        </div>
+        <CustomSelect
+          v-model="editWalletType"
+          :options="walletTypeOptions"
+          :placeholder="t('wallets.walletType')"
+        />
 
-        <div class="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-3.5 flex items-center justify-between text-xs">
+        <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-3.5 flex items-center justify-between text-xs">
           <span class="text-slate-500 dark:text-slate-400">
             Ingin mengubah rincian pemilik & saldo di dalam dompet ini?
           </span>

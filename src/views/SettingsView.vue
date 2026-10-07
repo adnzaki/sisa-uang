@@ -18,6 +18,7 @@ import {
 } from 'lucide-vue-next';
 import { useThemeStore } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
+import PWAInstallButton from '../components/PWAInstallButton.vue';
 
 const { t, locale } = useI18n();
 const themeStore = useThemeStore();
@@ -51,6 +52,9 @@ async function handleSaveProfile() {
         Konfigurasi tema tampilan, bahasa antarmuka, dan profil akun personal Anda.
       </p>
     </div>
+
+    <!-- PWA Home Screen / Start Menu Installation Card -->
+    <PWAInstallButton variant="card" />
 
     <!-- Appearance & Theme -->
     <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
@@ -307,34 +311,24 @@ async function handleSaveProfile() {
         </div>
       </div>
 
-      <form class="grid grid-cols-1 sm:grid-cols-2 gap-4" @submit.prevent="handleSaveProfile">
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-            Nama Tampilan (Display Name · Bebas Spasi & Karakter)
-          </label>
-          <input
-            v-model="profileDisplayName"
-            type="text"
-            required
-            maxlength="80"
-            placeholder="Contoh: Andika Keluarga Bahagia"
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+      <form class="grid grid-cols-1 sm:grid-cols-2 gap-3.5" @submit.prevent="handleSaveProfile">
+        <input
+          v-model="profileDisplayName"
+          type="text"
+          required
+          maxlength="80"
+          placeholder="Nama Tampilan (Display Name)"
+          class="w-full min-h-[52px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 text-sm sm:text-base text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+        />
 
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-            Username (Dapat Digunakan untuk Login)
-          </label>
-          <input
-            v-model="profileUsername"
-            type="text"
-            required
-            maxlength="60"
-            placeholder="Contoh: andika_keluarga"
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs sm:text-sm font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+        <input
+          v-model="profileUsername"
+          type="text"
+          required
+          maxlength="60"
+          placeholder="Username Login"
+          class="w-full min-h-[52px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 text-sm sm:text-base font-mono text-slate-900 dark:text-slate-100 placeholder:font-sans focus:outline-none focus:border-emerald-600"
+        />
 
         <div class="sm:col-span-2 flex justify-end">
           <button
