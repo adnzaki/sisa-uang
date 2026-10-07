@@ -25,6 +25,8 @@ export interface ParsedPhpMyAdminTable {
   rows: Record<string, any>[];
   detectedCategory: TargetCollectionCategory;
   includeData: boolean;
+  detectedSoftDeleteColumns: string[];
+  softDeletedRowsCount: number;
 }
 
 export interface SchemaFieldDesign {
@@ -32,11 +34,14 @@ export interface SchemaFieldDesign {
   dataType: string;
   required: boolean;
   description: string;
+  sourceLegacyColumn?: string;
 }
 
 export interface SchemaCollectionDesign {
   collectionName: TargetCollectionCategory;
   legacySourceTables: string[];
+  detectedSoftDeleteColumns: string[];
+  softDeletedRowsCount: number;
   purpose: string;
   dataIncluded: boolean;
   estimatedDocumentCount: number;
@@ -58,6 +63,8 @@ export interface NormalizedUserDoc {
   currency: 'IDR' | 'USD';
   shieldGroup?: string;
   shieldActive?: number;
+  deleted: boolean;
+  deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -69,6 +76,8 @@ export interface NormalizedWalletDoc {
   type: 'cash' | 'bank' | 'ewallet' | 'investment' | 'credit';
   balance: number;
   color: string;
+  deleted: boolean;
+  deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -80,6 +89,8 @@ export interface NormalizedWalletOwnerDoc {
   walletName: string;
   holderName: string;
   balance: number;
+  deleted: boolean;
+  deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -90,6 +101,8 @@ export interface NormalizedCategoryDoc {
   name: string;
   type: 'income' | 'expense';
   color: string;
+  deleted: boolean;
+  deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -110,6 +123,8 @@ export interface NormalizedTransactionDoc {
   amount: number;
   note: string;
   date: string;
+  deleted: boolean;
+  deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -121,6 +136,8 @@ export interface NormalizedBudgetDoc {
   limitAmount: number;
   spentAmount: number;
   period: string;
+  deleted: boolean;
+  deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -132,6 +149,8 @@ export interface NormalizedActivityLogDoc {
   action: string;
   detail: string;
   severity: 'info' | 'warning' | 'critical';
+  deleted?: boolean;
+  deletedAt?: string | null;
   createdAt: string;
 }
 
@@ -342,6 +361,140 @@ export function classifyPhpMyAdminTable(
 }
 
 /**
+ * Detect soft delete columns in a legacy MySQL / CodeIgniter 4 table
+ * (e.g., `deleted`, `deleted_at`, `is_deleted`, `is_delete`, `hapus`, `tgl_hapus`, `soft_delete`, `status_hapus`).
+ */
+export function detectSoftDeleteColumns(columns: string[]): string[] {
+  const SOFT_DELETE_PATTERNS = [
+    'deleted',
+    'deleted_at',
+    'deletedat',
+    'is_deleted',
+    'isdeleted',
+    'is_delete',
+    'soft_delete',
+    'status_hapus',
+    'is_hapus',
+    'tgl_hapus',
+    'tanggal_hapus',
+    'dihapus',
+    'hapus',
+    'trashed',
+    'trashed_at',
+  ];
+
+  return columns.filter((col) => {
+    const clean = col.toLowerCase().trim();
+    return SOFT_DELETE_PATTERNS.some(
+      (pat) => clean === pat || clean.startsWith('deleted_') || clean.endsWith('_deleted')
+    );
+  });
+}
+
+/**
+ * Extract normalized soft delete state (`deleted: boolean` and `deletedAt: string | null`)
+ * from any legacy MySQL / CodeIgniter 4 row.
+ * Supports:
+ * - `deleted`: '0' / '1', 0 / 1, false / true, 'Y' / 'N'
+ * - `deleted_at`: null / '0000-00-00 00:00:00' vs valid timestamp string ('2026-09-12 10:30:00')
+ */
+export function extractSoftDeleteFromRow(
+  row: Record<string, any>,
+  fallbackUpdatedAt?: string
+): {
+  deleted: boolean;
+  deletedAt: string | null;
+  matchedColumn?: string;
+} {
+  if (!row || typeof row !== 'object') {
+    return { deleted: false, deletedAt: null };
+  }
+
+  const keys = Object.keys(row);
+  let isDeleted = false;
+  let resolvedDeletedAt: string | null = null;
+  let matchedColumn: string | undefined;
+
+  // 1. Check timestamp-based soft delete columns (`deleted_at`, `deletedAt`, `tgl_hapus`, `trashed_at`)
+  const tsCandidates = ['deleted_at', 'deletedat', 'tgl_hapus', 'tanggal_hapus', 'trashed_at'];
+  for (const cand of tsCandidates) {
+    const foundKey = keys.find((k) => k.toLowerCase().trim() === cand);
+    if (foundKey !== undefined) {
+      if (!matchedColumn) matchedColumn = foundKey;
+      const rawVal = row[foundKey];
+      if (rawVal !== null && rawVal !== undefined && rawVal !== '') {
+        const strVal = String(rawVal).trim();
+        if (
+          strVal &&
+          strVal.toLowerCase() !== 'null' &&
+          strVal !== '0' &&
+          strVal !== 'false' &&
+          !strVal.startsWith('0000-00-00')
+        ) {
+          isDeleted = true;
+          resolvedDeletedAt = strVal;
+        }
+      }
+    }
+  }
+
+  // 2. Check boolean/flag-based soft delete columns (`deleted`, `is_deleted`, `is_delete`, `hapus`, `dihapus`, `status_hapus`)
+  const flagCandidates = [
+    'deleted',
+    'is_deleted',
+    'isdeleted',
+    'is_delete',
+    'soft_delete',
+    'status_hapus',
+    'is_hapus',
+    'dihapus',
+    'hapus',
+    'trashed',
+  ];
+  for (const cand of flagCandidates) {
+    const foundKey = keys.find((k) => k.toLowerCase().trim() === cand);
+    if (foundKey !== undefined) {
+      if (!matchedColumn) matchedColumn = foundKey;
+      const rawVal = row[foundKey];
+      if (rawVal !== null && rawVal !== undefined && rawVal !== '') {
+        const strVal = String(rawVal).trim().toLowerCase();
+        if (
+          rawVal === true ||
+          rawVal === 1 ||
+          strVal === '1' ||
+          strVal === 'true' ||
+          strVal === 'y' ||
+          strVal === 'yes' ||
+          strVal === 'ya' ||
+          strVal === 'deleted' ||
+          strVal === 'dihapus'
+        ) {
+          isDeleted = true;
+        } else if (
+          strVal.length >= 8 &&
+          /\d{4}-\d{2}-\d{2}/.test(strVal) &&
+          !strVal.startsWith('0000-00-00')
+        ) {
+          // Sometimes `deleted` column itself stores a timestamp
+          isDeleted = true;
+          if (!resolvedDeletedAt) resolvedDeletedAt = String(rawVal).trim();
+        }
+      }
+    }
+  }
+
+  if (isDeleted && !resolvedDeletedAt) {
+    resolvedDeletedAt = fallbackUpdatedAt || new Date().toISOString();
+  }
+
+  return {
+    deleted: isDeleted,
+    deletedAt: isDeleted ? resolvedDeletedAt : null,
+    matchedColumn,
+  };
+}
+
+/**
  * Extract row array from any PHPMyAdmin table object variation
  */
 function extractRowsFromEntry(entry: any): Record<string, any>[] {
@@ -382,6 +535,10 @@ export function parsePhpMyAdminJson(rawJsonText: string): ParsedPhpMyAdminTable[
     const columns = Array.from(colSet);
     const mergedRows = existing ? [...existing.rows, ...cleanRows] : cleanRows;
     const detectedCategory = classifyPhpMyAdminTable(rawName, columns, mergedRows[0]);
+    const detectedSoftDeleteColumns = detectSoftDeleteColumns(columns);
+    const softDeletedRowsCount = mergedRows.filter(
+      (r) => extractSoftDeleteFromRow(r).deleted
+    ).length;
 
     tableMap.set(key, {
       tableName: rawName.trim(),
@@ -390,6 +547,8 @@ export function parsePhpMyAdminJson(rawJsonText: string): ParsedPhpMyAdminTable[
       rows: mergedRows,
       detectedCategory,
       includeData: true,
+      detectedSoftDeleteColumns,
+      softDeletedRowsCount,
     });
   }
 
@@ -651,12 +810,14 @@ export function buildJsonMigrationAnalysis(
 
     const rawStatus = String(pickCol(u, ['status']) ?? '').toLowerCase();
     const activeVal = pickCol(u, ['active', 'is_active']);
+    const updatedAtIso = String(pickCol(u, ['updated_at', 'updatedAt', 'last_active']) ?? nowIso);
+    const softDel = extractSoftDeleteFromRow(u, updatedAtIso);
     const isBannedOrInactive =
       rawStatus === 'banned' ||
       rawStatus === 'blocked' ||
       rawStatus === 'suspended' ||
       (activeVal !== undefined && Number(activeVal) === 0) ||
-      Boolean(pickCol(u, ['deleted_at']));
+      softDel.deleted;
 
     const firestoreUid = sanitizeId(
       resolvedEmail === 'vuedevo@gmail.com' ? 'admin_vuedevo_01' : `ci4_user_${rawId}`
@@ -678,8 +839,10 @@ export function buildJsonMigrationAnalysis(
       currency: pickCol(u, ['currency', 'mata_uang']) === 'USD' ? 'USD' : 'IDR',
       shieldGroup: userGroups.join(', ') || 'user',
       shieldActive: activeVal !== undefined ? Number(activeVal) : 1,
+      deleted: softDel.deleted,
+      deletedAt: softDel.deletedAt,
       createdAt: String(pickCol(u, ['created_at', 'createdAt', 'tgl_daftar']) ?? nowIso),
-      updatedAt: String(pickCol(u, ['updated_at', 'updatedAt', 'last_active']) ?? nowIso),
+      updatedAt: updatedAtIso,
     });
   }
 
@@ -764,6 +927,8 @@ export function buildJsonMigrationAnalysis(
       0
     );
     const color = sanitizeString(pickCol(w, ['color', 'warna']) ?? 'emerald', 20, 'emerald');
+    const updatedAtIso = String(pickCol(w, ['updated_at', 'updatedAt']) ?? nowIso);
+    const softDel = extractSoftDeleteFromRow(w, updatedAtIso);
 
     legacyWalletIdMap.set(rawId, { id: walletId, name, ownerId: ownerUid, balance });
 
@@ -774,8 +939,10 @@ export function buildJsonMigrationAnalysis(
       type: mappedType,
       balance,
       color,
+      deleted: softDel.deleted,
+      deletedAt: softDel.deletedAt,
       createdAt: String(pickCol(w, ['created_at', 'createdAt', 'tanggal']) ?? nowIso),
-      updatedAt: String(pickCol(w, ['updated_at', 'updatedAt']) ?? nowIso),
+      updatedAt: updatedAtIso,
     });
   }
 
@@ -911,6 +1078,9 @@ export function buildJsonMigrationAnalysis(
       ownerId: ownerUid,
     });
 
+    const updatedAtIso = String(pickCol(fo, ['updated_at', 'updatedAt']) ?? nowIso);
+    const softDel = extractSoftDeleteFromRow(fo, updatedAtIso);
+
     normalizedWalletOwners.push({
       id: fundOwnerId,
       ownerId: ownerUid,
@@ -918,14 +1088,16 @@ export function buildJsonMigrationAnalysis(
       walletName: parentWallet.name,
       holderName,
       balance,
+      deleted: softDel.deleted,
+      deletedAt: softDel.deletedAt,
       createdAt: String(pickCol(fo, ['created_at', 'createdAt']) ?? nowIso),
-      updatedAt: String(pickCol(fo, ['updated_at', 'updatedAt']) ?? nowIso),
+      updatedAt: updatedAtIso,
     });
   }
 
-  // Sync parent wallet balances from wallet_owners if present
+  // Sync parent wallet balances from active (non-deleted) wallet_owners if present
   for (const w of normalizedWallets) {
-    const holders = normalizedWalletOwners.filter((fo) => fo.walletId === w.id);
+    const holders = normalizedWalletOwners.filter((fo) => fo.walletId === w.id && !fo.deleted);
     if (holders.length > 0) {
       const sumHolders = holders.reduce((acc, h) => acc + Number(h.balance || 0), 0);
       if (sumHolders > 0) {
@@ -977,6 +1149,8 @@ export function buildJsonMigrationAnalysis(
       20,
       mappedType === 'income' ? 'emerald' : 'rose'
     );
+    const updatedAtIso = String(pickCol(c, ['updated_at', 'updatedAt']) ?? nowIso);
+    const softDel = extractSoftDeleteFromRow(c, updatedAtIso);
 
     legacyCategoryIdToName.set(rawId, { name, type: mappedType });
 
@@ -986,8 +1160,10 @@ export function buildJsonMigrationAnalysis(
       name,
       type: mappedType,
       color,
+      deleted: softDel.deleted,
+      deletedAt: softDel.deletedAt,
       createdAt: String(pickCol(c, ['created_at', 'createdAt']) ?? nowIso),
-      updatedAt: String(pickCol(c, ['updated_at', 'updatedAt']) ?? nowIso),
+      updatedAt: updatedAtIso,
     });
   }
 
@@ -1168,6 +1344,8 @@ export function buildJsonMigrationAnalysis(
       ) ?? nowIso.slice(0, 10)
     ).slice(0, 10);
     const date = rawDateVal.length >= 8 ? rawDateVal : nowIso.slice(0, 10);
+    const updatedAtIso = String(pickCol(t, ['updated_at', 'updatedAt']) ?? nowIso);
+    const softDel = extractSoftDeleteFromRow(t, updatedAtIso);
 
     const txDoc: NormalizedTransactionDoc = {
       id: sanitizeId(`su_tx_${rawId}`),
@@ -1181,8 +1359,10 @@ export function buildJsonMigrationAnalysis(
       amount,
       note,
       date,
+      deleted: softDel.deleted,
+      deletedAt: softDel.deletedAt,
       createdAt: String(pickCol(t, ['created_at', 'createdAt']) ?? nowIso),
-      updatedAt: String(pickCol(t, ['updated_at', 'updatedAt']) ?? nowIso),
+      updatedAt: updatedAtIso,
     };
 
     if (mappedType === 'transfer') {
@@ -1255,6 +1435,8 @@ export function buildJsonMigrationAnalysis(
       20,
       '2026-10'
     );
+    const updatedAtIso = String(pickCol(b, ['updated_at', 'updatedAt']) ?? nowIso);
+    const softDel = extractSoftDeleteFromRow(b, updatedAtIso);
 
     normalizedBudgets.push({
       id: sanitizeId(`su_bg_${rawId}`),
@@ -1263,8 +1445,10 @@ export function buildJsonMigrationAnalysis(
       limitAmount,
       spentAmount,
       period,
+      deleted: softDel.deleted,
+      deletedAt: softDel.deletedAt,
       createdAt: String(pickCol(b, ['created_at', 'createdAt']) ?? nowIso),
-      updatedAt: String(pickCol(b, ['updated_at', 'updatedAt']) ?? nowIso),
+      updatedAt: updatedAtIso,
     });
   }
 
@@ -1320,10 +1504,11 @@ export function buildJsonMigrationAnalysis(
       legacyRowsCount: getTotalRowsCount(allUserCatTables),
       includedLegacyRowsCount: getIncludedRows(allUserCatTables).length,
       newDocsWritesCount: normalizedUsers.length,
+      softDeletedDocsCount: normalizedUsers.filter((d) => d.deleted).length,
       note:
         allUserCatTables.length > 0 && allUserCatTables.every((t) => !t.includeData)
           ? 'Data dinonaktifkan (Hanya struktur skema).'
-          : 'Menggabungkan tabel users, auth_identities, dan auth_groups_users (CI4 Shield) menjadi 1 dokumen per user.',
+          : 'Menggabungkan tabel users, auth_identities, dan auth_groups_users (CI4 Shield) menjadi 1 dokumen per user + status Soft Delete.',
     },
     {
       collectionName: 'wallets',
@@ -1331,10 +1516,11 @@ export function buildJsonMigrationAnalysis(
       legacyRowsCount: getTotalRowsCount(walletsTables),
       includedLegacyRowsCount: walletRowsToProcess.length,
       newDocsWritesCount: normalizedWallets.length,
+      softDeletedDocsCount: normalizedWallets.filter((d) => d.deleted).length,
       note:
         walletsTables.length > 0 && walletsTables.every((t) => !t.includeData)
           ? 'Data dinonaktifkan (Hanya struktur skema).'
-          : 'Sumber dana utama (contoh: Mandiri, BCA, GoPay) dengan agregasi total saldo.',
+          : 'Sumber dana utama (contoh: Mandiri, BCA, GoPay) dengan agregasi total saldo & dukungan Soft Delete.',
     },
     {
       collectionName: 'wallet_owners',
@@ -1342,10 +1528,11 @@ export function buildJsonMigrationAnalysis(
       legacyRowsCount: getTotalRowsCount(walletOwnersTables),
       includedLegacyRowsCount: walletOwnerRowsToProcess.length,
       newDocsWritesCount: normalizedWalletOwners.length,
+      softDeletedDocsCount: normalizedWalletOwners.filter((d) => d.deleted).length,
       note:
         walletOwnersTables.length > 0 && walletOwnersTables.every((t) => !t.includeData)
           ? 'Data dinonaktifkan (Hanya struktur skema).'
-          : 'Konsep Kepemilikan Dana SisaUang (contoh: Wallet Mandiri -> Pribadi, Istri).',
+          : 'Konsep Kepemilikan Dana SisaUang (contoh: Wallet Mandiri -> Pribadi, Istri) beserta penanda Soft Delete.',
     },
     {
       collectionName: 'categories',
@@ -1353,10 +1540,11 @@ export function buildJsonMigrationAnalysis(
       legacyRowsCount: getTotalRowsCount(categoriesTables),
       includedLegacyRowsCount: categoryRowsToProcess.length,
       newDocsWritesCount: normalizedCategories.length,
+      softDeletedDocsCount: normalizedCategories.filter((d) => d.deleted).length,
       note:
         categoriesTables.length > 0 && categoriesTables.every((t) => !t.includeData)
           ? 'Data dinonaktifkan (Hanya struktur skema).'
-          : 'Manajemen kategori pemasukan (income) dan pengeluaran (expense).',
+          : 'Manajemen kategori pemasukan (income) dan pengeluaran (expense) dengan proteksi Soft Delete.',
     },
     {
       collectionName: 'transactions',
@@ -1364,10 +1552,11 @@ export function buildJsonMigrationAnalysis(
       legacyRowsCount: getTotalRowsCount(transactionsTables),
       includedLegacyRowsCount: txRowsToProcess.length,
       newDocsWritesCount: normalizedTransactions.length,
+      softDeletedDocsCount: normalizedTransactions.filter((d) => d.deleted).length,
       note:
         transactionsTables.length > 0 && transactionsTables.every((t) => !t.includeData)
           ? 'Data dinonaktifkan (Hanya struktur skema).'
-          : 'Transaksi (income, expense, transfer antar sumber & pemilik dana) terdenormalisasi.',
+          : 'Transaksi (income, expense, transfer) terdenormalisasi dengan perlindungan histori Soft Delete.',
     },
     {
       collectionName: 'budgets',
@@ -1375,10 +1564,11 @@ export function buildJsonMigrationAnalysis(
       legacyRowsCount: getTotalRowsCount(budgetsTables),
       includedLegacyRowsCount: budgetRowsToProcess.length,
       newDocsWritesCount: normalizedBudgets.length,
+      softDeletedDocsCount: normalizedBudgets.filter((d) => d.deleted).length,
       note:
         budgetsTables.length > 0 && budgetsTables.every((t) => !t.includeData)
           ? 'Data dinonaktifkan (Hanya struktur skema).'
-          : 'Batas anggaran pengeluaran bulanan per kategori.',
+          : 'Batas anggaran pengeluaran bulanan per kategori beserta status Soft Delete.',
     },
     {
       collectionName: 'activity_logs',
@@ -1386,10 +1576,11 @@ export function buildJsonMigrationAnalysis(
       legacyRowsCount: getTotalRowsCount(logsTables),
       includedLegacyRowsCount: logRowsToProcess.length,
       newDocsWritesCount: normalizedLogs.length,
+      softDeletedDocsCount: 0,
       note:
         logsTables.length > 0 && logsTables.every((t) => !t.includeData)
           ? 'Data dinonaktifkan (Hanya struktur skema).'
-          : 'Riwayat aktivitas login dari tabel auth_logins CodeIgniter 4 Shield.',
+          : 'Riwayat aktivitas login dari tabel auth_logins CodeIgniter 4 Shield (Append-only).',
     },
   ];
 
@@ -1432,6 +1623,17 @@ export function buildJsonMigrationAnalysis(
     collectionBreakdown: filteredBreakdown,
   };
 
+  // Helper to collect detected soft delete columns across a group of legacy tables
+  const getSoftDeleteColsForTables = (tables: ParsedPhpMyAdminTable[], fallback: string[]): string[] => {
+    const cols = new Set<string>();
+    for (const t of tables) {
+      for (const c of t.detectedSoftDeleteColumns || []) {
+        cols.add(`${t.tableName}.${c}`);
+      }
+    }
+    return cols.size > 0 ? Array.from(cols) : fallback;
+  };
+
   // =========================================================================
   // Build Schema Designs Based on Remaining Active Tables
   // =========================================================================
@@ -1446,6 +1648,9 @@ export function buildJsonMigrationAnalysis(
       dataIncluded: allUserCatTables.some((t) => t.includeData),
       estimatedDocumentCount: normalizedUsers.length,
       estimatedWritesCount: normalizedUsers.length,
+      softDeleteSupported: true,
+      detectedLegacySoftDeleteFields: getSoftDeleteColsForTables(allUserCatTables, ['users.deleted_at', 'users.deleted']),
+      softDeletedDocsCount: normalizedUsers.filter((d) => d.deleted).length,
       fields: [
         { fieldName: 'uid', dataType: 'string (Document ID)', required: true, description: 'ID unik dokumen user di Firebase Auth / Firestore' },
         { fieldName: 'username', dataType: 'string', required: true, description: 'Username unik dari kolom username pada tabel users lama (dapat digunakan langsung untuk login layaknya email)' },
@@ -1456,14 +1661,16 @@ export function buildJsonMigrationAnalysis(
         { fieldName: 'status', dataType: "enum ('active' | 'blocked')", required: true, description: 'Konversi dari kolom active (1/0) dan status (banned) pada CI4 Shield' },
         { fieldName: 'authProvider', dataType: "enum ('password' | 'google')", required: true, description: 'Metode autentikasi dari auth_identities.type (email_password / google)' },
         { fieldName: 'currency', dataType: "enum ('IDR' | 'USD')", required: true, description: 'Preferensi mata uang pengguna (default IDR)' },
+        { fieldName: 'deleted', dataType: 'boolean', required: true, description: 'Flag Soft Delete (true = diarsipkan/dihapus, false = aktif) hasil deteksi otomatis dari kolom deleted / deleted_at pada DB lama', isSoftDeleteField: true },
+        { fieldName: 'deletedAt', dataType: 'timestamp | null', required: false, description: 'Waktu penghapusan akun (Soft Delete) untuk menjaga audit trail dan histori relasi data keuangan', isSoftDeleteField: true },
         { fieldName: 'createdAt', dataType: 'timestamp', required: true, description: 'Waktu pembuatan akun' },
         { fieldName: 'updatedAt', dataType: 'timestamp', required: true, description: 'Waktu pembaruan terakhir' },
       ],
       changeExplanations: [
+        'Mendeteksi kolom Soft Delete (`deleted_at` / `deleted`) pada tabel `users` lama dan menormalisasikannya menjadi pasangan field `deleted` (boolean) serta `deletedAt` (timestamp | null) agar riwayat akun tetap aman.',
         'Mempertahankan field `username` asli dari tabel `users` lama agar setiap pengguna tetap bisa login menggunakan username maupun alamat email.',
         'Menambahkan field baru `displayName` yang terpisah dari `username`, sehingga pengguna dapat bebas mengatur nama tampilan lengkap (termasuk spasi dan karakter lainnya) di halaman Pengaturan setelah login.',
         'Menyertakan `passwordHash` dari `auth_identities.secret2` (mendukung verifikasi hash Bcrypt `$2y$` bawaan CodeIgniter 4 Shield) sehingga pengguna lama dapat langsung login menggunakan password lama mereka.',
-        'Konsolidasi tabel relasional CodeIgniter 4 Shield (`users`, `auth_identities`, `auth_groups_users`) menjadi 1 koleksi dokumen tunggal `users` agar hemat kuota write Firestore.',
       ],
     },
     {
@@ -1474,19 +1681,25 @@ export function buildJsonMigrationAnalysis(
       dataIncluded: walletsTables.some((t) => t.includeData),
       estimatedDocumentCount: normalizedWallets.length,
       estimatedWritesCount: normalizedWallets.length,
+      softDeleteSupported: true,
+      detectedLegacySoftDeleteFields: getSoftDeleteColsForTables(walletsTables, ['wallets.deleted', 'wallets.deleted_at']),
+      softDeletedDocsCount: normalizedWallets.filter((d) => d.deleted).length,
       fields: [
         { fieldName: 'id', dataType: 'string (Document ID)', required: true, description: 'ID unik sumber dana (wallet)' },
         { fieldName: 'ownerId', dataType: 'string', required: true, description: 'UID pemilik akun (foreign key ke koleksi users)' },
         { fieldName: 'name', dataType: 'string', required: true, description: 'Nama sumber dana (contoh: Bank Mandiri, BCA, Dompet Tunai)' },
         { fieldName: 'type', dataType: "enum ('bank' | 'ewallet' | 'cash' | 'investment' | 'credit')", required: true, description: 'Kategori instrumen sumber dana' },
-        { fieldName: 'balance', dataType: 'number (float/int)', required: true, description: 'Total akumulasi saldo dari seluruh pemilik dana di dalam sumber dana ini' },
+        { fieldName: 'balance', dataType: 'number (float/int)', required: true, description: 'Total akumulasi saldo dari seluruh pemilik dana aktif di dalam sumber dana ini' },
         { fieldName: 'color', dataType: 'string', required: true, description: 'Tema warna indikator visual kartu sumber dana' },
+        { fieldName: 'deleted', dataType: 'boolean', required: true, description: 'Flag Soft Delete hasil konversi kolom deleted (0/1) atau deleted_at dari tabel sumber dana lama agar histori dompet tidak hilang permanen', isSoftDeleteField: true },
+        { fieldName: 'deletedAt', dataType: 'timestamp | null', required: false, description: 'Timestamp kapan sumber dana dihapus (Soft Delete) untuk keperluan audit & pemulihan data (recovery)', isSoftDeleteField: true },
         { fieldName: 'createdAt', dataType: 'timestamp', required: true, description: 'Waktu pembuatan sumber dana' },
         { fieldName: 'updatedAt', dataType: 'timestamp', required: true, description: 'Waktu pembaruan saldo terakhir' },
       ],
       changeExplanations: [
+        'Mendeteksi field `deleted` / `deleted_at` dari tabel dompet (`wallets` / `sumber_dana`) lama dan menerapkannya menjadi `deleted` (boolean) + `deletedAt` (timestamp | null) untuk mencegah hilangnya histori dompet yang pernah dipakai bertransaksi.',
         'Perubahan kolom `user_id` (INT) menjadi `ownerId` (STRING) untuk isolasi data per akun pengguna di Firestore.',
-        'Konversi tipe data `DECIMAL(15,2)` MySQL menjadi `number` native di Firestore yang secara otomatis menyinkronkan total saldo dari seluruh sub-kepemilikan dana (`wallet_owners`).',
+        'Konversi tipe data `DECIMAL(15,2)` MySQL menjadi `number` native di Firestore yang secara otomatis menyinkronkan total saldo dari seluruh sub-kepemilikan dana aktif (`wallet_owners`).',
       ],
     },
     {
@@ -1500,6 +1713,9 @@ export function buildJsonMigrationAnalysis(
       dataIncluded: walletOwnersTables.some((t) => t.includeData),
       estimatedDocumentCount: normalizedWalletOwners.length,
       estimatedWritesCount: normalizedWalletOwners.length,
+      softDeleteSupported: true,
+      detectedLegacySoftDeleteFields: getSoftDeleteColsForTables(walletOwnersTables, ['wallet_owners.deleted', 'owners.deleted']),
+      softDeletedDocsCount: normalizedWalletOwners.filter((d) => d.deleted).length,
       fields: [
         { fieldName: 'id', dataType: 'string (Document ID)', required: true, description: 'ID unik kepemilikan dana' },
         { fieldName: 'ownerId', dataType: 'string', required: true, description: 'UID pengguna pemilik akun' },
@@ -1507,13 +1723,15 @@ export function buildJsonMigrationAnalysis(
         { fieldName: 'walletName', dataType: 'string', required: true, description: 'Denormalisasi nama Sumber Dana agar tidak perlu JOIN query saat tampil di UI' },
         { fieldName: 'holderName', dataType: 'string', required: true, description: 'Nama pemilik dana di dalam wallet tersebut (contoh: Pribadi, Istri, Anak)' },
         { fieldName: 'balance', dataType: 'number (float/int)', required: true, description: 'Saldo spesifik milik pemilik dana tersebut di dalam wallet induk' },
+        { fieldName: 'deleted', dataType: 'boolean', required: true, description: 'Flag Soft Delete hasil deteksi kolom deleted / deleted_at pada tabel kepemilikan dana lama agar histori alokasi dana tetap terjaga', isSoftDeleteField: true },
+        { fieldName: 'deletedAt', dataType: 'timestamp | null', required: false, description: 'Timestamp penghapusan kepemilikan dana (Soft Delete) untuk pemulihan jika terjadi kesalahan hapus', isSoftDeleteField: true },
         { fieldName: 'createdAt', dataType: 'timestamp', required: true, description: 'Waktu pembuatan kepemilikan dana' },
         { fieldName: 'updatedAt', dataType: 'timestamp', required: true, description: 'Waktu pembaruan saldo kepemilikan terakhir' },
       ],
       changeExplanations: [
+        'Mempertahankan mekanisme Soft Delete (`deleted` & `deletedAt`) dari tabel `wallet_owners` / `owners` lama sehingga alokasi kepemilikan dana yang dihapus tetap tersimpan historinya dan dapat dipulihkan.',
         'Memisahkan kepemilikan dana ke koleksi khusus `wallet_owners` yang berelasi ke `wallets` (`walletId`), sehingga 1 sumber dana (mis. Mandiri) bisa dibagi ke beberapa pemilik (Pribadi, Istri, dll).',
         'Menambahkan field denormalisasi `walletName` untuk mempercepat pemuatan halaman dan menghemat kuota Read Firestore tanpa perlu melakukan query JOIN berlapis.',
-        'Mendukung alur input berurutan wajib pada aplikasi: Pilih Sumber Dana -> Pilih Pemilik Dana -> Input Transaksi.',
       ],
     },
     {
@@ -1526,18 +1744,23 @@ export function buildJsonMigrationAnalysis(
       dataIncluded: categoriesTables.some((t) => t.includeData),
       estimatedDocumentCount: normalizedCategories.length,
       estimatedWritesCount: normalizedCategories.length,
+      softDeleteSupported: true,
+      detectedLegacySoftDeleteFields: getSoftDeleteColsForTables(categoriesTables, ['categories.deleted', 'categories.deleted_at']),
+      softDeletedDocsCount: normalizedCategories.filter((d) => d.deleted).length,
       fields: [
         { fieldName: 'id', dataType: 'string (Document ID)', required: true, description: 'ID unik dokumen kategori' },
         { fieldName: 'ownerId', dataType: 'string', required: true, description: 'UID pemilik kategori' },
         { fieldName: 'name', dataType: 'string', required: true, description: 'Nama kategori (contoh: Gaji Utama, Makanan & Minuman, Belanja Istri)' },
         { fieldName: 'type', dataType: "enum ('income' | 'expense')", required: true, description: 'Jenis peruntukan kategori (pemasukan atau pengeluaran)' },
         { fieldName: 'color', dataType: 'string', required: true, description: 'Label warna kategori' },
+        { fieldName: 'deleted', dataType: 'boolean', required: true, description: 'Flag Soft Delete dari kolom deleted pada tabel kategori lama agar transaksi historis tetap memiliki referensi kategori yang valid', isSoftDeleteField: true },
+        { fieldName: 'deletedAt', dataType: 'timestamp | null', required: false, description: 'Timestamp kapan kategori diarsipkan/dihapus secara Soft Delete', isSoftDeleteField: true },
         { fieldName: 'createdAt', dataType: 'timestamp', required: true, description: 'Waktu pembuatan kategori' },
         { fieldName: 'updatedAt', dataType: 'timestamp', required: true, description: 'Waktu pembaruan kategori' },
       ],
       changeExplanations: [
+        'Menerapkan Soft Delete (`deleted` & `deletedAt`) hasil deteksi kolom `deleted` pada tabel `categories` lama supaya kategori yang dihapus tidak merusak integritas laporan histori transaksi.',
         'Mempertahankan penuh fitur Manajemen Kategori dari versi SisaUang sebelumnya dengan struktur koleksi mandiri `categories`.',
-        'Standarisasi tipe kategori menjadi `income` dan `expense` serta penambahan `ownerId` agar setiap pengguna dapat mengelola daftar kategorinya sendiri secara aman.',
       ],
     },
     {
@@ -1551,6 +1774,9 @@ export function buildJsonMigrationAnalysis(
       dataIncluded: transactionsTables.some((t) => t.includeData),
       estimatedDocumentCount: normalizedTransactions.length,
       estimatedWritesCount: normalizedTransactions.length,
+      softDeleteSupported: true,
+      detectedLegacySoftDeleteFields: getSoftDeleteColsForTables(transactionsTables, ['transactions.deleted', 'transactions.deleted_at']),
+      softDeletedDocsCount: normalizedTransactions.filter((d) => d.deleted).length,
       fields: [
         { fieldName: 'id', dataType: 'string (Document ID)', required: true, description: 'ID unik transaksi' },
         { fieldName: 'ownerId', dataType: 'string', required: true, description: 'UID pengguna pemilik transaksi' },
@@ -1567,13 +1793,15 @@ export function buildJsonMigrationAnalysis(
         { fieldName: 'amount', dataType: 'number (float/int)', required: true, description: 'Nominal transaksi (> 0)' },
         { fieldName: 'note', dataType: 'string', required: true, description: 'Catatan / keterangan transaksi' },
         { fieldName: 'date', dataType: 'string (YYYY-MM-DD)', required: true, description: 'Tanggal transaksi untuk pengurutan kronologis' },
+        { fieldName: 'deleted', dataType: 'boolean', required: true, description: 'Flag Soft Delete wajib untuk aplikasi keuangan: transaksi yang dihapus tetap tersimpan di database (deleted: true) untuk audit & recovery jika terjadi kesalahan input/sistem', isSoftDeleteField: true },
+        { fieldName: 'deletedAt', dataType: 'timestamp | null', required: false, description: 'Timestamp waktu penghapusan transaksi (Soft Delete) untuk pelacakan histori mutasi dana', isSoftDeleteField: true },
         { fieldName: 'createdAt', dataType: 'timestamp', required: true, description: 'Timestamp pembuatan dokumen' },
         { fieldName: 'updatedAt', dataType: 'timestamp', required: true, description: 'Timestamp pembaruan dokumen' },
       ],
       changeExplanations: [
+        'Mendeteksi kolom `deleted` / `deleted_at` dari tabel `transactions` lama dan menerapkannya menjadi `deleted` (boolean) + `deletedAt` (timestamp | null). Transaksi yang dihapus pengguna tidak hilang permanen (hard delete), melainkan diarsipkan secara soft delete demi menjaga histori keuangan dan pemulihan saat terjadi error.',
         'Penambahan pasangan field kepemilikan dana asal (`fundOwnerId`, `fundOwnerName`) sehingga setiap transaksi tercatat jelas berasal dari Sumber Dana mana dan Pemilik Dana siapa.',
         'Penambahan field tujuan khusus transaksi `transfer` (`toWalletId`, `toWalletName`, `toFundOwnerId`, `toFundOwnerName`) untuk mendukung perpindahan dana lintas Sumber Dana maupun lintas Kepemilikan Dana dalam 1 dokumen transaksi utuh.',
-        'Denormalisasi nama kategori, nama wallet, dan nama pemilik dana langsung ke dalam dokumen transaksi agar tabel riwayat transaksi tampil instan tanpa query tambahan.',
       ],
     },
     {
@@ -1584,6 +1812,9 @@ export function buildJsonMigrationAnalysis(
       dataIncluded: budgetsTables.some((t) => t.includeData),
       estimatedDocumentCount: normalizedBudgets.length,
       estimatedWritesCount: normalizedBudgets.length,
+      softDeleteSupported: true,
+      detectedLegacySoftDeleteFields: getSoftDeleteColsForTables(budgetsTables, ['budgets.deleted', 'budgets.deleted_at']),
+      softDeletedDocsCount: normalizedBudgets.filter((d) => d.deleted).length,
       fields: [
         { fieldName: 'id', dataType: 'string (Document ID)', required: true, description: 'ID unik dokumen anggaran' },
         { fieldName: 'ownerId', dataType: 'string', required: true, description: 'UID pengguna pemilik anggaran' },
@@ -1591,10 +1822,13 @@ export function buildJsonMigrationAnalysis(
         { fieldName: 'limitAmount', dataType: 'number', required: true, description: 'Batas maksimal anggaran bulanan' },
         { fieldName: 'spentAmount', dataType: 'number', required: true, description: 'Nominal anggaran yang telah terpakai' },
         { fieldName: 'period', dataType: 'string (YYYY-MM)', required: true, description: 'Periode bulan anggaran aktif' },
+        { fieldName: 'deleted', dataType: 'boolean', required: true, description: 'Flag Soft Delete untuk mempertahankan histori anggaran bulanan yang pernah dibuat', isSoftDeleteField: true },
+        { fieldName: 'deletedAt', dataType: 'timestamp | null', required: false, description: 'Timestamp kapan anggaran dihapus secara Soft Delete', isSoftDeleteField: true },
         { fieldName: 'createdAt', dataType: 'timestamp', required: true, description: 'Waktu pembuatan' },
         { fieldName: 'updatedAt', dataType: 'timestamp', required: true, description: 'Waktu pembaruan' },
       ],
       changeExplanations: [
+        'Menerapkan field Soft Delete (`deleted` & `deletedAt`) pada koleksi `budgets` untuk mempertahankan riwayat perencanaan anggaran jika terjadi ketidaksengajaan hapus.',
         'Menghubungkan `category_id` relasional dari MySQL langsung ke nama kategori (`category`) yang sinkron dengan koleksi `categories` dan `transactions`.',
       ],
     },
@@ -1606,6 +1840,9 @@ export function buildJsonMigrationAnalysis(
       dataIncluded: logsTables.some((t) => t.includeData),
       estimatedDocumentCount: normalizedLogs.length,
       estimatedWritesCount: normalizedLogs.length,
+      softDeleteSupported: false,
+      detectedLegacySoftDeleteFields: [],
+      softDeletedDocsCount: 0,
       fields: [
         { fieldName: 'id', dataType: 'string (Document ID)', required: true, description: 'ID unik log aktivitas' },
         { fieldName: 'actorUid', dataType: 'string', required: true, description: 'UID pelaku aktivitas' },
@@ -1616,7 +1853,7 @@ export function buildJsonMigrationAnalysis(
         { fieldName: 'createdAt', dataType: 'timestamp', required: true, description: 'Waktu kejadian aktivitas' },
       ],
       changeExplanations: [
-        'Transformasi tabel `auth_logins` milik CodeIgniter 4 Shield menjadi format `activity_logs` terpadu dengan indikator `severity`.',
+        'Transformasi tabel `auth_logins` milik CodeIgniter 4 Shield menjadi format `activity_logs` terpadu dengan indikator `severity` (bersifat append-only / permanen).',
       ],
     },
   ];
@@ -1629,10 +1866,25 @@ export function buildJsonMigrationAnalysis(
     activeCategorySet.has(s.collectionName)
   );
 
+  const tablesWithSoftDeleteList = activeTables.filter(
+    (t) => (t.detectedSoftDeleteColumns || []).length > 0
+  );
+  const totalSoftDeletedRowsDetected = activeTables.reduce(
+    (acc, t) => acc + (t.softDeletedRowsCount || 0),
+    0
+  );
+
   return {
     rawTables: activeTables,
     writeEstimation,
     newSchemaDesigns,
+    softDeleteStats: {
+      tablesWithSoftDelete: tablesWithSoftDeleteList.length,
+      totalSoftDeletedRowsDetected,
+      detectedColumnNames: tablesWithSoftDeleteList.map(
+        (t) => `${t.tableName} (${t.detectedSoftDeleteColumns.join(', ')})`
+      ),
+    },
     convertedCollections: {
       users: normalizedUsers,
       wallets: normalizedWallets,
@@ -1646,7 +1898,7 @@ export function buildJsonMigrationAnalysis(
 }
 
 /**
- * Sample PHPMyAdmin JSON Export representing Legacy SisaUang (MySQL + CI4 Shield + Kepemilikan Dana + Kategori + Transfer)
+ * Sample PHPMyAdmin JSON Export representing Legacy SisaUang (MySQL + CI4 Shield + Kepemilikan Dana + Kategori + Transfer + Soft Delete `deleted` / `deleted_at`)
  */
 export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
   [
@@ -1674,6 +1926,7 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           created_at: '2025-01-10 08:00:00',
           updated_at: '2026-10-05 09:00:00',
           deleted_at: null,
+          deleted: '0',
         },
         {
           id: '2',
@@ -1685,6 +1938,7 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           created_at: '2025-05-12 10:15:00',
           updated_at: '2026-10-05 19:20:00',
           deleted_at: null,
+          deleted: '0',
         },
         {
           id: '3',
@@ -1696,6 +1950,7 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           created_at: '2025-07-20 14:30:00',
           updated_at: '2026-10-05 07:45:00',
           deleted_at: null,
+          deleted: '0',
         },
         {
           id: '4',
@@ -1706,7 +1961,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           last_active: '2026-09-15 11:10:00',
           created_at: '2025-08-01 09:00:00',
           updated_at: '2026-09-15 11:10:00',
-          deleted_at: null,
+          deleted_at: '2026-09-16 08:00:00',
+          deleted: '1',
         },
       ],
     },
@@ -1780,6 +2036,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           type: 'bank',
           balance: '19500000.00',
           color: 'emerald',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-01-01 10:00:00',
           updated_at: '2026-10-05 08:00:00',
         },
@@ -1790,6 +2048,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           type: 'bank',
           balance: '14200000.00',
           color: 'indigo',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-01-01 10:00:00',
           updated_at: '2026-10-05 08:00:00',
         },
@@ -1800,6 +2060,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           type: 'ewallet',
           balance: '1350000.00',
           color: 'sky',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-01-05 10:00:00',
           updated_at: '2026-10-05 08:00:00',
         },
@@ -1817,6 +2079,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           wallet_name: 'Bank Mandiri',
           holder_name: 'Pribadi',
           balance: '12000000.00',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-01-01 10:00:00',
           updated_at: '2026-10-05 08:00:00',
         },
@@ -1827,6 +2091,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           wallet_name: 'Bank Mandiri',
           holder_name: 'Istri',
           balance: '7500000.00',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-01-01 10:00:00',
           updated_at: '2026-10-05 08:00:00',
         },
@@ -1837,6 +2103,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           wallet_name: 'BCA Keluarga',
           holder_name: 'Pribadi',
           balance: '9200000.00',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-01-01 10:00:00',
           updated_at: '2026-10-05 08:00:00',
         },
@@ -1847,6 +2115,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           wallet_name: 'BCA Keluarga',
           holder_name: 'Tabungan Anak',
           balance: '5000000.00',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-01-01 10:00:00',
           updated_at: '2026-10-05 08:00:00',
         },
@@ -1857,6 +2127,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           wallet_name: 'GoPay',
           holder_name: 'Pribadi',
           balance: '850000.00',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-01-05 10:00:00',
           updated_at: '2026-10-05 08:00:00',
         },
@@ -1867,6 +2139,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           wallet_name: 'GoPay',
           holder_name: 'Istri',
           balance: '500000.00',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-01-05 10:00:00',
           updated_at: '2026-10-05 08:00:00',
         },
@@ -1877,12 +2151,12 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
       name: 'categories',
       database: 'sisa_uang_ci4',
       data: [
-        { id: '1', user_id: '2', name: 'Gaji Utama', type: 'income', color: 'emerald' },
-        { id: '2', user_id: '2', name: 'Bonus & Insentif', type: 'income', color: 'teal' },
-        { id: '3', user_id: '2', name: 'Makanan & Minuman', type: 'expense', color: 'rose' },
-        { id: '4', user_id: '2', name: 'Belanja Kebutuhan Istri', type: 'expense', color: 'amber' },
-        { id: '5', user_id: '2', name: 'Tagihan & Utilitas', type: 'expense', color: 'indigo' },
-        { id: '6', user_id: '2', name: 'Transportasi', type: 'expense', color: 'sky' },
+        { id: '1', user_id: '2', name: 'Gaji Utama', type: 'income', color: 'emerald', deleted: '0', deleted_at: null },
+        { id: '2', user_id: '2', name: 'Bonus & Insentif', type: 'income', color: 'teal', deleted: '0', deleted_at: null },
+        { id: '3', user_id: '2', name: 'Makanan & Minuman', type: 'expense', color: 'rose', deleted: '0', deleted_at: null },
+        { id: '4', user_id: '2', name: 'Belanja Kebutuhan Istri', type: 'expense', color: 'amber', deleted: '0', deleted_at: null },
+        { id: '5', user_id: '2', name: 'Tagihan & Utilitas', type: 'expense', color: 'indigo', deleted: '0', deleted_at: null },
+        { id: '6', user_id: '2', name: 'Transportasi', type: 'expense', color: 'sky', deleted: '0', deleted_at: null },
       ],
     },
     {
@@ -1901,6 +2175,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           amount: '15000000.00',
           note: 'Gaji bulanan masuk ke Mandiri (Kepemilikan Pribadi)',
           date: '2026-10-01',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-10-01 09:00:00',
         },
         {
@@ -1915,6 +2191,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           amount: '4500000.00',
           note: 'Alokasi uang belanja bulanan dari Mandiri (Pribadi) ke Mandiri (Istri)',
           date: '2026-10-02',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-10-02 10:15:00',
         },
         {
@@ -1928,6 +2206,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           amount: '650000.00',
           note: 'Belanja bulanan supermarket menggunakan dana Mandiri (Istri)',
           date: '2026-10-03',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-10-03 16:40:00',
         },
         {
@@ -1942,6 +2222,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           amount: '500000.00',
           note: 'Top up saldo GoPay (Istri) dari BCA Keluarga (Pribadi)',
           date: '2026-10-04',
+          deleted: '0',
+          deleted_at: null,
           created_at: '2026-10-04 11:00:00',
         },
       ],
@@ -1958,6 +2240,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           limit_amount: '4500000.00',
           spent_amount: '650000.00',
           period: '2026-10',
+          deleted: '0',
+          deleted_at: null,
         },
         {
           id: '302',
@@ -1966,6 +2250,8 @@ export const SAMPLE_PHPMYADMIN_JSON = JSON.stringify(
           limit_amount: '3000000.00',
           spent_amount: '250000.00',
           period: '2026-10',
+          deleted: '0',
+          deleted_at: null,
         },
       ],
     },

@@ -62,6 +62,11 @@ service cloud.firestore {
         data.createdAt is timestamp;
     }
 
+    function isValidSoftDelete(data) {
+      return (!('deleted' in data) || data.deleted is bool) &&
+        (!('deletedAt' in data) || data.deletedAt == null || data.deletedAt is timestamp || (data.deletedAt is string && data.deletedAt.size() <= 40));
+    }
+
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'status', 'authProvider', 'currency', 'createdAt', 'updatedAt']) &&
         data.keys().hasOnly([
@@ -74,6 +79,8 @@ service cloud.firestore {
           'status',
           'authProvider',
           'currency',
+          'deleted',
+          'deletedAt',
           'createdAt',
           'updatedAt'
         ]) &&
@@ -86,41 +93,45 @@ service cloud.firestore {
         data.status is string && (data.status == 'active' || data.status == 'blocked') &&
         data.authProvider is string && (data.authProvider == 'password' || data.authProvider == 'google') &&
         data.currency is string && (data.currency == 'IDR' || data.currency == 'USD') &&
+        isValidSoftDelete(data) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
 
     function isValidWallet(data) {
       return data.keys().hasAll(['ownerId', 'name', 'type', 'balance', 'color', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['ownerId', 'name', 'type', 'balance', 'color', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'name', 'type', 'balance', 'color', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
         data.type is string && (data.type == 'cash' || data.type == 'bank' || data.type == 'ewallet' || data.type == 'investment' || data.type == 'credit') &&
         (data.balance is int || data.balance is float) &&
         data.color is string && data.color.size() >= 1 && data.color.size() <= 20 &&
+        isValidSoftDelete(data) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
 
     function isValidWalletOwner(data) {
       return data.keys().hasAll(['ownerId', 'walletId', 'walletName', 'holderName', 'balance', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['ownerId', 'walletId', 'walletName', 'holderName', 'balance', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'walletId', 'walletName', 'holderName', 'balance', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.walletId is string && data.walletId.size() >= 1 && data.walletId.size() <= 128 && data.walletId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.walletName is string && data.walletName.size() >= 1 && data.walletName.size() <= 60 &&
         data.holderName is string && data.holderName.size() >= 1 && data.holderName.size() <= 60 &&
         (data.balance is int || data.balance is float) &&
+        isValidSoftDelete(data) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
 
     function isValidCategory(data) {
       return data.keys().hasAll(['ownerId', 'name', 'type', 'color', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['ownerId', 'name', 'type', 'color', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'name', 'type', 'color', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 50 &&
         data.type is string && (data.type == 'income' || data.type == 'expense') &&
         data.color is string && data.color.size() >= 1 && data.color.size() <= 20 &&
+        isValidSoftDelete(data) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -142,6 +153,8 @@ service cloud.firestore {
           'amount',
           'note',
           'date',
+          'deleted',
+          'deletedAt',
           'createdAt',
           'updatedAt'
         ]) &&
@@ -159,18 +172,20 @@ service cloud.firestore {
         (data.amount is int || data.amount is float) && data.amount > 0 &&
         data.note is string && data.note.size() <= 200 &&
         data.date is string && data.date.size() >= 8 && data.date.size() <= 30 &&
+        isValidSoftDelete(data) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
 
     function isValidBudget(data) {
       return data.keys().hasAll(['ownerId', 'category', 'limitAmount', 'spentAmount', 'period', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['ownerId', 'category', 'limitAmount', 'spentAmount', 'period', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'category', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.category is string && data.category.size() >= 1 && data.category.size() <= 50 &&
         (data.limitAmount is int || data.limitAmount is float) && data.limitAmount > 0 &&
         (data.spentAmount is int || data.spentAmount is float) && data.spentAmount >= 0 &&
         data.period is string && data.period.size() >= 6 && data.period.size() <= 20 &&
+        isValidSoftDelete(data) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -249,7 +264,7 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'username', 'currency', 'updatedAt'])
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'username', 'passwordHash', 'role', 'status', 'currency', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'username', 'passwordHash', 'role', 'status', 'currency', 'deleted', 'deletedAt', 'updatedAt']) &&
             isAdmin()
           )
         );
@@ -259,7 +274,7 @@ service cloud.firestore {
     // 3. Wallets Collection (/wallets/{walletId})
     match /wallets/{walletId} {
       allow get: if isSignedIn() && isValidId(walletId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdminEmail());
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() &&
         isValidId(walletId) &&
         isValidWallet(incoming()) &&
@@ -278,11 +293,11 @@ service cloud.firestore {
         (
           (
             existing().ownerId == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'balance', 'color', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'balance', 'color', 'deleted', 'deletedAt', 'updatedAt']) &&
             isNotBlocked()
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'balance', 'color', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'balance', 'color', 'deleted', 'deletedAt', 'updatedAt']) &&
             isAdmin()
           )
         );
@@ -297,7 +312,7 @@ service cloud.firestore {
     // 4. Wallet Owners Collection (/wallet_owners/{fundOwnerId})
     match /wallet_owners/{fundOwnerId} {
       allow get: if isSignedIn() && isValidId(fundOwnerId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdminEmail());
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() &&
         isValidId(fundOwnerId) &&
         isValidWalletOwner(incoming()) &&
@@ -321,11 +336,11 @@ service cloud.firestore {
         (
           (
             existing().ownerId == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['walletName', 'holderName', 'balance', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['walletName', 'holderName', 'balance', 'deleted', 'deletedAt', 'updatedAt']) &&
             isNotBlocked()
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['walletName', 'holderName', 'balance', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['walletName', 'holderName', 'balance', 'deleted', 'deletedAt', 'updatedAt']) &&
             isAdmin()
           )
         );
@@ -340,7 +355,7 @@ service cloud.firestore {
     // 5. Categories Collection (/categories/{categoryId})
     match /categories/{categoryId} {
       allow get: if isSignedIn() && isValidId(categoryId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdminEmail());
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() &&
         isValidId(categoryId) &&
         isValidCategory(incoming()) &&
@@ -359,11 +374,11 @@ service cloud.firestore {
         (
           (
             existing().ownerId == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'color', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'color', 'deleted', 'deletedAt', 'updatedAt']) &&
             isNotBlocked()
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'color', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'color', 'deleted', 'deletedAt', 'updatedAt']) &&
             isAdmin()
           )
         );
@@ -378,7 +393,7 @@ service cloud.firestore {
     // 6. Transactions Collection (/transactions/{transactionId})
     match /transactions/{transactionId} {
       allow get: if isSignedIn() && isValidId(transactionId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdminEmail());
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() &&
         isValidId(transactionId) &&
         isValidTransaction(incoming()) &&
@@ -416,6 +431,8 @@ service cloud.firestore {
               'amount',
               'note',
               'date',
+              'deleted',
+              'deletedAt',
               'updatedAt'
             ]) &&
             isNotBlocked() &&
@@ -437,6 +454,8 @@ service cloud.firestore {
               'amount',
               'note',
               'date',
+              'deleted',
+              'deletedAt',
               'updatedAt'
             ]) &&
             isAdmin()
@@ -453,7 +472,7 @@ service cloud.firestore {
     // 7. Budgets Collection (/budgets/{budgetId})
     match /budgets/{budgetId} {
       allow get: if isSignedIn() && isValidId(budgetId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdminEmail());
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() &&
         isValidId(budgetId) &&
         isValidBudget(incoming()) &&
@@ -472,11 +491,11 @@ service cloud.firestore {
         (
           (
             existing().ownerId == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['category', 'limitAmount', 'spentAmount', 'period', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['category', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'updatedAt']) &&
             isNotBlocked()
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['category', 'limitAmount', 'spentAmount', 'period', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['category', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'updatedAt']) &&
             isAdmin()
           )
         );
@@ -491,7 +510,7 @@ service cloud.firestore {
     // 8. Activity Logs Collection (/activity_logs/{logId})
     match /activity_logs/{logId} {
       allow get: if isSignedIn() && isValidId(logId) && (existing().actorUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().actorUid == request.auth.uid || isBootstrappedAdminEmail());
+      allow list: if isSignedIn() && (existing().actorUid == request.auth.uid || isAdmin());
       allow create: if isSignedIn() &&
         isValidId(logId) &&
         isValidActivityLog(incoming()) &&
@@ -504,7 +523,7 @@ service cloud.firestore {
     // 9. Security Alerts Collection (/security_alerts/{alertId})
     match /security_alerts/{alertId} {
       allow get: if isSignedIn() && isValidId(alertId) && (existing().actorUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().actorUid == request.auth.uid || isBootstrappedAdminEmail());
+      allow list: if isSignedIn() && (existing().actorUid == request.auth.uid || isAdmin());
       allow create: if isSignedIn() &&
         isValidId(alertId) &&
         isValidSecurityAlert(incoming()) &&
