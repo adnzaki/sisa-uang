@@ -151,6 +151,7 @@ service cloud.firestore {
           'type',
           'category',
           'amount',
+          'adminFee',
           'note',
           'date',
           'deleted',
@@ -170,6 +171,7 @@ service cloud.firestore {
         data.type is string && (data.type == 'income' || data.type == 'expense' || data.type == 'transfer') &&
         data.category is string && data.category.size() >= 1 && data.category.size() <= 50 &&
         (data.amount is int || data.amount is float) && data.amount > 0 &&
+        (!('adminFee' in data) || ((data.adminFee is int || data.adminFee is float) && data.adminFee >= 0)) &&
         data.note is string && data.note.size() <= 200 &&
         data.date is string && data.date.size() >= 8 && data.date.size() <= 30 &&
         isValidSoftDelete(data) &&
@@ -454,6 +456,7 @@ service cloud.firestore {
               'type',
               'category',
               'amount',
+              'adminFee',
               'note',
               'date',
               'deleted',
@@ -478,6 +481,7 @@ service cloud.firestore {
               'type',
               'category',
               'amount',
+              'adminFee',
               'note',
               'date',
               'deleted',

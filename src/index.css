@@ -8,6 +8,14 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
+:root {
+  --font-money: var(--font-sans);
+}
+
+:root.money-font-mono {
+  --font-money: var(--font-mono);
+}
+
 @layer base {
   html {
     font-family: var(--font-sans);
@@ -34,6 +42,99 @@
   .tabular-nums {
     font-variant-numeric: tabular-nums;
   }
+
+  .font-money {
+    font-family: var(--font-money);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* ========================================================================= */
+/* Smooth UI Transitions (Modals, Drawers, Dropdowns, Pages, Dynamic Blocks) */
+/* ========================================================================= */
+
+/* Page Route Transition */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* Modal Backdrop & Panel Transition */
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.modal-enter-active .modal-panel,
+.modal-leave-active .modal-panel {
+  transition: transform 0.26s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+.modal-enter-from .modal-panel,
+.modal-leave-to .modal-panel {
+  transform: translateY(18px) scale(0.98);
+  opacity: 0;
+}
+
+/* Mobile Slide-Out Sidebar Drawer Transition */
+.drawer-enter-active,
+.drawer-leave-active {
+  transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.drawer-enter-active .drawer-panel,
+.drawer-leave-active .drawer-panel {
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.drawer-enter-from,
+.drawer-leave-to {
+  opacity: 0;
+}
+.drawer-enter-from .drawer-panel,
+.drawer-leave-to .drawer-panel {
+  transform: translateX(-100%);
+}
+
+/* Custom Select Dropdown Transition */
+.dropdown-enter-active,
+.dropdown-leave-active {
+  transition: opacity 0.16s cubic-bezier(0.16, 1, 0.3, 1), transform 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dropdown-enter-from,
+.dropdown-leave-to {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+}
+
+/* Expand / Collapse Section Transition */
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.fade-slide-enter-from,
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+/* Toast Notification Banner Transition */
+.toast-enter-active,
+.toast-leave-active {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateY(-12px) scale(0.96);
 }
 
 /* Custom subtle scrollbars */
