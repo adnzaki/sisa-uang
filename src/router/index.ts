@@ -7,6 +7,7 @@ import OwnershipView from '../views/OwnershipView.vue';
 import BudgetsView from '../views/BudgetsView.vue';
 import AnalyticsView from '../views/AnalyticsView.vue';
 import SettingsView from '../views/SettingsView.vue';
+import DatabaseManagementView from '../views/DatabaseManagementView.vue';
 import ControlPanelView from '../views/ControlPanelView.vue';
 import AuthView from '../views/AuthView.vue';
 
@@ -109,6 +110,13 @@ export const router = createRouter({
       name: 'settings',
       component: SettingsView,
       meta: { requiresAuth: true },
+    },
+    {
+      path: '/database',
+      name: 'database',
+      component: DatabaseManagementView,
+      meta: { requiresAuth: true, requiresAdmin: true },
+      beforeEnter: superAdminMiddleware,
     },
     {
       path: '/control-panel',

@@ -23,6 +23,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Globe,
+  Database,
 } from 'lucide-vue-next';
 import { useAuthStore } from './stores/auth';
 import { useThemeStore, ThemeMode } from './stores/theme';
@@ -42,6 +43,7 @@ const notificationStore = useNotificationStore();
 
 const mobileDrawerOpen = ref(false);
 const deniedBannerVisible = ref(false);
+const mainScrollContainer = ref<HTMLElement | null>(null);
 
 onMounted(() => {
   themeStore.initThemeListener();
@@ -82,6 +84,9 @@ watch(
   () => route.fullPath,
   () => {
     mobileDrawerOpen.value = false;
+    if (mainScrollContainer.value) {
+      mainScrollContainer.value.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+    }
     if (route.query.denied === 'admin_only') {
       deniedBannerVisible.value = true;
     }
@@ -123,6 +128,12 @@ const adminNavItems = computed(() => [
     badge: adminStore.openAlertsCount,
   },
   {
+    name: t('nav.database'),
+    path: '/database',
+    tab: null,
+    icon: Database,
+  },
+  {
     name: t('nav.settings'),
     path: '/settings',
     tab: null,
@@ -158,11 +169,11 @@ async function handleLogout() {
 </script>
 
 <template>
-  <div class="min-h-screen w-full max-w-full overflow-x-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col">
+  <div class="h-dvh max-h-dvh w-full max-w-full overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col">
     <!-- Instant Suspicious Activity Notification Banner (Super Admin Real-Time Alert) -->
     <div
       v-if="adminStore.instantAlertNotification && authStore.isSuperAdmin"
-      class="bg-rose-600 text-white px-4 py-3 shadow-md z-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+      class="shrink-0 bg-rose-600 text-white px-4 py-3 shadow-md z-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
     >
       <div class="flex items-start sm:items-center gap-2.5">
         <AlertTriangle class="w-5 h-5 shrink-0 mt-0.5 sm:mt-0" />
@@ -280,7 +291,7 @@ async function handleLogout() {
     <!-- Middleware Access Denied Notice -->
     <div
       v-if="deniedBannerVisible"
-      class="bg-amber-600 text-white px-4 py-2.5 text-xs flex items-center justify-between gap-3 z-40"
+      class="shrink-0 bg-amber-600 text-white px-4 py-2.5 text-xs flex items-center justify-between gap-3 z-40"
     >
       <span>
         Akses ke endpoint <strong>/control-panel</strong> ditolak oleh middleware: Halaman tersebut hanya dapat diakses oleh akun ber-role Administrator (vuedevo@gmail.com).
@@ -297,7 +308,7 @@ async function handleLogout() {
     <!-- Blocked Account Fullscreen Interception -->
     <div
       v-if="authStore.user && authStore.user.status === 'blocked'"
-      class="flex-1 flex items-center justify-center p-6"
+      class="flex-1 min-h-0 overflow-y-auto flex items-center justify-center p-6"
     >
       <div class="max-w-md w-full rounded-2xl border border-rose-200 dark:border-rose-900/60 bg-white dark:bg-slate-900 p-6 text-center space-y-4">
         <div class="w-12 h-12 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center mx-auto">
@@ -320,15 +331,18 @@ async function handleLogout() {
     </div>
 
     <!-- Auth View (Login / Register / Super Admin OTP) -->
-    <template v-else-if="isAuthRoute || !authStore.isAuthenticated">
+    <div
+      v-else-if="isAuthRoute || !authStore.isAuthenticated"
+      class="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden"
+    >
       <RouterView />
-    </template>
+    </div>
 
-    <!-- Main Authenticated Workspace (Desktop Sidebar + Mobile First Canvas) -->
-    <div v-else class="flex-1 flex min-h-screen">
-      <!-- Desktop & Tablet Left Sidebar (md:flex) -->
+    <!-- Main Authenticated Workspace (Fixed Desktop Sidebar + Fixed Top Navbar + Scrollable Main Content) -->
+    <div v-else class="flex-1 flex min-h-0 w-full overflow-hidden">
+      <!-- Desktop & Tablet Left Sidebar (md:flex) - Locked in place, never scrolls with main page -->
       <aside
-        class="hidden md:flex md:w-64 lg:w-68 shrink-0 flex-col border-r border-slate-200/80 dark:border-slate-800/80 bg-white dark:bg-slate-900/95 sticky top-0 h-dvh max-h-dvh overflow-y-auto p-4 justify-between gap-4"
+        class="hidden md:flex md:w-64 lg:w-68 shrink-0 flex-col border-r border-slate-200/80 dark:border-slate-800/80 bg-white dark:bg-slate-900/95 h-full max-h-full overflow-y-auto p-4 justify-between gap-4 z-30"
       >
         <!-- Top & Scrollable Menu Area -->
         <div class="space-y-4">
@@ -499,11 +513,11 @@ async function handleLogout() {
         </div>
       </aside>
 
-      <!-- Main Column -->
-      <div class="flex-1 flex flex-col min-w-0 max-w-full overflow-x-hidden pb-24 md:pb-0">
-        <!-- Desktop Top Bar: Only Brand Title and "+ Catat Transaksi" (for regular users) -->
+      <!-- Main Column (Fixed Top Header + Independent Scrollable Content Area) -->
+      <div class="flex-1 flex flex-col min-w-0 max-w-full h-full max-h-full overflow-hidden">
+        <!-- Desktop Top Bar: Permanently pinned at top of Main Column -->
         <header
-          class="hidden md:flex items-center justify-between px-8 py-3.5 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md sticky top-0 z-30"
+          class="hidden md:flex shrink-0 items-center justify-between px-8 py-3.5 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-30"
         >
           <RouterLink
             :to="authStore.isSuperAdmin ? '/control-panel' : '/'"
@@ -526,9 +540,9 @@ async function handleLogout() {
           </div>
         </header>
 
-        <!-- Mobile Top App Bar (< md) - Compact Sticky Header -->
+        <!-- Mobile Top App Bar (< md) - Permanently pinned at top -->
         <header
-          class="md:hidden sticky top-0 z-30 h-14 px-3.5 flex items-center justify-between gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80"
+          class="md:hidden shrink-0 z-30 h-14 px-3.5 flex items-center justify-between gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80"
         >
           <button
             type="button"
@@ -571,9 +585,14 @@ async function handleLogout() {
           </div>
         </header>
 
-        <!-- Main View Content -->
-        <main class="flex-1 w-full max-w-6xl mx-auto px-3.5 sm:px-6 md:px-8 py-4 sm:py-7 overflow-x-hidden">
-          <RouterView />
+        <!-- Scrollable Main View Content -->
+        <main
+          ref="mainScrollContainer"
+          class="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden pb-24 md:pb-8"
+        >
+          <div class="w-full max-w-6xl mx-auto px-3.5 sm:px-6 md:px-8 py-4 sm:py-7">
+            <RouterView />
+          </div>
         </main>
       </div>
 
@@ -806,10 +825,10 @@ async function handleLogout() {
         </RouterLink>
       </nav>
 
-      <!-- 2. Super Admin Mobile Bottom Navigation (Strictly Users, Logs, Alerts, Settings) -->
+      <!-- 2. Super Admin Mobile Bottom Navigation (Strictly Users, Logs, Alerts, Database, Settings) -->
       <nav
         v-else
-        class="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800/80 grid grid-cols-4 items-center px-1"
+        class="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800/80 grid grid-cols-5 items-center px-1"
       >
         <RouterLink
           to="/control-panel?tab=users"
@@ -853,6 +872,21 @@ async function handleLogout() {
           <ShieldAlert class="w-5 h-5" />
           <span class="text-[10px] font-medium tracking-tight whitespace-nowrap">
             Peringatan
+          </span>
+        </RouterLink>
+
+        <RouterLink
+          to="/database"
+          class="min-h-[48px] flex flex-col items-center justify-center gap-0.5 transition-colors"
+          :class="
+            route.path === '/database'
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : 'text-slate-500 dark:text-slate-400'
+          "
+        >
+          <Database class="w-5 h-5" />
+          <span class="text-[10px] font-medium tracking-tight whitespace-nowrap">
+            {{ t('nav.database') }}
           </span>
         </RouterLink>
 
