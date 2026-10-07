@@ -913,6 +913,57 @@ export const useAdminStore = defineStore('admin', () => {
   }
 
   /**
+   * Fetch all raw documents from a specific Cloud Firestore collection (`sisa-uang`)
+   * with normalized timestamps and field inspection for the Super Admin Data Explorer.
+   */
+  async function fetchFirestoreRawCollectionDocs(
+    collectionName: string
+  ): Promise<Record<string, any>[]> {
+    await ensureSuperAdminFirebaseSession();
+    const targetDb = sisaUangDb || db;
+    const snap = await getDocs(collection(targetDb, collectionName));
+
+    const serializeFirestoreValue = (val: any): any => {
+      if (val === null || val === undefined) return val;
+      if (typeof val === 'object') {
+        if (typeof val.toDate === 'function') {
+          try {
+            return val.toDate().toISOString();
+          } catch {
+            return String(val);
+          }
+        }
+        if ('seconds' in val && 'nanoseconds' in val && typeof val.seconds === 'number') {
+          try {
+            return new Date(val.seconds * 1000).toISOString();
+          } catch {
+            return String(val);
+          }
+        }
+        if (Array.isArray(val)) {
+          return val.map(serializeFirestoreValue);
+        }
+        const out: Record<string, any> = {};
+        for (const [k, v] of Object.entries(val)) {
+          out[k] = serializeFirestoreValue(v);
+        }
+        return out;
+      }
+      return val;
+    };
+
+    return snap.docs.map((d) => {
+      const rawData = d.data();
+      const serialized = serializeFirestoreValue(rawData);
+      return {
+        __docId: d.id,
+        id: rawData.id ?? rawData.uid ?? d.id,
+        ...serialized,
+      };
+    });
+  }
+
+  /**
    * Delete/empty one or multiple collections (tables) inside Cloud Firestore (`sisa-uang`).
    * Exclusively for Super Admin during development.
    */
@@ -1011,6 +1062,7 @@ export const useAdminStore = defineStore('admin', () => {
     resolveSecurityAlert,
     importConvertedJsonToFirestore,
     fetchFirestoreCollectionStats,
+    fetchFirestoreRawCollectionDocs,
     deleteFirestoreCollections,
     dismissInstantAlertBanner,
   };
