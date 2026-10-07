@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter, RouterLink, RouterView } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import {
   LayoutDashboard,
   ArrowLeftRight,
   Wallet,
+  Tags,
   PieChart,
   BarChart3,
   Settings,
@@ -45,9 +46,58 @@ const mobileDrawerOpen = ref(false);
 const deniedBannerVisible = ref(false);
 const mainScrollContainer = ref<HTMLElement | null>(null);
 
+// Support mobile hardware back button to close the mobile slide-out drawer
+const drawerHistoryKey = 'su_mobile_drawer';
+let hasPushedDrawerHistory = false;
+let isClosedByBack = false;
+
+function handleDrawerPopState() {
+  if (!mobileDrawerOpen.value) return;
+  if (hasPushedDrawerHistory) {
+    isClosedByBack = true;
+    hasPushedDrawerHistory = false;
+    mobileDrawerOpen.value = false;
+  }
+}
+
+watch(mobileDrawerOpen, (isOpen) => {
+  if (typeof window === 'undefined') return;
+  if (isOpen) {
+    isClosedByBack = false;
+    try {
+      const currentState = window.history.state || {};
+      window.history.pushState(
+        { ...currentState, __sisaUangDrawerKey: drawerHistoryKey },
+        '',
+        window.location.href
+      );
+      hasPushedDrawerHistory = true;
+    } catch {
+      hasPushedDrawerHistory = false;
+    }
+  } else {
+    if (hasPushedDrawerHistory && !isClosedByBack) {
+      hasPushedDrawerHistory = false;
+      try {
+        if (window.history.state?.__sisaUangDrawerKey === drawerHistoryKey) {
+          window.history.back();
+        }
+      } catch {
+        // Ignore
+      }
+    }
+    isClosedByBack = false;
+  }
+});
+
 onMounted(() => {
   themeStore.initThemeListener();
   authStore.initAuth();
+  window.addEventListener('popstate', handleDrawerPopState);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('popstate', handleDrawerPopState);
 });
 
 watch(
@@ -101,6 +151,7 @@ const userNavItems = computed(() => [
   { name: t('nav.transactions'), path: '/transactions', icon: ArrowLeftRight },
   { name: t('nav.wallets'), path: '/wallets', icon: Wallet },
   { name: t('nav.ownership'), path: '/ownership', icon: Users },
+  { name: t('nav.categories'), path: '/categories', icon: Tags },
   { name: t('nav.budgets'), path: '/budgets', icon: PieChart },
   { name: t('nav.analytics'), path: '/analytics', icon: BarChart3 },
   { name: t('nav.settings'), path: '/settings', icon: Settings },
@@ -346,17 +397,43 @@ async function handleLogout() {
       >
         <!-- Top & Scrollable Menu Area -->
         <div class="space-y-4">
-          <!-- Brand Header -->
-          <div class="flex items-center justify-between px-2 pt-1">
+          <!-- Brand Logo Container (Replaces Sisa Uang text in Sidebar) -->
+          <div class="flex items-center justify-between gap-2 px-1 pt-0.5">
             <RouterLink
               :to="authStore.isSuperAdmin ? '/control-panel' : '/'"
-              class="text-2xl font-display italic tracking-tight text-slate-900 dark:text-slate-100"
+              class="flex-1 min-w-0 flex items-center"
+              aria-label="Logo Aplikasi"
             >
-              Sisa Uang
+              <div
+                v-if="themeStore.appLogoUrl"
+                class="h-11 w-full rounded-xl overflow-hidden flex items-center justify-start px-2"
+              >
+                <img
+                  :src="themeStore.appLogoUrl"
+                  alt="Logo Aplikasi"
+                  class="max-h-9 w-auto object-contain"
+                />
+              </div>
+              <div
+                v-else
+                class="h-11 w-full rounded-xl border border-dashed border-emerald-500/40 dark:border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/30 px-3 flex items-center gap-2.5 group hover:border-emerald-500 transition-colors"
+              >
+                <div class="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                  <Wallet class="w-4 h-4" />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-300 truncate">
+                    Logo Aplikasi
+                  </div>
+                  <div class="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                    Ruang Logo Brand
+                  </div>
+                </div>
+              </div>
             </RouterLink>
             <button
               type="button"
-              class="min-h-[38px] px-2.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-mono font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              class="min-h-[38px] px-2.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-mono font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
               @click="toggleLocale"
             >
               {{ locale.toUpperCase() }}
@@ -371,13 +448,13 @@ async function handleLogout() {
             <div class="text-xs text-slate-500 dark:text-slate-400">
               {{ t('app.sisaUangLabel') }}
             </div>
-            <div class="text-base font-mono font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+            <div class="text-base font-money font-semibold text-emerald-600 dark:text-emerald-400">
               {{ themeStore.formatMoney(financeStore.sisaUangBulanIni) }}
             </div>
             <div class="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
               <span>{{ t('app.safeDailySpend') }}</span>
               <span aria-hidden="true">·</span>
-              <span class="font-mono tabular-nums font-medium text-slate-700 dark:text-slate-300">
+              <span class="font-money font-medium text-slate-700 dark:text-slate-300">
                 {{ themeStore.formatMoney(financeStore.safeDailySpend) }}/hr
               </span>
             </div>
@@ -540,30 +617,26 @@ async function handleLogout() {
           </div>
         </header>
 
-        <!-- Mobile Top App Bar (< md) - Permanently pinned at top -->
+        <!-- Mobile Top App Bar (< md) - Permanently pinned at top, without Sisa Uang title -->
         <header
           class="md:hidden shrink-0 z-30 h-14 px-3.5 flex items-center justify-between gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80"
         >
           <button
             type="button"
-            class="min-h-[44px] min-w-[44px] -ml-1.5 flex items-center justify-center rounded-xl text-slate-700 dark:text-slate-200 shrink-0"
+            class="min-h-[44px] min-w-[44px] -ml-1.5 flex items-center justify-center rounded-xl text-slate-700 dark:text-slate-200 shrink-0 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             aria-label="Menu"
             @click="mobileDrawerOpen = true"
           >
             <Menu class="w-5 h-5" />
           </button>
 
-          <RouterLink
-            :to="authStore.isSuperAdmin ? '/control-panel' : '/'"
-            class="text-xl font-display italic tracking-tight text-slate-900 dark:text-slate-100 truncate"
-          >
-            Sisa Uang
-          </RouterLink>
+          <!-- Empty spacer instead of Sisa Uang app title on mobile -->
+          <div class="flex-1"></div>
 
           <div class="flex items-center shrink-0">
             <button
               type="button"
-              class="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300"
+              class="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               :title="t('theme.label')"
               @click="cycleTheme"
             >
@@ -580,33 +653,64 @@ async function handleLogout() {
           class="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden pb-24 md:pb-8"
         >
           <div class="w-full max-w-6xl mx-auto px-3.5 sm:px-6 md:px-8 py-4 sm:py-7">
-            <RouterView />
+            <RouterView v-slot="{ Component }">
+              <Transition name="page" mode="out-in">
+                <component :is="Component" />
+              </Transition>
+            </RouterView>
           </div>
         </main>
       </div>
 
-      <!-- Mobile Slide-Out Sidebar Drawer -->
-      <div
-        v-if="mobileDrawerOpen"
-        class="md:hidden fixed inset-0 z-50 flex bg-black/50 backdrop-blur-xs"
-        @click.self="mobileDrawerOpen = false"
-      >
+      <!-- Mobile Slide-Out Sidebar Drawer with Smooth Transition -->
+      <Transition name="drawer">
         <div
-          class="w-72 max-w-[84vw] bg-white dark:bg-slate-900 h-dvh max-h-dvh overflow-y-auto p-5 flex flex-col justify-between gap-4 border-r border-slate-200 dark:border-slate-800 shadow-2xl"
+          v-if="mobileDrawerOpen"
+          class="md:hidden fixed inset-0 z-50 flex bg-black/50 backdrop-blur-xs"
+          @click.self="mobileDrawerOpen = false"
         >
-          <div class="space-y-5">
-            <div class="flex items-center justify-between">
-              <span class="text-2xl font-display italic text-slate-900 dark:text-slate-100">
-                Sisa Uang
-              </span>
-              <button
-                type="button"
-                class="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-500"
-                @click="mobileDrawerOpen = false"
-              >
-                <X class="w-5 h-5" />
-              </button>
-            </div>
+          <div
+            class="drawer-panel w-72 max-w-[84vw] bg-white dark:bg-slate-900 h-dvh max-h-dvh overflow-y-auto p-5 flex flex-col justify-between gap-4 border-r border-slate-200 dark:border-slate-800 shadow-2xl"
+          >
+            <div class="space-y-5">
+              <!-- Dedicated App Logo Container at top of Mobile Sidebar -->
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex-1 min-w-0">
+                  <div
+                    v-if="themeStore.appLogoUrl"
+                    class="h-11 w-full rounded-xl overflow-hidden flex items-center justify-start px-2"
+                  >
+                    <img
+                      :src="themeStore.appLogoUrl"
+                      alt="Logo Aplikasi"
+                      class="max-h-9 w-auto object-contain"
+                    />
+                  </div>
+                  <div
+                    v-else
+                    class="h-11 w-full rounded-xl border border-dashed border-emerald-500/40 dark:border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/30 px-3 flex items-center gap-2.5"
+                  >
+                    <div class="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                      <Wallet class="w-4 h-4" />
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-300 truncate">
+                        Logo Aplikasi
+                      </div>
+                      <div class="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                        Ruang Logo Brand
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  class="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
+                  @click="mobileDrawerOpen = false"
+                >
+                  <X class="w-5 h-5" />
+                </button>
+              </div>
 
             <!-- Mobile Drawer User Info -->
             <div class="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800">
@@ -734,6 +838,7 @@ async function handleLogout() {
           </div>
         </div>
       </div>
+      </Transition>
 
       <!-- Mobile Fixed Bottom Navigation Bar (< md) - Natural Thumb Zone -->
       <!-- 1. Regular User Bottom Navigation (Personal Finance) -->

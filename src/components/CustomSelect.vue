@@ -198,9 +198,11 @@ onBeforeUnmount(() => {
       :disabled="disabled"
       :aria-label="ariaLabel"
       :aria-expanded="isOpen"
-      class="w-full flex items-center justify-between gap-2 rounded-xl border text-left transition-all duration-150 focus:outline-none disabled:opacity-50"
+      class="w-full flex items-center justify-between gap-2.5 rounded-xl border text-left transition-all duration-150 focus:outline-none disabled:opacity-50"
       :class="[
-        size === 'sm' ? 'min-h-[38px] px-3 py-1.5 text-xs' : 'min-h-[44px] px-3.5 py-2 text-xs sm:text-sm',
+        size === 'sm'
+          ? 'min-h-[44px] sm:min-h-[40px] px-3.5 py-2 text-xs sm:text-xs'
+          : 'min-h-[50px] sm:min-h-[46px] px-4 py-2.5 text-sm',
         isOpen
           ? accentColor === 'indigo'
             ? 'border-indigo-600 ring-2 ring-indigo-500/15 bg-white dark:bg-slate-900'

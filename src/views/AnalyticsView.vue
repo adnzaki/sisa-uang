@@ -1,19 +1,34 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { Calendar } from 'lucide-vue-next';
 import { useFinanceStore, formatPeriodLabel } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
+import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 
 const { locale } = useI18n();
 const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
+
+const periodOptions = computed<SelectOptionItem[]>(() => [
+  {
+    value: 'all',
+    label: `Semua Periode (${financeStore.transactions.length} Transaksi)`,
+    badge: 'SEMUA',
+  },
+  ...financeStore.availablePeriods.map((p) => ({
+    value: p,
+    label: formatPeriodLabel(p, locale.value === 'id' ? 'id-ID' : 'en-US'),
+    badge: p,
+  })),
+]);
 
 const categoryBreakdown = computed(() => {
   const map = new Map<string, number>();
   for (const tx of financeStore.periodTransactions) {
     if (tx.type === 'expense') {
       map.set(tx.category, (map.get(tx.category) || 0) + Number(tx.amount || 0));
+    } else if (tx.type === 'transfer' && Number(tx.adminFee || 0) > 0) {
+      map.set('Biaya Admin Transfer', (map.get('Biaya Admin Transfer') || 0) + Number(tx.adminFee || 0));
     }
   }
   const totalExp = Math.max(1, financeStore.monthlyExpense);
@@ -69,23 +84,15 @@ const walletAllocation = computed(() => {
         </p>
       </div>
 
-      <!-- Period Selector -->
-      <div class="relative flex items-center w-full sm:w-auto">
-        <Calendar class="w-4 h-4 text-emerald-600 dark:text-emerald-400 absolute left-3.5 pointer-events-none" />
-        <select
+      <!-- Period Selector (CustomSelect) -->
+      <div class="w-full sm:w-64">
+        <CustomSelect
           v-model="financeStore.selectedPeriod"
-          aria-label="Pilih Periode Bulan"
-          class="w-full sm:w-auto min-h-[44px] pl-9 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600"
-        >
-          <option value="all">Semua Periode ({{ financeStore.transactions.length }} Transaksi)</option>
-          <option
-            v-for="p in financeStore.availablePeriods"
-            :key="p"
-            :value="p"
-          >
-            {{ formatPeriodLabel(p, locale === 'id' ? 'id-ID' : 'en-US') }}
-          </option>
-        </select>
+          :options="periodOptions"
+          searchable
+          search-placeholder="Cari bulan atau tahun..."
+          placeholder="Pilih Periode Bulan"
+        />
       </div>
     </div>
 
@@ -93,7 +100,7 @@ const walletAllocation = computed(() => {
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-3.5 sm:gap-4">
       <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-1.5 min-w-0">
         <div class="text-xs text-slate-500 dark:text-slate-400">Rasio Sisa Uang (Tabungan)</div>
-        <div class="text-xl sm:text-2xl font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400 truncate">
+        <div class="text-xl sm:text-2xl font-money font-bold tabular-nums text-emerald-600 dark:text-emerald-400 truncate">
           {{ financeStore.savingsRate }}%
         </div>
         <div class="text-xs text-slate-500 dark:text-slate-400 truncate">
@@ -103,7 +110,7 @@ const walletAllocation = computed(() => {
 
       <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-1.5 min-w-0">
         <div class="text-xs text-slate-500 dark:text-slate-400">Batas Aman Harian</div>
-        <div class="text-xl sm:text-2xl font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100 truncate">
+        <div class="text-xl sm:text-2xl font-money font-bold tabular-nums text-slate-900 dark:text-slate-100 truncate">
           {{ themeStore.formatMoney(financeStore.safeDailySpend) }}
         </div>
         <div class="text-xs text-slate-500 dark:text-slate-400 truncate">
@@ -114,7 +121,7 @@ const walletAllocation = computed(() => {
       <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-1.5 min-w-0">
         <div class="text-xs text-slate-500 dark:text-slate-400">Selisih Kas Bersih</div>
         <div
-          class="text-xl sm:text-2xl font-mono font-bold tabular-nums truncate"
+          class="text-xl sm:text-2xl font-money font-bold tabular-nums truncate"
           :class="
             financeStore.periodNetCashflow >= 0
               ? 'text-emerald-600 dark:text-emerald-400'
@@ -123,7 +130,7 @@ const walletAllocation = computed(() => {
         >
           {{ themeStore.formatMoney(financeStore.periodNetCashflow) }}
         </div>
-        <div class="text-xs text-slate-500 dark:text-slate-400 truncate">
+        <div class="text-xs text-slate-500 dark:text-slate-400 font-money tabular-nums truncate">
           Masuk {{ themeStore.formatMoney(financeStore.monthlyIncome) }} · Keluar {{ themeStore.formatMoney(financeStore.monthlyExpense) }}
         </div>
       </div>
@@ -156,13 +163,13 @@ const walletAllocation = computed(() => {
               <span class="font-semibold text-slate-800 dark:text-slate-200 truncate">
                 {{ item.category }}
               </span>
-              <span class="font-mono tabular-nums text-slate-600 dark:text-slate-300 shrink-0">
+              <span class="font-money tabular-nums text-slate-600 dark:text-slate-300 shrink-0">
                 {{ themeStore.formatMoney(item.amount) }} · {{ item.share }}%
               </span>
             </div>
             <div class="h-2.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
               <div
-                class="h-full rounded-full bg-rose-500 transition-all duration-200"
+                class="h-full rounded-full bg-rose-500 transition-all duration-300"
                 :style="{ width: `${item.share}%` }"
               ></div>
             </div>
@@ -192,13 +199,13 @@ const walletAllocation = computed(() => {
                 <span class="font-semibold text-slate-800 dark:text-slate-200 truncate">
                   {{ w.name }}
                 </span>
-                <span class="font-mono tabular-nums text-slate-600 dark:text-slate-300 shrink-0">
+                <span class="font-money tabular-nums text-slate-600 dark:text-slate-300 shrink-0">
                   {{ themeStore.formatMoney(w.balance) }} · {{ w.share }}%
                 </span>
               </div>
               <div class="h-2.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
                 <div
-                  class="h-full rounded-full bg-emerald-600 transition-all duration-200"
+                  class="h-full rounded-full bg-emerald-600 transition-all duration-300"
                   :style="{ width: `${w.share}%` }"
                 ></div>
               </div>
@@ -229,13 +236,13 @@ const walletAllocation = computed(() => {
                 <span class="font-semibold text-slate-800 dark:text-slate-200 truncate">
                   {{ item.category }}
                 </span>
-                <span class="font-mono tabular-nums text-slate-600 dark:text-slate-300 shrink-0">
+                <span class="font-money tabular-nums text-slate-600 dark:text-slate-300 shrink-0">
                   {{ themeStore.formatMoney(item.amount) }} · {{ item.share }}%
                 </span>
               </div>
               <div class="h-2.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
                 <div
-                  class="h-full rounded-full bg-emerald-600 transition-all duration-200"
+                  class="h-full rounded-full bg-emerald-600 transition-all duration-300"
                   :style="{ width: `${item.share}%` }"
                 ></div>
               </div>

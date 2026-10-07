@@ -14,6 +14,7 @@ const messages = {
       transactions: 'Transaksi',
       wallets: 'Dompet',
       ownership: 'Kepemilikan Dana',
+      categories: 'Kategori',
       budgets: 'Anggaran',
       analytics: 'Analitik',
       database: 'Database',
@@ -103,6 +104,10 @@ const messages = {
       walletType: 'Jenis Dompet',
       saveWallet: 'Simpan Dompet',
     },
+    categories: {
+      title: 'Manajemen Kategori',
+      subtitle: 'Kelola kategori pengeluaran dan pemasukan kustom maupun bawaan sistem. Ketuk kategori kustom untuk mengubahnya.',
+    },
     budgets: {
       title: 'Perencanaan Anggaran',
       subtitle: 'Tetapkan batas pengeluaran per kategori agar Sisa Uang tetap terjaga.',
@@ -143,6 +148,7 @@ const messages = {
       transactions: 'Transactions',
       wallets: 'Wallets',
       ownership: 'Fund Ownership',
+      categories: 'Categories',
       budgets: 'Budgets',
       analytics: 'Analytics',
       database: 'Database',
@@ -231,6 +237,10 @@ const messages = {
       initialBalance: 'Current Balance',
       walletType: 'Wallet Type',
       saveWallet: 'Save Wallet',
+    },
+    categories: {
+      title: 'Category Management',
+      subtitle: 'Manage custom and system default income/expense categories. Tap any custom category to edit.',
     },
     budgets: {
       title: 'Budget Planner',
