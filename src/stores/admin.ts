@@ -3,6 +3,7 @@ import { ref, computed } from 'vue';
 import {
   collection,
   doc,
+  getDocs,
   updateDoc,
   deleteDoc,
   onSnapshot,
@@ -516,6 +517,8 @@ export const useAdminStore = defineStore('admin', () => {
         status: u.status === 'blocked' ? 'blocked' : 'active',
         authProvider: u.authProvider === 'google' ? 'google' : 'password',
         currency: u.currency === 'USD' ? 'USD' : 'IDR',
+        deleted: Boolean(u.deleted),
+        deletedAt: u.deleted ? sanitizeString(u.deletedAt, 40, new Date().toISOString()) : null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
@@ -544,6 +547,8 @@ export const useAdminStore = defineStore('admin', () => {
           type: safeType,
           balance: safeBalance,
           color: sanitizeString(w.color, 20, 'emerald'),
+          deleted: Boolean(w.deleted),
+          deletedAt: w.deleted ? sanitizeString(w.deletedAt, 40, new Date().toISOString()) : null,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         },
@@ -563,6 +568,8 @@ export const useAdminStore = defineStore('admin', () => {
           walletName: sanitizeString(fo.walletName, MAX_WALLET_NAME_LENGTH, 'Sumber Dana'),
           holderName: sanitizeString(fo.holderName, MAX_WALLET_NAME_LENGTH, 'Pribadi'),
           balance: safeBalance,
+          deleted: Boolean(fo.deleted),
+          deletedAt: fo.deleted ? sanitizeString(fo.deletedAt, 40, new Date().toISOString()) : null,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         },
@@ -579,6 +586,8 @@ export const useAdminStore = defineStore('admin', () => {
           name: sanitizeString(cat.name, MAX_CATEGORY_LENGTH, 'Kategori'),
           type: cat.type === 'income' ? 'income' : 'expense',
           color: sanitizeString(cat.color, 20, 'emerald'),
+          deleted: Boolean(cat.deleted),
+          deletedAt: cat.deleted ? sanitizeString(cat.deletedAt, 40, new Date().toISOString()) : null,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         },
@@ -606,6 +615,8 @@ export const useAdminStore = defineStore('admin', () => {
         amount: safeAmount,
         note: sanitizeString(tx.note, MAX_NOTE_LENGTH, '-'),
         date: safeDate,
+        deleted: Boolean(tx.deleted),
+        deletedAt: tx.deleted ? sanitizeString(tx.deletedAt, 40, new Date().toISOString()) : null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
@@ -655,6 +666,8 @@ export const useAdminStore = defineStore('admin', () => {
           limitAmount: safeLimit,
           spentAmount: safeSpent,
           period: safePeriod,
+          deleted: Boolean(bg.deleted),
+          deletedAt: bg.deleted ? sanitizeString(bg.deletedAt, 40, new Date().toISOString()) : null,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         },
@@ -771,6 +784,159 @@ export const useAdminStore = defineStore('admin', () => {
     };
   }
 
+  /**
+   * Fetch live document counts for all collections in Cloud Firestore (`sisa-uang`)
+   * for the Super Admin Database Table Cleanup & Management panel.
+   */
+  async function fetchFirestoreCollectionStats(): Promise<
+    { collectionName: string; label: string; description: string; docCount: number }[]
+  > {
+    await ensureSuperAdminFirebaseSession();
+    const targetDb = sisaUangDb || db;
+
+    const collectionDefs = [
+      {
+        collectionName: 'users',
+        label: 'users (Akun Pengguna)',
+        description: 'Data akun pengguna hasil migrasi & registrasi (Super Admin tetap dilindungi)',
+      },
+      {
+        collectionName: 'wallets',
+        label: 'wallets (Sumber Dana / Dompet)',
+        description: 'Daftar rekening bank, e-wallet, kas tunai, dan investasi',
+      },
+      {
+        collectionName: 'wallet_owners',
+        label: 'wallet_owners (Kepemilikan Dana)',
+        description: 'Alokasi pemilik dana (Pribadi, Istri, Tabungan, dll) di setiap dompet',
+      },
+      {
+        collectionName: 'categories',
+        label: 'categories (Kategori Transaksi)',
+        description: 'Kategori pemasukan (income) dan pengeluaran (expense)',
+      },
+      {
+        collectionName: 'transactions',
+        label: 'transactions (Riwayat Transaksi)',
+        description: 'Seluruh mutasi pemasukan, pengeluaran, dan transfer dana',
+      },
+      {
+        collectionName: 'budgets',
+        label: 'budgets (Anggaran Bulanan)',
+        description: 'Target & batas anggaran pengeluaran bulanan per kategori',
+      },
+      {
+        collectionName: 'activity_logs',
+        label: 'activity_logs (Log Aktivitas & Login)',
+        description: 'Jejak audit aktivitas pengguna dan histori login CI4 Shield',
+      },
+      {
+        collectionName: 'security_alerts',
+        label: 'security_alerts (Peringatan Keamanan)',
+        description: 'Insiden dan notifikasi peringatan keamanan sistem',
+      },
+    ];
+
+    const results = await Promise.all(
+      collectionDefs.map(async (def) => {
+        try {
+          const snap = await getDocs(collection(targetDb, def.collectionName));
+          return {
+            ...def,
+            docCount: snap.size,
+          };
+        } catch {
+          return {
+            ...def,
+            docCount: 0,
+          };
+        }
+      })
+    );
+
+    return results;
+  }
+
+  /**
+   * Delete/empty one or multiple collections (tables) inside Cloud Firestore (`sisa-uang`).
+   * Exclusively for Super Admin during development.
+   */
+  async function deleteFirestoreCollections(
+    collectionNames: string[],
+    options?: { keepSuperAdminUser?: boolean },
+    onProgress?: (phase: string) => void
+  ): Promise<{ deletedCount: number; batchesCommitted: number; clearedCollections: string[] }> {
+    const keepSuperAdmin = options?.keepSuperAdminUser ?? true;
+    await ensureSuperAdminFirebaseSession();
+    const targetDb = sisaUangDb || db;
+
+    const docsToDelete: { col: string; docId: string }[] = [];
+
+    for (const colName of collectionNames) {
+      onProgress?.(`Membaca dokumen dari tabel/koleksi "${colName}"...`);
+      const snap = await getDocs(collection(targetDb, colName));
+      snap.docs.forEach((d) => {
+        if (colName === 'users' && keepSuperAdmin) {
+          const data = d.data();
+          const email = String(data?.email || '').toLowerCase();
+          if (
+            d.id === 'admin_vuedevo_01' ||
+            email === 'vuedevo@gmail.com' ||
+            email === 'adnanzaki65@admin.sd.belajar.id'
+          ) {
+            return; // Protect Super Admin account so current session stays intact
+          }
+        }
+        docsToDelete.push({ col: colName, docId: d.id });
+      });
+    }
+
+    const CHUNK_SIZE = 400;
+    const totalBatches = Math.max(1, Math.ceil(docsToDelete.length / CHUNK_SIZE));
+    let batchesCommitted = 0;
+
+    if (docsToDelete.length > 0) {
+      for (let i = 0; i < docsToDelete.length; i += CHUNK_SIZE) {
+        const slice = docsToDelete.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(targetDb);
+        for (const item of slice) {
+          batch.delete(doc(targetDb, item.col, item.docId));
+        }
+        await batch.commit();
+        batchesCommitted++;
+        onProgress?.(
+          `Menghapus batch ${batchesCommitted} / ${totalBatches} (${Math.min(
+            i + slice.length,
+            docsToDelete.length
+          )} / ${docsToDelete.length} dokumen)...`
+        );
+      }
+    }
+
+    // Clear matching localStorage cache keys so UI refreshes cleanly
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        for (const colName of collectionNames) {
+          if (k.includes(`sisa_uang_${colName}`) || (colName === 'categories' && k.includes('sisa_uang_user_categories'))) {
+            keysToRemove.push(k);
+          }
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+    } catch {
+      // Ignore storage errors
+    }
+
+    return {
+      deletedCount: docsToDelete.length,
+      batchesCommitted,
+      clearedCollections: collectionNames,
+    };
+  }
+
   return {
     users,
     logs,
@@ -789,6 +955,8 @@ export const useAdminStore = defineStore('admin', () => {
     simulateSuspiciousActivity,
     resolveSecurityAlert,
     importConvertedJsonToFirestore,
+    fetchFirestoreCollectionStats,
+    deleteFirestoreCollections,
     dismissInstantAlertBanner,
   };
 });

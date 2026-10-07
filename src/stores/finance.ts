@@ -37,6 +37,8 @@ export interface WalletItem {
   type: 'cash' | 'bank' | 'ewallet' | 'investment' | 'credit';
   balance: number;
   color: string;
+  deleted?: boolean;
+  deletedAt?: any;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -48,6 +50,8 @@ export interface WalletOwnerItem {
   walletName: string;
   holderName: string;
   balance: number;
+  deleted?: boolean;
+  deletedAt?: any;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -59,6 +63,8 @@ export interface CategoryItem {
   type: 'income' | 'expense';
   color: string;
   isDefault?: boolean;
+  deleted?: boolean;
+  deletedAt?: any;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -79,6 +85,8 @@ export interface TransactionItem {
   amount: number;
   note: string;
   date: string;
+  deleted?: boolean;
+  deletedAt?: any;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -90,6 +98,8 @@ export interface BudgetItem {
   limitAmount: number;
   spentAmount: number;
   period: string;
+  deleted?: boolean;
+  deletedAt?: any;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -525,7 +535,7 @@ export const useFinanceStore = defineStore('finance', () => {
     const canQueryFirestore = await ensureFirestoreSessionForUser(uid);
 
     if (canQueryFirestore) {
-      // 1. Wallets listener for this user
+      // 1. Wallets listener for this user (filters out soft-deleted items)
       const walletsQuery = query(collection(db, 'wallets'), where('ownerId', '==', uid));
       unsubWallets = onSnapshot(
         walletsQuery,
@@ -535,6 +545,7 @@ export const useFinanceStore = defineStore('finance', () => {
               id: d.id,
               ...(d.data() as Omit<WalletItem, 'id'>),
             }))
+            .filter((w) => !w.deleted)
             .sort((a, b) => a.name.localeCompare(b.name));
           syncWalletTotalBalancesFromHolders();
           isSyncedWithFirestore.value = true;
@@ -547,15 +558,17 @@ export const useFinanceStore = defineStore('finance', () => {
         }
       );
 
-      // 2. Wallet Owners (Kepemilikan Sumber Dana) listener for this user
+      // 2. Wallet Owners (Kepemilikan Sumber Dana) listener for this user (filters out soft-deleted items)
       const holdersQuery = query(collection(db, 'wallet_owners'), where('ownerId', '==', uid));
       unsubWalletOwners = onSnapshot(
         holdersQuery,
         (snap) => {
-          walletOwners.value = snap.docs.map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<WalletOwnerItem, 'id'>),
-          }));
+          walletOwners.value = snap.docs
+            .map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<WalletOwnerItem, 'id'>),
+            }))
+            .filter((fo) => !fo.deleted);
           syncWalletTotalBalancesFromHolders();
           saveLocalSnapshot(uid);
         },
@@ -564,7 +577,7 @@ export const useFinanceStore = defineStore('finance', () => {
         }
       );
 
-      // 3A. User's Custom Categories listener (`ownerId == uid`)
+      // 3A. User's Custom Categories listener (`ownerId == uid`, filters out soft-deleted items)
       const userCatQuery = query(collection(db, 'categories'), where('ownerId', '==', uid));
       unsubUserCategories = onSnapshot(
         userCatQuery,
@@ -575,6 +588,7 @@ export const useFinanceStore = defineStore('finance', () => {
               ...(d.data() as Omit<CategoryItem, 'id'>),
               isDefault: false,
             }))
+            .filter((c) => !c.deleted)
             .sort((a, b) => a.name.localeCompare(b.name));
           saveLocalSnapshot(uid);
         },
@@ -598,6 +612,7 @@ export const useFinanceStore = defineStore('finance', () => {
                 ...(d.data() as Omit<CategoryItem, 'id'>),
                 isDefault: true,
               }))
+              .filter((c) => !c.deleted)
               .sort((a, b) => a.name.localeCompare(b.name));
           },
           () => {
@@ -606,15 +621,17 @@ export const useFinanceStore = defineStore('finance', () => {
         );
       }
 
-      // 4. Transactions listener for this user
+      // 4. Transactions listener for this user (filters out soft-deleted items while preserving history in Firestore)
       const txQuery = query(collection(db, 'transactions'), where('ownerId', '==', uid));
       unsubTransactions = onSnapshot(
         txQuery,
         (snap) => {
-          const list = snap.docs.map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<TransactionItem, 'id'>),
-          }));
+          const list = snap.docs
+            .map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<TransactionItem, 'id'>),
+            }))
+            .filter((t) => !t.deleted);
           list.sort((a, b) => {
             const cmp = String(b.date || '').localeCompare(String(a.date || ''));
             if (cmp !== 0) return cmp;
@@ -648,15 +665,17 @@ export const useFinanceStore = defineStore('finance', () => {
         }
       );
 
-      // 5. Budgets listener for this user
+      // 5. Budgets listener for this user (filters out soft-deleted items)
       const budgetQuery = query(collection(db, 'budgets'), where('ownerId', '==', uid));
       unsubBudgets = onSnapshot(
         budgetQuery,
         (snap) => {
-          budgets.value = snap.docs.map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<BudgetItem, 'id'>),
-          }));
+          budgets.value = snap.docs
+            .map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<BudgetItem, 'id'>),
+            }))
+            .filter((b) => !b.deleted);
           saveLocalSnapshot(uid);
         },
         (err) => {
@@ -828,6 +847,8 @@ export const useFinanceStore = defineStore('finance', () => {
         type: payload.type,
         balance: numericBalance,
         color: safeColor,
+        deleted: false,
+        deletedAt: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -837,6 +858,8 @@ export const useFinanceStore = defineStore('finance', () => {
         walletName: safeName,
         holderName: safeHolderName,
         balance: numericBalance,
+        deleted: false,
+        deletedAt: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -922,6 +945,8 @@ export const useFinanceStore = defineStore('finance', () => {
         walletName: wallet.name,
         holderName: safeHolderName,
         balance: numericBalance,
+        deleted: false,
+        deletedAt: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -1029,7 +1054,11 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await deleteDoc(doc(db, 'wallet_owners', holderId));
+      await updateDoc(doc(db, 'wallet_owners', holderId), {
+        deleted: true,
+        deletedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
       const remainingHolders = walletOwners.value.filter(
         (fo) => fo.walletId === target.walletId && fo.id !== holderId
       );
@@ -1040,12 +1069,12 @@ export const useFinanceStore = defineStore('finance', () => {
       });
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menghapus Pemilik Dana', err);
-      handleFirestoreError(err, OperationType.DELETE, `wallet_owners/${holderId}`);
+      handleFirestoreError(err, OperationType.UPDATE, `wallet_owners/${holderId}`);
     }
 
     useNotificationStore().notifySuccess(
       'Pemilik Sumber Dana Dihapus',
-      `Pemilik dana "${formatHolderName(target.holderName)}" telah dihapus dari ${target.walletName}.`
+      `Pemilik dana "${formatHolderName(target.holderName)}" telah diarsipkan (Soft Delete) dari ${target.walletName}.`
     );
   }
 
@@ -1057,24 +1086,32 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await deleteDoc(doc(db, 'wallets', walletId));
+      await updateDoc(doc(db, 'wallets', walletId), {
+        deleted: true,
+        deletedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
       for (const ch of childHolders) {
-        await deleteDoc(doc(db, 'wallet_owners', ch.id));
+        await updateDoc(doc(db, 'wallet_owners', ch.id), {
+          deleted: true,
+          deletedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
       }
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menghapus Sumber Dana', err);
-      handleFirestoreError(err, OperationType.DELETE, `wallets/${walletId}`);
+      handleFirestoreError(err, OperationType.UPDATE, `wallets/${walletId}`);
     }
 
     if (target) {
       await authStore.recordAuditLog(
         'wallet_deleted',
-        `Menghapus sumber dana "${target.name}".`,
+        `Menghapus sumber dana "${target.name}" secara Soft Delete (histori tetap tersimpan).`,
         'info'
       );
       useNotificationStore().notifySuccess(
         'Sumber Dana Dihapus',
-        `Sumber dana "${target.name}" berhasil dihapus dari Firestore.`
+        `Sumber dana "${target.name}" berhasil diarsipkan (Soft Delete) di Firestore.`
       );
     }
   }
@@ -1101,6 +1138,8 @@ export const useFinanceStore = defineStore('finance', () => {
         name: safeName,
         type: payload.type,
         color: safeColor,
+        deleted: false,
+        deletedAt: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -1170,15 +1209,19 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await deleteDoc(doc(db, 'categories', catId));
+      await updateDoc(doc(db, 'categories', catId), {
+        deleted: true,
+        deletedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menghapus Kategori', err);
-      handleFirestoreError(err, OperationType.DELETE, `categories/${catId}`);
+      handleFirestoreError(err, OperationType.UPDATE, `categories/${catId}`);
     }
 
     useNotificationStore().notifySuccess(
       'Kategori Dihapus',
-      `Kategori "${target.name}" berhasil dihapus dari Firestore.`
+      `Kategori "${target.name}" berhasil diarsipkan (Soft Delete) dari daftar aktif.`
     );
   }
 
@@ -1279,6 +1322,8 @@ export const useFinanceStore = defineStore('finance', () => {
         amount: numericAmount,
         note: safeNote,
         date: safeDate,
+        deleted: false,
+        deletedAt: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
@@ -1536,7 +1581,11 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await deleteDoc(doc(db, 'transactions', txId));
+      await updateDoc(doc(db, 'transactions', txId), {
+        deleted: true,
+        deletedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
       if (tx.type === 'income') {
         if (sourceHolder) {
@@ -1592,17 +1641,17 @@ export const useFinanceStore = defineStore('finance', () => {
       }
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menghapus Transaksi', err);
-      handleFirestoreError(err, OperationType.DELETE, `transactions/${txId}`);
+      handleFirestoreError(err, OperationType.UPDATE, `transactions/${txId}`);
     }
 
     await authStore.recordAuditLog(
       'transaction_deleted',
-      `Menghapus transaksi ${tx.category} sebesar Rp ${tx.amount.toLocaleString('id-ID')}.`,
+      `Menghapus transaksi ${tx.category} sebesar Rp ${tx.amount.toLocaleString('id-ID')} secara Soft Delete (histori tetap tersimpan).`,
       'info'
     );
     useNotificationStore().notifySuccess(
       'Transaksi Dihapus',
-      `Transaksi ${tx.category} (Rp ${tx.amount.toLocaleString('id-ID')}) telah dihapus dari Firestore.`
+      `Transaksi ${tx.category} (Rp ${tx.amount.toLocaleString('id-ID')}) telah diarsipkan (Soft Delete) dan saldo dompet telah dikembalikan.`
     );
   }
 
@@ -1637,6 +1686,8 @@ export const useFinanceStore = defineStore('finance', () => {
         limitAmount: numericLimit,
         spentAmount: existing?.spentAmount || 0,
         period,
+        deleted: false,
+        deletedAt: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -1663,16 +1714,20 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await deleteDoc(doc(db, 'budgets', budgetId));
+      await updateDoc(doc(db, 'budgets', budgetId), {
+        deleted: true,
+        deletedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menghapus Anggaran', err);
-      handleFirestoreError(err, OperationType.DELETE, `budgets/${budgetId}`);
+      handleFirestoreError(err, OperationType.UPDATE, `budgets/${budgetId}`);
     }
 
     if (target) {
       useNotificationStore().notifySuccess(
         'Anggaran Dihapus',
-        `Anggaran kategori "${target.category}" berhasil dihapus.`
+        `Anggaran kategori "${target.category}" berhasil diarsipkan (Soft Delete).`
       );
     }
   }

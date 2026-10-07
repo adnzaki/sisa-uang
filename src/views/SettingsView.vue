@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 import {
@@ -29,6 +29,7 @@ import {
   X,
   User as UserIcon,
   Save,
+  RefreshCw,
 } from 'lucide-vue-next';
 import { useThemeStore } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
@@ -78,6 +79,116 @@ const showManualJsonEditor = ref<boolean>(false);
 const initialParsedTablesSnapshot = ref<ParsedPhpMyAdminTable[]>([]);
 const rawTables = ref<ParsedPhpMyAdminTable[]>([]);
 const activeRawTableIdx = ref<number>(0);
+const selectedRawTableNames = ref<string[]>([]);
+
+// Live Firestore Collections Cleanup / Bulk Delete State (Super Admin Dev Tool)
+const firestoreCollectionsStats = ref<
+  { collectionName: string; label: string; description: string; docCount: number }[]
+>([]);
+const isLoadingFirestoreStats = ref<boolean>(false);
+const selectedFirestoreCols = ref<string[]>([]);
+const keepSuperAdminOnDelete = ref<boolean>(true);
+const showDeleteFirestoreConfirmModal = ref<boolean>(false);
+const pendingDeleteFirestoreCols = ref<string[]>([]);
+const isDeletingFirestoreCols = ref<boolean>(false);
+const deleteFirestoreProgressText = ref<string>('');
+
+async function loadFirestoreCollectionStats() {
+  if (!authStore.isSuperAdmin) return;
+  isLoadingFirestoreStats.value = true;
+  try {
+    firestoreCollectionsStats.value = await adminStore.fetchFirestoreCollectionStats();
+  } catch (err) {
+    console.warn('Failed to load Firestore collection stats:', err);
+  } finally {
+    isLoadingFirestoreStats.value = false;
+  }
+}
+
+onMounted(() => {
+  if (authStore.isSuperAdmin) {
+    loadFirestoreCollectionStats();
+  }
+});
+
+function toggleSelectFirestoreCol(colName: string) {
+  const idx = selectedFirestoreCols.value.indexOf(colName);
+  if (idx >= 0) {
+    selectedFirestoreCols.value.splice(idx, 1);
+  } else {
+    selectedFirestoreCols.value.push(colName);
+  }
+}
+
+const isAllFirestoreColsSelected = computed(() => {
+  if (firestoreCollectionsStats.value.length === 0) return false;
+  return firestoreCollectionsStats.value.every((c) =>
+    selectedFirestoreCols.value.includes(c.collectionName)
+  );
+});
+
+function toggleSelectAllFirestoreCols() {
+  if (isAllFirestoreColsSelected.value) {
+    selectedFirestoreCols.value = [];
+  } else {
+    selectedFirestoreCols.value = firestoreCollectionsStats.value.map((c) => c.collectionName);
+  }
+}
+
+function openDeleteSingleFirestoreCollectionModal(colName: string) {
+  pendingDeleteFirestoreCols.value = [colName];
+  showDeleteFirestoreConfirmModal.value = true;
+}
+
+function openDeleteSelectedFirestoreCollectionsModal() {
+  if (selectedFirestoreCols.value.length === 0) return;
+  pendingDeleteFirestoreCols.value = [...selectedFirestoreCols.value];
+  showDeleteFirestoreConfirmModal.value = true;
+}
+
+const pendingDeleteFirestoreTotalDocs = computed(() =>
+  firestoreCollectionsStats.value
+    .filter((c) => pendingDeleteFirestoreCols.value.includes(c.collectionName))
+    .reduce((sum, c) => sum + c.docCount, 0)
+);
+
+async function confirmAndExecuteFirestoreCollectionsDelete() {
+  if (pendingDeleteFirestoreCols.value.length === 0) return;
+  isDeletingFirestoreCols.value = true;
+  deleteFirestoreProgressText.value = 'Menyiapkan penghapusan tabel/koleksi Firestore...';
+
+  try {
+    const res = await adminStore.deleteFirestoreCollections(
+      pendingDeleteFirestoreCols.value,
+      { keepSuperAdminUser: keepSuperAdminOnDelete.value },
+      (phase) => {
+        deleteFirestoreProgressText.value = phase;
+      }
+    );
+
+    showDeleteFirestoreConfirmModal.value = false;
+    selectedFirestoreCols.value = selectedFirestoreCols.value.filter(
+      (c) => !pendingDeleteFirestoreCols.value.includes(c)
+    );
+    pendingDeleteFirestoreCols.value = [];
+
+    await loadFirestoreCollectionStats();
+
+    notificationStore.notifySuccess(
+      'Tabel Database Berhasil Dihapus',
+      `Berhasil mengosongkan ${res.clearedCollections.length} tabel/koleksi (${res.clearedCollections.join(', ')}) dengan total ${res.deletedCount.toLocaleString('id-ID')} dokumen dihapus.`
+    );
+  } catch (err: any) {
+    notificationStore.notifyError(
+      'Gagal Menghapus Tabel Database',
+      err,
+      'Terjadi kendala saat menghapus dokumen di Cloud Firestore.'
+    );
+  } finally {
+    isDeletingFirestoreCols.value = false;
+    deleteFirestoreProgressText.value = '';
+  }
+}
 
 // Step 4 -> 5 -> 6: New Database Schema Design
 const schemaDesignGenerated = ref<boolean>(false);
@@ -167,6 +278,7 @@ function processJsonContent(jsonContent: string, fileLabel: string) {
       rows: [...t.rows],
     }));
     rawTables.value = parsedTables;
+    selectedRawTableNames.value = [];
     activeRawTableIdx.value = 0;
 
     const totalRows = parsedTables.reduce((acc, t) => acc + t.rows.length, 0);
@@ -177,6 +289,7 @@ function processJsonContent(jsonContent: string, fileLabel: string) {
   } catch (err: any) {
     triggerImportError(err, 'Gagal memproses konten file JSON.');
     rawTables.value = [];
+    selectedRawTableNames.value = [];
     initialParsedTablesSnapshot.value = [];
   }
 }
@@ -212,13 +325,67 @@ function handleProcessManualJson() {
 
 /**
  * Step 2 Table Controls:
- * 1. Remove unwanted table from schema generation & write calculation
+ * 1. Remove single or multiple unwanted tables from schema generation & write calculation
  * 2. Toggle whether to include data rows or only structure (0 writes)
  * 3. Restore removed tables if needed
  */
+function toggleSelectRawTable(tableName: string) {
+  const idx = selectedRawTableNames.value.indexOf(tableName);
+  if (idx >= 0) {
+    selectedRawTableNames.value.splice(idx, 1);
+  } else {
+    selectedRawTableNames.value.push(tableName);
+  }
+}
+
+const isAllRawTablesSelected = computed(() => {
+  if (rawTables.value.length === 0) return false;
+  return rawTables.value.every((t) => selectedRawTableNames.value.includes(t.tableName));
+});
+
+function toggleSelectAllRawTables() {
+  if (isAllRawTablesSelected.value) {
+    selectedRawTableNames.value = [];
+  } else {
+    selectedRawTableNames.value = rawTables.value.map((t) => t.tableName);
+  }
+}
+
+function removeSelectedRawTables() {
+  if (selectedRawTableNames.value.length === 0) return;
+  const selectedSet = new Set(selectedRawTableNames.value);
+  const removedNames = [...selectedRawTableNames.value];
+  rawTables.value = rawTables.value.filter((t) => !selectedSet.has(t.tableName));
+  selectedRawTableNames.value = [];
+
+  if (activeRawTableIdx.value >= rawTables.value.length) {
+    activeRawTableIdx.value = Math.max(0, rawTables.value.length - 1);
+  }
+  if (
+    migrationAnalysis.value &&
+    activeSchemaIdx.value >= migrationAnalysis.value.newSchemaDesigns.length
+  ) {
+    activeSchemaIdx.value = Math.max(
+      0,
+      migrationAnalysis.value.newSchemaDesigns.length - 1
+    );
+  }
+
+  notificationStore.notifySuccess(
+    `${removedNames.length} Tabel Dihapus dari Proses`,
+    `Tabel (${removedNames.join(', ')}) telah dihapus dari daftar migrasi.`
+  );
+}
+
 function removeRawTable(index: number) {
   if (index < 0 || index >= rawTables.value.length) return;
+  const removedTable = rawTables.value[index];
   rawTables.value.splice(index, 1);
+  if (removedTable) {
+    selectedRawTableNames.value = selectedRawTableNames.value.filter(
+      (n) => n !== removedTable.tableName
+    );
+  }
   if (activeRawTableIdx.value >= rawTables.value.length) {
     activeRawTableIdx.value = Math.max(0, rawTables.value.length - 1);
   }
@@ -253,6 +420,7 @@ function restoreAllInitialTables() {
     rows: [...t.rows],
     includeData: true,
   }));
+  selectedRawTableNames.value = [];
   activeRawTableIdx.value = 0;
 }
 
@@ -295,6 +463,7 @@ function resetJsonImporter() {
   uploadedFileName.value = '';
   rawJsonText.value = '';
   rawTables.value = [];
+  selectedRawTableNames.value = [];
   initialParsedTablesSnapshot.value = [];
   schemaDesignGenerated.value = false;
   dataConversionCompleted.value = false;
@@ -390,6 +559,7 @@ async function confirmAndExecuteImport() {
     );
     importSuccessInfo.value = result;
     showConfirmModal.value = false;
+    await loadFirestoreCollectionStats();
 
     notificationStore.notifySuccess(
       `Berhasil Mengimpor ${result.totalDocumentsImported.toLocaleString('id-ID')} Dokumen (${result.batchesCommitted} Batch) ke Cloud Firestore!`,
@@ -412,7 +582,7 @@ async function confirmAndExecuteImport() {
 </script>
 
 <template>
-  <div class="space-y-5 sm:space-y-6 max-w-5xl w-full overflow-x-hidden">
+  <div class="space-y-5 sm:space-y-6 max-w-5xl w-full min-w-0 overflow-x-hidden">
     <div>
       <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
         {{ t('nav.settings') }}
@@ -423,31 +593,189 @@ async function confirmAndExecuteImport() {
     </div>
 
     <!-- ===================================================================== -->
+    <!-- SUPER ADMIN EXCLUSIVE: Live Database Table Manager & Bulk Delete      -->
+    <!-- ===================================================================== -->
+    <section
+      v-if="authStore.isSuperAdmin"
+      class="rounded-2xl sm:rounded-3xl border border-rose-200/90 dark:border-rose-900/60 bg-white dark:bg-slate-900 p-4 sm:p-6 space-y-4 w-full min-w-0 overflow-x-hidden"
+    >
+      <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+        <div class="space-y-1 min-w-0">
+          <div class="flex items-center gap-2 text-xs font-semibold text-rose-600 dark:text-rose-400">
+            <Database class="w-4 h-4 shrink-0" />
+            <span class="truncate">Manajemen Tabel Database Aktif (Super Admin · Development Tool)</span>
+          </div>
+          <h2 class="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100">
+            Hapus Tabel-Tabel di Database Cloud Firestore (Satuan & Sekaligus)
+          </h2>
+          <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+            Fitur khusus <strong>Super Admin</strong> selama tahap <em>development</em> untuk menghapus/mengosongkan satu atau beberapa tabel (koleksi) sekaligus di database Cloud Firestore (<code>sisa-uang</code>).
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 sm:flex sm:flex-wrap items-stretch sm:items-center gap-2 w-full sm:w-auto shrink-0">
+          <button
+            type="button"
+            :disabled="isLoadingFirestoreStats || isDeletingFirestoreCols"
+            class="w-full sm:w-auto min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+            @click="loadFirestoreCollectionStats"
+          >
+            <RefreshCw class="w-3.5 h-3.5 shrink-0" :class="isLoadingFirestoreStats ? 'animate-spin' : ''" />
+            <span>{{ isLoadingFirestoreStats ? 'Memuat Tabel...' : 'Refresh Jumlah Data' }}</span>
+          </button>
+
+          <button
+            type="button"
+            class="w-full sm:w-auto min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-rose-400 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center justify-center gap-1.5 transition-colors"
+            @click="toggleSelectAllFirestoreCols"
+          >
+            <CheckSquare v-if="isAllFirestoreColsSelected" class="w-3.5 h-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
+            <Square v-else class="w-3.5 h-3.5 shrink-0" />
+            <span>{{ isAllFirestoreColsSelected ? 'Batal Pilih Semua' : 'Pilih Semua Tabel' }}</span>
+          </button>
+
+          <button
+            v-if="selectedFirestoreCols.length > 0"
+            type="button"
+            :disabled="isDeletingFirestoreCols"
+            class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+            @click="openDeleteSelectedFirestoreCollectionsModal"
+          >
+            <Trash2 class="w-3.5 h-3.5 shrink-0" />
+            <span>Hapus {{ selectedFirestoreCols.length }} Tabel Terpilih</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Option to protect Super Admin account when deleting users table -->
+      <div class="rounded-xl border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/50 dark:bg-amber-950/20 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+        <div class="text-slate-700 dark:text-slate-300">
+          <strong>Proteksi Sesi Super Admin:</strong> Saat menghapus tabel <code>users</code>, pertahankan akun Super Admin utama agar sesi Anda tidak ikut terputus.
+        </div>
+        <button
+          type="button"
+          class="w-full sm:w-auto min-h-[36px] px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 shrink-0 transition-colors"
+          :class="
+            keepSuperAdminOnDelete
+              ? 'border-emerald-600/50 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
+              : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400'
+          "
+          @click="keepSuperAdminOnDelete = !keepSuperAdminOnDelete"
+        >
+          <CheckSquare v-if="keepSuperAdminOnDelete" class="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          <Square v-else class="w-3.5 h-3.5 shrink-0" />
+          <span>{{ keepSuperAdminOnDelete ? 'Akun Super Admin Dilindungi' : 'Hapus Semua User Termasuk Admin' }}</span>
+        </button>
+      </div>
+
+      <!-- Responsive Grid of Database Tables / Collections -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div
+          v-for="col in firestoreCollectionsStats"
+          :key="col.collectionName"
+          class="rounded-2xl border p-3.5 flex flex-col justify-between gap-3 transition-colors min-w-0"
+          :class="
+            selectedFirestoreCols.includes(col.collectionName)
+              ? 'border-rose-500 bg-rose-50/30 dark:bg-rose-950/20'
+              : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50'
+          "
+        >
+          <div class="space-y-1.5 min-w-0">
+            <div class="flex items-start justify-between gap-2">
+              <button
+                type="button"
+                class="flex items-center gap-2 text-left min-w-0 group"
+                @click="toggleSelectFirestoreCol(col.collectionName)"
+              >
+                <CheckSquare
+                  v-if="selectedFirestoreCols.includes(col.collectionName)"
+                  class="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400"
+                />
+                <Square
+                  v-else
+                  class="w-4 h-4 shrink-0 text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-200"
+                />
+                <span class="font-mono text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                  {{ col.collectionName }}
+                </span>
+              </button>
+
+              <span
+                class="px-2 py-0.5 rounded-md font-mono text-[11px] font-semibold tabular-nums shrink-0"
+                :class="
+                  col.docCount > 0
+                    ? 'bg-emerald-100/80 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
+                    : 'bg-slate-200/70 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                "
+              >
+                {{ col.docCount.toLocaleString('id-ID') }} dok
+              </span>
+            </div>
+
+            <div class="text-[11px] font-medium text-slate-700 dark:text-slate-300 break-words">
+              {{ col.label }}
+            </div>
+            <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug break-words">
+              {{ col.description }}
+            </p>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200/70 dark:border-slate-800">
+            <button
+              type="button"
+              class="min-h-[36px] px-2.5 py-1.5 rounded-xl border text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"
+              :class="
+                selectedFirestoreCols.includes(col.collectionName)
+                  ? 'border-rose-500/60 bg-rose-100/60 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300'
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300'
+              "
+              @click="toggleSelectFirestoreCol(col.collectionName)"
+            >
+              <CheckSquare v-if="selectedFirestoreCols.includes(col.collectionName)" class="w-3.5 h-3.5 shrink-0" />
+              <Square v-else class="w-3.5 h-3.5 shrink-0" />
+              <span>{{ selectedFirestoreCols.includes(col.collectionName) ? 'Terpilih' : 'Pilih' }}</span>
+            </button>
+
+            <button
+              type="button"
+              :disabled="isDeletingFirestoreCols"
+              class="min-h-[36px] px-2.5 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-white dark:bg-slate-900 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
+              @click="openDeleteSingleFirestoreCollectionModal(col.collectionName)"
+            >
+              <Trash2 class="w-3.5 h-3.5 shrink-0" />
+              <span>Hapus Tabel</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================================================================== -->
     <!-- SUPER ADMIN EXCLUSIVE: PHPMyAdmin JSON Database Migration & Designer  -->
     <!-- ===================================================================== -->
     <section
       v-if="authStore.isSuperAdmin"
-      class="rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-7 space-y-6 overflow-x-hidden"
+      class="rounded-2xl sm:rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-7 space-y-5 sm:space-y-6 w-full min-w-0 overflow-x-hidden"
     >
       <!-- Top Header -->
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+      <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
         <div class="space-y-1 min-w-0">
           <div class="flex items-center gap-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
             <FileJson class="w-4 h-4 shrink-0" />
             <span class="truncate">Migrasi Database PHPMyAdmin (JSON) → Cloud Firestore</span>
           </div>
-          <h2 class="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100">
+          <h2 class="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 break-words">
             Perancang Struktur Database Baru & Kalkulator Kuota Write Firestore
           </h2>
-          <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-            Unggah file <code>.json</code> hasil export dari <strong>PHPMyAdmin</strong>. Sistem otomatis mendeteksi struktur tabel berdasarkan nama maupun kolomnya, menghitung potensi penggunaan kuota <em>writes</em> secara <strong>real-time</strong> terhadap batas <strong>Free Plan (20.000 writes/hari)</strong>, serta memberi kendali penuh untuk menghapus tabel atau memilih apakah data di dalamnya ikut disertakan atau tidak.
+          <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed break-words">
+            Unggah file <code>.json</code> hasil export dari <strong>PHPMyAdmin</strong>. Sistem otomatis mendeteksi struktur tabel berdasarkan nama maupun kolomnya, menghitung potensi penggunaan kuota <em>writes</em> secara <strong>real-time</strong> terhadap batas <strong>Free Plan (20.000 writes/hari)</strong>, serta memberi kendali penuh untuk menghapus tabel (satuan atau sekaligus) atau memilih apakah data di dalamnya ikut disertakan.
           </p>
         </div>
 
-        <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto shrink-0">
+        <div class="grid grid-cols-1 sm:flex sm:flex-wrap items-stretch sm:items-center gap-2 w-full sm:w-auto shrink-0">
           <button
             type="button"
-            class="flex-1 sm:flex-initial min-h-[44px] px-3.5 py-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/40 hover:bg-emerald-100/70 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+            class="w-full sm:w-auto min-h-[44px] px-3.5 py-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/40 hover:bg-emerald-100/70 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
             @click="handleLoadSamplePhpMyAdminJson"
           >
             <Sparkles class="w-3.5 h-3.5 shrink-0" />
@@ -457,42 +785,43 @@ async function confirmAndExecuteImport() {
           <button
             v-if="rawTables.length > 0 || initialParsedTablesSnapshot.length > 0"
             type="button"
-            class="min-h-[44px] min-w-[44px] px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50/60 dark:bg-rose-950/30 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-100 transition-colors flex items-center justify-center"
+            class="w-full sm:w-auto min-h-[44px] px-3.5 py-2 rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50/60 dark:bg-rose-950/30 text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-100 transition-colors flex items-center justify-center gap-1.5"
             title="Bersihkan proses migrasi"
             @click="resetJsonImporter"
           >
-            <Trash2 class="w-4.5 h-4.5" />
+            <Trash2 class="w-4 h-4 shrink-0" />
+            <span class="sm:hidden">Reset Proses Migrasi</span>
           </button>
         </div>
       </div>
 
       <!-- STEP 1: Pilih File JSON dari PHPMyAdmin -->
-      <div class="space-y-3">
+      <div class="space-y-3 min-w-0">
         <div class="flex items-center justify-between">
           <span class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
             Langkah 1 · Pilih & Proses File JSON (Export PHPMyAdmin)
           </span>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+        <div class="grid grid-cols-1 md:grid-cols-12 gap-3 sm:gap-4 items-stretch">
           <label
-            class="md:col-span-8 flex flex-col sm:flex-row items-center justify-between gap-3 p-4 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/60 hover:border-emerald-600 cursor-pointer transition-colors"
+            class="md:col-span-8 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-3.5 sm:p-4 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/60 hover:border-emerald-600 cursor-pointer transition-colors min-w-0"
           >
-            <div class="flex items-center gap-3 text-center sm:text-left">
-              <div class="w-10 h-10 rounded-xl bg-emerald-600/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 mx-auto sm:mx-0">
+            <div class="flex items-start sm:items-center gap-3 text-left min-w-0">
+              <div class="w-10 h-10 rounded-xl bg-emerald-600/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
                 <Upload class="w-5 h-5" />
               </div>
-              <div>
-                <div class="text-xs sm:text-sm font-semibold text-slate-900 dark:text-slate-100">
+              <div class="min-w-0 flex-1">
+                <div class="text-xs sm:text-sm font-semibold text-slate-900 dark:text-slate-100 break-all sm:break-words">
                   {{ uploadedFileName ? `File JSON aktif: ${uploadedFileName}` : 'Pilih File JSON Export PHPMyAdmin (.json)' }}
                 </div>
-                <div class="text-[11px] text-slate-500 dark:text-slate-400">
+                <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 break-words">
                   Mendukung format array export PHPMyAdmin (header, database, table, data) dengan berbagai penamaan tabel
                 </div>
               </div>
             </div>
 
-            <span class="min-h-[38px] px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center whitespace-nowrap shrink-0">
+            <span class="w-full sm:w-auto min-h-[40px] px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold flex items-center justify-center whitespace-nowrap shrink-0">
               Pilih File .JSON
             </span>
             <input
@@ -503,10 +832,10 @@ async function confirmAndExecuteImport() {
             />
           </label>
 
-          <div class="md:col-span-4 flex flex-col gap-2">
+          <div class="md:col-span-4 flex flex-col justify-center gap-2">
             <button
               type="button"
-              class="min-h-[42px] w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+              class="min-h-[44px] w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
               @click="showManualJsonEditor = !showManualJsonEditor"
             >
               {{ showManualJsonEditor ? 'Sembunyikan Editor JSON' : 'Tempel Konten JSON Manual' }}
@@ -525,7 +854,7 @@ async function confirmAndExecuteImport() {
           <div class="flex justify-end">
             <button
               type="button"
-              class="min-h-[38px] px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold"
+              class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold"
               @click="handleProcessManualJson"
             >
               Proses Konten JSON
@@ -544,10 +873,10 @@ async function confirmAndExecuteImport() {
         </span>
         <button
           type="button"
-          class="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-amber-600 text-white font-semibold flex items-center gap-1.5 self-start sm:self-auto"
+          class="w-full sm:w-auto min-h-[40px] px-3.5 py-2 rounded-xl bg-amber-600 text-white font-semibold flex items-center justify-center gap-1.5 shrink-0"
           @click="restoreAllInitialTables"
         >
-          <RotateCcw class="w-3.5 h-3.5" />
+          <RotateCcw class="w-3.5 h-3.5 shrink-0" />
           <span>Pulihkan Semua Tabel ({{ initialParsedTablesSnapshot.length }})</span>
         </button>
       </div>
@@ -555,18 +884,18 @@ async function confirmAndExecuteImport() {
       <!-- ================================================================= -->
       <!-- STEP 2 & 3: Write Quota Estimation + Interactive Legacy Tables    -->
       <!-- ================================================================= -->
-      <div v-if="rawTables.length > 0 && migrationAnalysis" class="space-y-6 pt-2">
+      <div v-if="rawTables.length > 0 && migrationAnalysis" class="space-y-6 pt-2 min-w-0">
         <!-- Potensi Total Writes Calculator Card (Auto-recalculates on every table/data toggle) -->
-        <div class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-4 sm:p-5 space-y-4">
+        <div class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-3.5 sm:p-5 space-y-4 min-w-0">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div class="flex items-center gap-2">
-              <Calculator class="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-              <h3 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            <div class="flex items-start sm:items-center gap-2 min-w-0">
+              <Calculator class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5 sm:mt-0" />
+              <h3 class="text-xs sm:text-sm font-semibold text-slate-900 dark:text-slate-100 break-words">
                 Kalkulasi Real-Time Potensi Writes ke Cloud Firestore (Limit Free Plan: 20.000 Writes/Hari)
               </h3>
             </div>
             <span
-              class="text-xs font-mono font-semibold px-2.5 py-1 rounded-lg self-start sm:self-auto"
+              class="text-[11px] sm:text-xs font-mono font-semibold px-2.5 py-1 rounded-lg self-start sm:self-auto shrink-0"
               :class="
                 migrationAnalysis.writeEstimation.isWithinFreeTier
                   ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
@@ -582,10 +911,10 @@ async function confirmAndExecuteImport() {
           </div>
 
           <!-- 4 Key Quota Metrics -->
-          <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <div class="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 space-y-1">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3">
+            <div class="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-3.5 space-y-1 min-w-0">
               <div class="text-[11px] text-slate-500">Baris Tabel Lama (Disertakan)</div>
-              <div class="text-xl font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
+              <div class="text-lg sm:text-xl font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100 break-words">
                 {{ migrationAnalysis.writeEstimation.activeLegacyRowsCount.toLocaleString('id-ID') }}
                 <span class="text-xs font-normal text-slate-400">
                   / {{ migrationAnalysis.writeEstimation.rawLegacyRowsCount.toLocaleString('id-ID') }}
@@ -596,11 +925,11 @@ async function confirmAndExecuteImport() {
               </div>
             </div>
 
-            <div class="rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-white dark:bg-slate-900 p-3.5 space-y-1">
+            <div class="rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-white dark:bg-slate-900 p-3 sm:p-3.5 space-y-1 min-w-0">
               <div class="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">
                 Potensi Total Writes Firestore
               </div>
-              <div class="text-xl font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+              <div class="text-lg sm:text-xl font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400 break-words">
                 {{ migrationAnalysis.writeEstimation.optimizedFirestoreWrites.toLocaleString('id-ID') }} writes
               </div>
               <div class="text-[11px] text-slate-400">
@@ -608,9 +937,9 @@ async function confirmAndExecuteImport() {
               </div>
             </div>
 
-            <div class="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 space-y-1">
+            <div class="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-3.5 space-y-1 min-w-0">
               <div class="text-[11px] text-slate-500">Pemakaian Kuota Harian (20k)</div>
-              <div class="text-xl font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
+              <div class="text-lg sm:text-xl font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
                 {{ migrationAnalysis.writeEstimation.quotaUsagePercentage }}%
               </div>
               <div class="text-[11px] text-slate-400 font-mono tabular-nums">
@@ -618,9 +947,9 @@ async function confirmAndExecuteImport() {
               </div>
             </div>
 
-            <div class="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 space-y-1">
+            <div class="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-3.5 space-y-1 min-w-0">
               <div class="text-[11px] text-slate-500">Jumlah Batch Commit</div>
-              <div class="text-xl font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
+              <div class="text-lg sm:text-xl font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
                 {{ migrationAnalysis.writeEstimation.estimatedBatchesCount }} batch
               </div>
               <div class="text-[11px] text-slate-400">Maks. 450 dokumen / writeBatch</div>
@@ -629,11 +958,11 @@ async function confirmAndExecuteImport() {
 
           <!-- Progress Bar vs 20,000 Writes -->
           <div class="space-y-1.5">
-            <div class="flex items-center justify-between text-xs font-mono tabular-nums text-slate-600 dark:text-slate-400">
-              <span>
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-[11px] sm:text-xs font-mono tabular-nums text-slate-600 dark:text-slate-400">
+              <span class="break-words">
                 Estimasi Writes: {{ migrationAnalysis.writeEstimation.optimizedFirestoreWrites.toLocaleString('id-ID') }} / {{ FIRESTORE_FREE_TIER_DAILY_WRITES.toLocaleString('id-ID') }} (Limit Harian Spark/Free Plan)
               </span>
-              <span>{{ migrationAnalysis.writeEstimation.quotaUsagePercentage }}%</span>
+              <span class="font-bold">{{ migrationAnalysis.writeEstimation.quotaUsagePercentage }}%</span>
             </div>
             <div class="h-2.5 w-full rounded-full bg-slate-200/80 dark:bg-slate-800 overflow-hidden">
               <div
@@ -651,8 +980,8 @@ async function confirmAndExecuteImport() {
           </div>
 
           <!-- Per-Collection Write Breakdown Responsive Table -->
-          <div class="rounded-xl border border-slate-200/80 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900">
-            <div class="overflow-x-auto">
+          <div class="rounded-xl border border-slate-200/80 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900 w-full min-w-0">
+            <div class="overflow-x-auto w-full">
               <table class="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr class="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 font-mono">
@@ -700,21 +1029,21 @@ async function confirmAndExecuteImport() {
         <!-- =============================================================== -->
         <!-- STEP 2: Pratinjau Data JSON Lama + Kontrol Hapus & Sertakan Data -->
         <!-- =============================================================== -->
-        <div class="space-y-4">
+        <div class="space-y-4 min-w-0">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
+            <div class="min-w-0">
               <span class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Langkah 2 · Pratinjau Data JSON Lama & Seleksi Tabel / Data
               </span>
-              <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Hapus tabel yang tidak diinginkan atau centang/nonaktifkan opsi <strong>"Sertakan Data"</strong> pada setiap tabel. Kalkulasi potensi <em>writes</em> di atas akan langsung diperbarui secara otomatis.
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 break-words">
+                Pilih satu atau beberapa tabel sekaligus untuk dihapus dari proses, atau centang/nonaktifkan opsi <strong>"Sertakan Data"</strong> pada setiap tabel. Kalkulasi potensi <em>writes</em> di atas akan langsung diperbarui secara otomatis.
               </p>
             </div>
 
             <!-- STEP 4 Button: Klik buat generate struktur database baru -->
             <button
               type="button"
-              class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:opacity-90 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-opacity"
+              class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:opacity-90 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-opacity shrink-0"
               @click="handleGenerateNewDatabaseSchema"
             >
               <Layers class="w-4 h-4 shrink-0" />
@@ -723,46 +1052,193 @@ async function confirmAndExecuteImport() {
           </div>
 
           <!-- Interactive Table Selection & Data Inclusion Control Matrix -->
-          <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 p-4 space-y-3">
-            <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 p-3.5 sm:p-4 space-y-3.5 min-w-0">
+            <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
               <div class="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                Daftar Tabel JSON ({{ rawTables.length }} Tabel Aktif<span v-if="removedTablesCount > 0"> · {{ removedTablesCount }} Dihapus</span>)
+                Daftar Tabel JSON ({{ rawTables.length }} Tabel Aktif<span v-if="removedTablesCount > 0"> · {{ removedTablesCount }} Dihapus</span><span v-if="selectedRawTableNames.length > 0" class="text-rose-600 dark:text-rose-400"> · {{ selectedRawTableNames.length }} Terpilih</span>)
               </div>
-              <div class="flex flex-wrap items-center gap-2">
+
+              <div class="grid grid-cols-1 sm:flex sm:flex-wrap items-stretch sm:items-center gap-2 w-full lg:w-auto">
                 <button
                   type="button"
-                  class="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:border-emerald-500 transition-colors"
+                  class="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:border-rose-400 flex items-center justify-center gap-1.5 transition-colors"
+                  @click="toggleSelectAllRawTables"
+                >
+                  <CheckSquare v-if="isAllRawTablesSelected" class="w-3.5 h-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
+                  <Square v-else class="w-3.5 h-3.5 shrink-0" />
+                  <span>{{ isAllRawTablesSelected ? 'Batal Pilih Semua' : 'Pilih Semua Tabel' }}</span>
+                </button>
+
+                <button
+                  v-if="selectedRawTableNames.length > 0"
+                  type="button"
+                  class="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+                  @click="removeSelectedRawTables"
+                >
+                  <Trash2 class="w-3.5 h-3.5 shrink-0" />
+                  <span>Hapus {{ selectedRawTableNames.length }} Tabel Terpilih</span>
+                </button>
+
+                <button
+                  type="button"
+                  class="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-300 hover:border-emerald-500 flex items-center justify-center transition-colors"
                   @click="setAllTablesIncludeData(true)"
                 >
                   Sertakan Semua Data
                 </button>
+
                 <button
                   type="button"
-                  class="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:border-amber-500 transition-colors"
+                  class="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-300 hover:border-amber-500 flex items-center justify-center transition-colors"
                   @click="setAllTablesIncludeData(false)"
                 >
                   Hanya Struktur (0 Writes)
                 </button>
+
                 <button
                   v-if="removedTablesCount > 0"
                   type="button"
-                  class="px-2.5 py-1 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/50 text-[11px] font-semibold text-amber-700 dark:text-amber-300 flex items-center gap-1"
+                  class="min-h-[38px] px-3 py-1.5 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/50 text-xs font-semibold text-amber-700 dark:text-amber-300 flex items-center justify-center gap-1.5"
                   @click="restoreAllInitialTables"
                 >
-                  <RotateCcw class="w-3 h-3" />
+                  <RotateCcw class="w-3.5 h-3.5 shrink-0" />
                   <span>Pulihkan {{ removedTablesCount }} Tabel Terhapus</span>
                 </button>
               </div>
             </div>
 
-            <!-- Responsive Control Table for Managing Each Legacy Table -->
-            <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900">
+            <!-- MOBILE VIEW (< md): Clean Card List so no buttons overlap or require horizontal scroll -->
+            <div class="grid grid-cols-1 gap-3 md:hidden">
+              <div
+                v-for="(tbl, idx) in rawTables"
+                :key="`mob-${tbl.tableName}`"
+                class="rounded-xl border p-3.5 space-y-3 transition-colors min-w-0"
+                :class="
+                  selectedRawTableNames.includes(tbl.tableName)
+                    ? 'border-rose-400 dark:border-rose-700 bg-rose-50/20 dark:bg-rose-950/15'
+                    : activeRawTableIdx === idx
+                    ? 'border-emerald-500/70 bg-emerald-50/30 dark:bg-emerald-950/20'
+                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
+                "
+              >
+                <div class="flex items-start justify-between gap-2">
+                  <button
+                    type="button"
+                    class="flex items-center gap-2 text-left min-w-0"
+                    @click="toggleSelectRawTable(tbl.tableName)"
+                  >
+                    <CheckSquare
+                      v-if="selectedRawTableNames.includes(tbl.tableName)"
+                      class="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400"
+                    />
+                    <Square v-else class="w-4 h-4 shrink-0 text-slate-400" />
+                    <span class="font-mono text-xs font-bold text-slate-900 dark:text-slate-100 break-all">
+                      {{ tbl.tableName }}
+                    </span>
+                  </button>
+
+                  <span class="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 font-mono text-[11px] font-semibold text-slate-700 dark:text-slate-300 shrink-0">
+                    {{ tbl.rows.length.toLocaleString('id-ID') }} baris
+                  </span>
+                </div>
+
+                <!-- Soft delete info -->
+                <div class="text-[11px] font-mono">
+                  <span
+                    v-if="tbl.detectedSoftDeleteColumns && tbl.detectedSoftDeleteColumns.length > 0"
+                    class="text-amber-700 dark:text-amber-400 font-semibold"
+                  >
+                    Soft Delete: {{ tbl.detectedSoftDeleteColumns.join(', ') }} ({{ tbl.softDeletedRowsCount || 0 }} baris diarsipkan)
+                  </span>
+                  <span v-else class="text-slate-400 italic">
+                    Tidak ada kolom deleted di tabel lama
+                  </span>
+                </div>
+
+                <!-- Target Collection Selector -->
+                <div class="space-y-1">
+                  <label class="block text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                    Target Koleksi Firestore Baru:
+                  </label>
+                  <select
+                    v-model="tbl.detectedCategory"
+                    class="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs font-mono text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600"
+                  >
+                    <option
+                      v-for="opt in TARGET_COLLECTION_OPTIONS"
+                      :key="opt.value"
+                      :value="opt.value"
+                    >
+                      → {{ opt.label }}
+                    </option>
+                  </select>
+                </div>
+
+                <!-- Mobile Action Buttons (Non-overlapping 2-row/grid layout) -->
+                <div class="grid grid-cols-1 gap-2 pt-1">
+                  <button
+                    type="button"
+                    class="w-full min-h-[38px] px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                    :class="
+                      tbl.includeData
+                        ? 'border-emerald-600/40 bg-emerald-50/70 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
+                        : 'border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                    "
+                    @click="toggleTableIncludeData(idx)"
+                  >
+                    <CheckSquare v-if="tbl.includeData" class="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    <Square v-else class="w-3.5 h-3.5 shrink-0" />
+                    <span>{{ tbl.includeData ? `Sertakan Data (${tbl.rows.length} baris)` : 'Hanya Struktur (0 Write)' }}</span>
+                  </button>
+
+                  <div class="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      class="min-h-[38px] px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                      :class="
+                        activeRawTableIdx === idx
+                          ? 'border-emerald-600 bg-emerald-600 text-white'
+                          : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300'
+                      "
+                      @click="activeRawTableIdx = idx"
+                    >
+                      <TableIcon class="w-3.5 h-3.5 shrink-0" />
+                      <span>{{ activeRawTableIdx === idx ? 'Dilihat' : 'Lihat Isi' }}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="min-h-[38px] px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-white dark:bg-slate-900 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                      @click="removeRawTable(idx)"
+                    >
+                      <Trash2 class="w-3.5 h-3.5 shrink-0" />
+                      <span>Hapus Tabel</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- DESKTOP VIEW (md+): Full Control Table for Managing Each Legacy Table -->
+            <div class="hidden md:block rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900">
               <div class="overflow-x-auto">
                 <table class="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr class="border-b border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-950 text-slate-600 dark:text-slate-400 font-mono">
+                      <th class="py-2 px-3 w-9 text-center">
+                        <button
+                          type="button"
+                          class="inline-flex items-center justify-center"
+                          title="Pilih semua tabel"
+                          @click="toggleSelectAllRawTables"
+                        >
+                          <CheckSquare v-if="isAllRawTablesSelected" class="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                          <Square v-else class="w-4 h-4 text-slate-400" />
+                        </button>
+                      </th>
                       <th class="py-2 px-3 font-semibold">Nama Tabel JSON Lama</th>
                       <th class="py-2 px-3 font-semibold text-right">Jumlah Baris</th>
+                      <th class="py-2 px-3 font-semibold">Deteksi Soft Delete</th>
                       <th class="py-2 px-3 font-semibold">Target Koleksi Baru (Dapat Diubah)</th>
                       <th class="py-2 px-3 font-semibold text-center">Opsi Sertakan Data</th>
                       <th class="py-2 px-3 font-semibold text-right">Aksi Tabel</th>
@@ -774,11 +1250,27 @@ async function confirmAndExecuteImport() {
                       :key="tbl.tableName"
                       class="transition-colors"
                       :class="
-                        activeRawTableIdx === idx
+                        selectedRawTableNames.includes(tbl.tableName)
+                          ? 'bg-rose-50/40 dark:bg-rose-950/20'
+                          : activeRawTableIdx === idx
                           ? 'bg-emerald-50/40 dark:bg-emerald-950/20'
                           : 'hover:bg-slate-50 dark:hover:bg-slate-800/30'
                       "
                     >
+                      <td class="py-2 px-3 text-center">
+                        <button
+                          type="button"
+                          class="inline-flex items-center justify-center"
+                          @click="toggleSelectRawTable(tbl.tableName)"
+                        >
+                          <CheckSquare
+                            v-if="selectedRawTableNames.includes(tbl.tableName)"
+                            class="w-4 h-4 text-rose-600 dark:text-rose-400"
+                          />
+                          <Square v-else class="w-4 h-4 text-slate-400 hover:text-slate-600" />
+                        </button>
+                      </td>
+
                       <td class="py-2 px-3 font-mono">
                         <button
                           type="button"
@@ -802,6 +1294,22 @@ async function confirmAndExecuteImport() {
 
                       <td class="py-2 px-3 font-mono tabular-nums text-right text-slate-700 dark:text-slate-300">
                         {{ tbl.rows.length.toLocaleString('id-ID') }} baris
+                      </td>
+
+                      <!-- Detected Soft Delete Column Status -->
+                      <td class="py-2 px-3 font-mono">
+                        <div
+                          v-if="tbl.detectedSoftDeleteColumns && tbl.detectedSoftDeleteColumns.length > 0"
+                          class="space-y-0.5"
+                        >
+                          <div class="text-amber-700 dark:text-amber-400 font-semibold flex items-center gap-1">
+                            <span>Kolom: {{ tbl.detectedSoftDeleteColumns.join(', ') }}</span>
+                          </div>
+                          <div class="text-[10px] text-slate-500 dark:text-slate-400">
+                            {{ tbl.softDeletedRowsCount || 0 }} baris terhapus (dipertahankan)
+                          </div>
+                        </div>
+                        <span v-else class="text-slate-400 italic text-[11px]">Tidak ada kolom deleted</span>
                       </td>
 
                       <!-- Target Collection Mapping Selector -->
@@ -858,7 +1366,7 @@ async function confirmAndExecuteImport() {
           </div>
 
           <!-- Raw Tables Quick Selector Tabs for Data Preview -->
-          <div class="flex items-center gap-1.5 overflow-x-auto pb-1">
+          <div class="flex items-center gap-1.5 overflow-x-auto pb-1 w-full">
             <button
               v-for="(tbl, idx) in rawTables"
               :key="tbl.tableName"
@@ -881,19 +1389,19 @@ async function confirmAndExecuteImport() {
           <!-- Responsive Table for Selected Raw JSON Table -->
           <div
             v-if="activeRawTable"
-            class="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900"
+            class="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900 w-full min-w-0"
           >
-            <!-- Active Table Quick Toolbar -->
-            <div class="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div class="flex items-center gap-2">
-                <span class="font-mono font-bold text-slate-900 dark:text-slate-100">
+            <!-- Active Table Quick Toolbar (Fully Responsive on Mobile) -->
+            <div class="p-3.5 sm:px-4 sm:py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+                <span class="font-mono font-bold text-slate-900 dark:text-slate-100 break-all">
                   Tabel: {{ activeRawTable.tableName }}
                 </span>
-                <span class="text-slate-400">·</span>
+                <span class="text-slate-400 hidden sm:inline">·</span>
                 <span class="font-mono text-slate-500">
                   {{ activeRawTable.columns.length }} kolom · {{ activeRawTable.rows.length.toLocaleString('id-ID') }} baris
                 </span>
-                <span class="text-slate-400">·</span>
+                <span class="text-slate-400 hidden sm:inline">·</span>
                 <span
                   class="font-semibold"
                   :class="
@@ -906,21 +1414,21 @@ async function confirmAndExecuteImport() {
                 </span>
               </div>
 
-              <div class="flex items-center gap-2">
+              <div class="grid grid-cols-1 sm:flex sm:flex-wrap items-stretch sm:items-center gap-2 w-full sm:w-auto shrink-0">
                 <button
                   type="button"
-                  class="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-300"
+                  class="w-full sm:w-auto min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-300 flex items-center justify-center"
                   @click="toggleTableIncludeData(activeRawTableIdx)"
                 >
                   {{ activeRawTable.includeData ? 'Jangan Sertakan Data Tabel Ini' : 'Sertakan Data Tabel Ini' }}
                 </button>
                 <button
                   type="button"
-                  class="px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 text-xs font-medium flex items-center gap-1"
+                  class="w-full sm:w-auto min-h-[38px] px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-white dark:bg-slate-900 text-rose-600 dark:text-rose-400 text-xs font-medium flex items-center justify-center gap-1.5"
                   @click="removeRawTable(activeRawTableIdx)"
                 >
-                  <Trash2 class="w-3.5 h-3.5" />
-                  <span>Hapus Tabel {{ activeRawTable.tableName }}</span>
+                  <Trash2 class="w-3.5 h-3.5 shrink-0" />
+                  <span class="truncate">Hapus Tabel {{ activeRawTable.tableName }}</span>
                 </button>
               </div>
             </div>
@@ -979,25 +1487,25 @@ async function confirmAndExecuteImport() {
         <!-- =============================================================== -->
         <div
           v-if="schemaDesignGenerated"
-          class="space-y-5 pt-4 border-t border-slate-200 dark:border-slate-800"
+          class="space-y-5 pt-4 border-t border-slate-200 dark:border-slate-800 min-w-0"
         >
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div class="space-y-1">
+            <div class="space-y-1 min-w-0">
               <span class="text-xs font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
                 Langkah 3 · Rancangan Struktur Database Baru (Cloud Firestore)
               </span>
-              <h3 class="text-base font-semibold text-slate-900 dark:text-slate-100">
-                Spesifikasi Koleksi, Field, Tipe Data, dan Penjelasan Perubahan Skema
+              <h3 class="text-base font-semibold text-slate-900 dark:text-slate-100 break-words">
+                Spesifikasi Koleksi, Field, Tipe Data, dan Proteksi Histori Soft Delete
               </h3>
-              <p class="text-xs text-slate-500 dark:text-slate-400">
-                Dirancang khusus berdasarkan tabel yang Anda pilih pada Langkah 2: mendukung multi-pemilik dalam 1 sumber dana (<em>Wallet → Pemilik Dana</em>), 3 jenis transaksi (<em>income, expense, transfer</em>), serta manajemen kategori.
+              <p class="text-xs text-slate-500 dark:text-slate-400 break-words">
+                Dirancang khusus berdasarkan tabel yang Anda pilih pada Langkah 2: mendeteksi kolom <code>deleted</code> / <code>deleted_at</code> dari database lama SisaUang untuk mempertahankan histori keuangan, mendukung multi-pemilik dalam 1 sumber dana (<em>Wallet → Pemilik Dana</em>), 3 jenis transaksi (<em>income, expense, transfer</em>), serta manajemen kategori.
               </p>
             </div>
 
             <!-- STEP 7 Button: Klik "Konversi struktur dan isi database lama ke format database baru" -->
             <button
               type="button"
-              class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors shadow-xs text-left sm:text-center"
+              class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors shadow-xs text-center shrink-0"
               @click="handleConvertLegacyToNewFormat"
             >
               <GitCompareArrows class="w-4 h-4 shrink-0" />
@@ -1005,8 +1513,29 @@ async function confirmAndExecuteImport() {
             </button>
           </div>
 
+          <!-- Soft Delete Detection Banner for Financial History Preservation -->
+          <div class="rounded-2xl border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/60 dark:bg-amber-950/25 p-3.5 sm:p-4 space-y-2 min-w-0">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+              <div class="flex items-start sm:items-center gap-2 text-xs font-bold text-amber-800 dark:text-amber-300">
+                <ShieldCheck class="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5 sm:mt-0" />
+                <span>Proteksi Histori Keuangan (Soft Delete Architecture) Aktif</span>
+              </div>
+              <div class="text-[11px] sm:text-xs font-mono text-amber-700 dark:text-amber-300 break-words">
+                Terdeteksi pada <strong>{{ migrationAnalysis.softDeleteStats.tablesWithSoftDelete }}</strong> tabel lama ·
+                <strong>{{ migrationAnalysis.softDeleteStats.totalSoftDeletedRowsDetected }}</strong> baris berstatus soft-deleted dipertahankan
+              </div>
+            </div>
+            <p class="text-xs text-slate-700 dark:text-slate-300 leading-relaxed break-words">
+              Generator mendeteksi kolom soft delete pada database lama
+              <span v-if="migrationAnalysis.softDeleteStats.detectedColumnNames.length > 0">
+                (<code>{{ migrationAnalysis.softDeleteStats.detectedColumnNames.join(' · ') }}</code>)
+              </span>
+              dan secara otomatis menyertakan field standar <code>deleted</code> (<em>boolean</em>) serta <code>deletedAt</code> (<em>timestamp | null</em>) di setiap koleksi utama (<code>users</code>, <code>wallets</code>, <code>wallet_owners</code>, <code>categories</code>, <code>transactions</code>, <code>budgets</code>). Seluruh penghapusan data di aplikasi menggunakan mekanisme <strong>Soft Delete</strong> agar histori mutasi dana tetap utuh jika terjadi kesalahan hapus atau error sistem.
+            </p>
+          </div>
+
           <!-- New Schema Collection Selector Tabs -->
-          <div class="flex items-center gap-1.5 overflow-x-auto pb-1">
+          <div class="flex items-center gap-1.5 overflow-x-auto pb-1 w-full">
             <button
               v-for="(schema, sIdx) in migrationAnalysis.newSchemaDesigns"
               :key="schema.collectionName"
@@ -1026,32 +1555,43 @@ async function confirmAndExecuteImport() {
           <!-- Selected Collection Schema Details + Responsive Field Table + Change Explanation -->
           <div
             v-if="activeSchemaCollection"
-            class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/40 p-4 sm:p-5 space-y-4"
+            class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/40 p-3.5 sm:p-5 space-y-4 min-w-0"
           >
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/70 dark:border-slate-800 pb-3">
-              <div>
-                <div class="flex items-center gap-2">
+            <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5 border-b border-slate-200/70 dark:border-slate-800 pb-3">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1.5">
                   <span class="text-sm font-mono font-bold text-emerald-600 dark:text-emerald-400">
                     /{{ activeSchemaCollection.collectionName }}
                   </span>
-                  <span class="text-xs text-slate-400">·</span>
-                  <span class="text-xs text-slate-600 dark:text-slate-300">
+                  <span class="text-xs text-slate-400 hidden sm:inline">·</span>
+                  <span class="text-xs text-slate-600 dark:text-slate-300 break-words">
                     Sumber Tabel Lama: <code>{{ activeSchemaCollection.legacySourceTables.join(', ') }}</code>
                   </span>
+                  <span
+                    v-if="activeSchemaCollection.softDeleteSupported"
+                    class="text-[11px] font-mono font-semibold text-amber-700 dark:text-amber-400 bg-amber-100/70 dark:bg-amber-950/60 px-2 py-0.5 rounded-md break-words"
+                  >
+                    Soft Delete: {{ activeSchemaCollection.detectedLegacySoftDeleteFields.join(', ') }} → deleted & deletedAt
+                  </span>
                 </div>
-                <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 break-words">
                   {{ activeSchemaCollection.purpose }}
                 </p>
               </div>
-              <div class="text-xs font-mono tabular-nums text-slate-700 dark:text-slate-300 shrink-0">
-                Status Data:
-                <strong>{{ activeSchemaCollection.dataIncluded ? `${activeSchemaCollection.estimatedDocumentCount} dokumen (${activeSchemaCollection.estimatedWritesCount} writes)` : 'Hanya Struktur (0 writes)' }}</strong>
+              <div class="text-xs font-mono tabular-nums text-slate-700 dark:text-slate-300 shrink-0 text-left sm:text-right">
+                <div>
+                  Status Data:
+                  <strong>{{ activeSchemaCollection.dataIncluded ? `${activeSchemaCollection.estimatedDocumentCount} dokumen (${activeSchemaCollection.estimatedWritesCount} writes)` : 'Hanya Struktur (0 writes)' }}</strong>
+                </div>
+                <div v-if="activeSchemaCollection.softDeletedDocsCount > 0" class="text-[11px] text-amber-600 dark:text-amber-400">
+                  Termasuk {{ activeSchemaCollection.softDeletedDocsCount }} dokumen berstatus Soft-Deleted (Arsip)
+                </div>
               </div>
             </div>
 
             <!-- Responsive Table of Fields & Data Types -->
-            <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900">
-              <div class="overflow-x-auto">
+            <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900 w-full min-w-0">
+              <div class="overflow-x-auto w-full">
                 <table class="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr class="border-b border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-950 text-slate-600 dark:text-slate-400 font-mono">
@@ -1066,13 +1606,23 @@ async function confirmAndExecuteImport() {
                     <tr
                       v-for="f in activeSchemaCollection.fields"
                       :key="f.fieldName"
-                      class="hover:bg-slate-50/70 dark:hover:bg-slate-800/30"
+                      :class="
+                        f.isSoftDeleteField
+                          ? 'bg-amber-50/50 dark:bg-amber-950/20 hover:bg-amber-50/80 dark:hover:bg-amber-950/35'
+                          : 'hover:bg-slate-50/70 dark:hover:bg-slate-800/30'
+                      "
                     >
                       <td class="py-2 px-3 font-mono text-slate-500 whitespace-nowrap">
                         {{ activeSchemaCollection.collectionName }}
                       </td>
                       <td class="py-2 px-3 font-mono font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                        {{ f.fieldName }}
+                        <span>{{ f.fieldName }}</span>
+                        <span
+                          v-if="f.isSoftDeleteField"
+                          class="ml-1.5 text-[10px] font-mono font-semibold text-amber-700 dark:text-amber-400 underline decoration-amber-400/60"
+                        >
+                          [Soft Delete]
+                        </span>
                       </td>
                       <td class="py-2 px-3 font-mono text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
                         {{ f.dataType }}
@@ -1091,11 +1641,11 @@ async function confirmAndExecuteImport() {
 
             <!-- Detailed Explanation of What Changed for This New Table -->
             <div class="rounded-xl border border-emerald-200/80 dark:border-emerald-900/50 bg-emerald-50/50 dark:bg-emerald-950/30 p-3.5 space-y-2">
-              <div class="flex items-center gap-1.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300">
-                <Info class="w-4 h-4 shrink-0" />
+              <div class="flex items-start sm:items-center gap-1.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300">
+                <Info class="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />
                 <span>Penjelasan Perubahan pada Koleksi <code>{{ activeSchemaCollection.collectionName }}</code>:</span>
               </div>
-              <ul class="list-disc list-inside space-y-1 text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+              <ul class="list-disc list-inside space-y-1 text-xs text-slate-700 dark:text-slate-300 leading-relaxed break-words">
                 <li
                   v-for="(exp, eIdx) in activeSchemaCollection.changeExplanations"
                   :key="eIdx"
@@ -1112,24 +1662,24 @@ async function confirmAndExecuteImport() {
         <!-- =============================================================== -->
         <div
           v-if="dataConversionCompleted"
-          class="space-y-4 pt-4 border-t border-slate-200 dark:border-slate-800"
+          class="space-y-4 pt-4 border-t border-slate-200 dark:border-slate-800 min-w-0"
         >
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
+            <div class="min-w-0">
               <span class="text-xs font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
                 Langkah 4 · Hasil Konversi Struktur & Isi Database Baru
               </span>
-              <h3 class="text-base font-semibold text-slate-900 dark:text-slate-100">
+              <h3 class="text-base font-semibold text-slate-900 dark:text-slate-100 break-words">
                 Data Siap Diimpor ke Cloud Firestore ({{ migrationAnalysis.writeEstimation.optimizedFirestoreWrites.toLocaleString('id-ID') }} Dokumen)
               </h3>
             </div>
 
-            <div class="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+            <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full sm:w-auto shrink-0">
               <!-- Toggle Table vs JSON -->
-              <div class="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
+              <div class="grid grid-cols-2 sm:flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl w-full sm:w-auto">
                 <button
                   type="button"
-                  class="min-h-[36px] px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  class="min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
                   :class="
                     convertedPreviewMode === 'table'
                       ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
@@ -1137,12 +1687,12 @@ async function confirmAndExecuteImport() {
                   "
                   @click="convertedPreviewMode = 'table'"
                 >
-                  <TableIcon class="w-3.5 h-3.5" />
+                  <TableIcon class="w-3.5 h-3.5 shrink-0" />
                   <span>Tabel Responsif</span>
                 </button>
                 <button
                   type="button"
-                  class="min-h-[36px] px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  class="min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
                   :class="
                     convertedPreviewMode === 'json'
                       ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
@@ -1150,7 +1700,7 @@ async function confirmAndExecuteImport() {
                   "
                   @click="convertedPreviewMode = 'json'"
                 >
-                  <Braces class="w-3.5 h-3.5" />
+                  <Braces class="w-3.5 h-3.5 shrink-0" />
                   <span>Format JSON Baru</span>
                 </button>
               </div>
@@ -1169,8 +1719,8 @@ async function confirmAndExecuteImport() {
           </div>
 
           <!-- Converted Data View A: Responsive Table per New Collection -->
-          <div v-if="convertedPreviewMode === 'table'" class="space-y-3">
-            <div class="flex items-center gap-1.5 overflow-x-auto pb-1">
+          <div v-if="convertedPreviewMode === 'table'" class="space-y-3 min-w-0">
+            <div class="flex items-center gap-1.5 overflow-x-auto pb-1 w-full">
               <button
                 v-for="tab in convertedCollectionTabs"
                 :key="tab.key"
@@ -1187,11 +1737,11 @@ async function confirmAndExecuteImport() {
               </button>
             </div>
 
-            <div class="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900">
+            <div class="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900 w-full min-w-0">
               <div v-if="activeConvertedRows.length === 0" class="p-8 text-center text-xs text-slate-500">
                 Tidak ada dokumen yang disertakan pada koleksi <code>{{ activeConvertedTab }}</code> (tabel dihapus atau opsi "Sertakan Data" dinonaktifkan).
               </div>
-              <div v-else class="overflow-x-auto max-h-96">
+              <div v-else class="overflow-x-auto max-h-96 w-full">
                 <table class="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr class="border-b border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-950 text-slate-600 dark:text-slate-400 font-mono">
@@ -1235,27 +1785,94 @@ async function confirmAndExecuteImport() {
           </div>
 
           <!-- Converted Data View B: Raw JSON Output -->
-          <div v-else class="space-y-2">
-            <div class="flex items-center justify-between">
-              <span class="text-xs text-slate-500 font-mono">
+          <div v-else class="space-y-2 min-w-0">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span class="text-xs text-slate-500 font-mono break-words">
                 Struktur JSON Baru SisaUang (Siap Tulis ke Cloud Firestore)
               </span>
               <button
                 type="button"
-                class="min-h-[34px] px-3 py-1 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 flex items-center gap-1.5"
+                class="w-full sm:w-auto min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1.5"
                 @click="copyConvertedJson"
               >
-                <Copy class="w-3.5 h-3.5" />
+                <Copy class="w-3.5 h-3.5 shrink-0" />
                 <span>{{ jsonCopied ? 'Tersalin!' : 'Salin JSON Baru' }}</span>
               </button>
             </div>
             <pre
-              class="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-950 text-emerald-400 font-mono text-xs overflow-x-auto max-h-96"
+              class="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-950 text-emerald-400 font-mono text-xs overflow-x-auto max-h-96 w-full"
             >{{ formattedConvertedJson }}</pre>
           </div>
         </div>
       </div>
     </section>
+
+    <!-- ===================================================================== -->
+    <!-- MODAL: Confirm Delete Firestore Database Tables (Single or Bulk)      -->
+    <!-- ===================================================================== -->
+    <div
+      v-if="showDeleteFirestoreConfirmModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4"
+      @click.self="if (!isDeletingFirestoreCols) showDeleteFirestoreConfirmModal = false;"
+    >
+      <div
+        class="w-full max-w-lg max-h-[92dvh] overflow-y-auto rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-6 shadow-xl space-y-5"
+      >
+        <div class="space-y-2">
+          <div class="w-11 h-11 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center">
+            <Trash2 class="w-5 h-5" />
+          </div>
+          <h3 class="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100">
+            Konfirmasi Hapus {{ pendingDeleteFirestoreCols.length }} Tabel Database
+          </h3>
+          <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+            Apakah Anda yakin ingin mengosongkan/menghapus seluruh isi dari
+            <strong>{{ pendingDeleteFirestoreCols.length }} tabel/koleksi</strong> berikut di Cloud Firestore (<code>sisa-uang</code>)?
+          </p>
+        </div>
+
+        <div class="rounded-2xl border border-rose-200/80 dark:border-rose-900/50 bg-rose-50/40 dark:bg-rose-950/25 p-4 space-y-2.5 text-xs">
+          <div class="font-semibold text-rose-900 dark:text-rose-200">
+            Daftar Tabel yang Akan Dihapus ({{ pendingDeleteFirestoreTotalDocs.toLocaleString('id-ID') }} Dokumen):
+          </div>
+          <div class="flex flex-wrap gap-1.5">
+            <span
+              v-for="colName in pendingDeleteFirestoreCols"
+              :key="colName"
+              class="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800 font-mono text-xs font-semibold text-rose-700 dark:text-rose-300"
+            >
+              /{{ colName }}
+            </span>
+          </div>
+          <p v-if="pendingDeleteFirestoreCols.includes('users') && keepSuperAdminOnDelete" class="text-[11px] text-emerald-700 dark:text-emerald-300 pt-1">
+            Catatan: Akun <strong>Super Admin</strong> utama tetap dipertahankan agar sesi login Anda tetap aktif.
+          </p>
+          <p v-if="isDeletingFirestoreCols && deleteFirestoreProgressText" class="font-mono text-rose-700 dark:text-rose-300 pt-1">
+            {{ deleteFirestoreProgressText }}
+          </p>
+        </div>
+
+        <div class="flex flex-col-reverse sm:grid sm:grid-cols-2 gap-2.5 pt-1">
+          <button
+            type="button"
+            :disabled="isDeletingFirestoreCols"
+            class="w-full min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
+            @click="showDeleteFirestoreConfirmModal = false"
+          >
+            Batal
+          </button>
+          <button
+            type="button"
+            :disabled="isDeletingFirestoreCols"
+            class="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+            @click="confirmAndExecuteFirestoreCollectionsDelete"
+          >
+            <Trash2 class="w-4 h-4 shrink-0" />
+            <span>{{ isDeletingFirestoreCols ? 'Menghapus Tabel...' : `Ya, Hapus ${pendingDeleteFirestoreCols.length} Tabel` }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- ===================================================================== -->
     <!-- STEP 10: Confirmation Modal with Detailed Execution Process Breakdown -->
@@ -1266,13 +1883,13 @@ async function confirmAndExecuteImport() {
       @click.self="showConfirmModal = false"
     >
       <div
-        class="w-full max-w-lg max-h-[92dvh] overflow-y-auto rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xl space-y-5"
+        class="w-full max-w-lg max-h-[92dvh] overflow-y-auto rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-6 shadow-xl space-y-5"
       >
         <div class="space-y-2">
           <div class="w-11 h-11 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
             <Database class="w-5 h-5" />
           </div>
-          <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
+          <h3 class="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100">
             Konfirmasi Import Database Baru ke Cloud Firestore
           </h3>
           <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
@@ -1285,7 +1902,7 @@ async function confirmAndExecuteImport() {
           <div class="font-semibold text-emerald-900 dark:text-emerald-200">
             Penjelasan Proses yang Akan Berjalan Ketika Anda Mengklik "Ya":
           </div>
-          <ol class="list-decimal list-inside space-y-1.5 text-slate-700 dark:text-slate-300 leading-relaxed">
+          <ol class="list-decimal list-inside space-y-1.5 text-slate-700 dark:text-slate-300 leading-relaxed break-words">
             <li>
               <strong>Pengelompokan Atomic WriteBatch:</strong> Sistem membagi total
               <strong class="font-mono">{{ migrationAnalysis.writeEstimation.optimizedFirestoreWrites.toLocaleString('id-ID') }} dokumen</strong>
@@ -1315,11 +1932,11 @@ async function confirmAndExecuteImport() {
         </div>
 
         <!-- Yes / No Confirmation Buttons -->
-        <div class="grid grid-cols-2 gap-3 pt-1">
+        <div class="flex flex-col-reverse sm:grid sm:grid-cols-2 gap-2.5 pt-1">
           <button
             type="button"
             :disabled="isImporting"
-            class="min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            class="w-full min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             @click="showConfirmModal = false"
           >
             Tidak, Batalkan
@@ -1327,7 +1944,7 @@ async function confirmAndExecuteImport() {
           <button
             type="button"
             :disabled="isImporting"
-            class="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+            class="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
             @click="confirmAndExecuteImport"
           >
             <CheckCircle2 class="w-4 h-4 shrink-0" />
@@ -1338,7 +1955,7 @@ async function confirmAndExecuteImport() {
     </div>
 
     <!-- Appearance & Theme -->
-    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4">
+    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
       <div>
         <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
           {{ t('theme.label') }}
@@ -1348,10 +1965,10 @@ async function confirmAndExecuteImport() {
         </p>
       </div>
 
-      <div class="grid grid-cols-3 gap-2.5">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
         <button
           type="button"
-          class="min-h-[48px] px-4 py-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+          class="min-h-[44px] px-4 py-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
           :class="
             themeStore.themeMode === 'light'
               ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
@@ -1359,13 +1976,13 @@ async function confirmAndExecuteImport() {
           "
           @click="themeStore.setTheme('light')"
         >
-          <Sun class="w-4 h-4" />
+          <Sun class="w-4 h-4 shrink-0" />
           <span>{{ t('theme.light') }}</span>
         </button>
 
         <button
           type="button"
-          class="min-h-[48px] px-4 py-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+          class="min-h-[44px] px-4 py-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
           :class="
             themeStore.themeMode === 'dark'
               ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
@@ -1373,13 +1990,13 @@ async function confirmAndExecuteImport() {
           "
           @click="themeStore.setTheme('dark')"
         >
-          <Moon class="w-4 h-4" />
+          <Moon class="w-4 h-4 shrink-0" />
           <span>{{ t('theme.dark') }}</span>
         </button>
 
         <button
           type="button"
-          class="min-h-[48px] px-4 py-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+          class="min-h-[44px] px-4 py-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
           :class="
             themeStore.themeMode === 'system'
               ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
@@ -1387,16 +2004,16 @@ async function confirmAndExecuteImport() {
           "
           @click="themeStore.setTheme('system')"
         >
-          <Monitor class="w-4 h-4" />
+          <Monitor class="w-4 h-4 shrink-0" />
           <span>{{ t('theme.system') }}</span>
         </button>
       </div>
     </section>
 
     <!-- Language & Currency (Intlify vue-i18n) -->
-    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4">
+    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
       <div class="flex items-center gap-2">
-        <Globe class="w-4 h-4 text-emerald-600" />
+        <Globe class="w-4 h-4 text-emerald-600 shrink-0" />
         <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
           Bahasa & Format Lokal
         </h2>
@@ -1410,7 +2027,7 @@ async function confirmAndExecuteImport() {
           <div class="grid grid-cols-2 gap-2">
             <button
               type="button"
-              class="min-h-[44px] rounded-xl border text-xs font-semibold transition-colors"
+              class="min-h-[44px] px-2 rounded-xl border text-xs font-semibold transition-colors"
               :class="
                 locale === 'id'
                   ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
@@ -1422,7 +2039,7 @@ async function confirmAndExecuteImport() {
             </button>
             <button
               type="button"
-              class="min-h-[44px] rounded-xl border text-xs font-semibold transition-colors"
+              class="min-h-[44px] px-2 rounded-xl border text-xs font-semibold transition-colors"
               :class="
                 locale === 'en'
                   ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
@@ -1442,7 +2059,7 @@ async function confirmAndExecuteImport() {
           <div class="grid grid-cols-2 gap-2">
             <button
               type="button"
-              class="min-h-[44px] rounded-xl border text-xs font-mono font-semibold transition-colors"
+              class="min-h-[44px] px-2 rounded-xl border text-xs font-mono font-semibold transition-colors"
               :class="
                 themeStore.currency === 'IDR'
                   ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
@@ -1454,7 +2071,7 @@ async function confirmAndExecuteImport() {
             </button>
             <button
               type="button"
-              class="min-h-[44px] rounded-xl border text-xs font-mono font-semibold transition-colors"
+              class="min-h-[44px] px-2 rounded-xl border text-xs font-mono font-semibold transition-colors"
               :class="
                 themeStore.currency === 'USD'
                   ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
@@ -1470,15 +2087,15 @@ async function confirmAndExecuteImport() {
     </section>
 
     <!-- Firestore & Account Profile Summary + DisplayName & Username Editor -->
-    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-5">
+    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-5 w-full min-w-0">
       <div class="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-        <div class="flex items-center gap-2">
-          <UserIcon class="w-4 h-4 text-emerald-600" />
-          <div>
+        <div class="flex items-start sm:items-center gap-2 min-w-0">
+          <UserIcon class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5 sm:mt-0" />
+          <div class="min-w-0">
             <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
               Profil Akun (Display Name & Username Login)
             </h2>
-            <p class="text-xs text-slate-500 dark:text-slate-400">
+            <p class="text-xs text-slate-500 dark:text-slate-400 break-words">
               Atur <strong>Display Name</strong> (mendukung spasi & karakter bebas) dan <strong>Username</strong> yang dapat digunakan untuk login layaknya alamat email.
             </p>
           </div>
@@ -1527,25 +2144,25 @@ async function confirmAndExecuteImport() {
       </form>
 
       <div class="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2 text-xs text-slate-600 dark:text-slate-400">
-        <div class="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-slate-800">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 py-1.5 border-b border-slate-100 dark:border-slate-800">
           <span>Display Name Saat Ini</span>
-          <span class="font-medium text-slate-900 dark:text-slate-100">{{ authStore.user?.displayName }}</span>
+          <span class="font-medium text-slate-900 dark:text-slate-100 break-words">{{ authStore.user?.displayName }}</span>
         </div>
-        <div class="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-slate-800">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 py-1.5 border-b border-slate-100 dark:border-slate-800">
           <span>Username Login</span>
-          <span class="font-mono text-emerald-600 dark:text-emerald-400 font-semibold">@{{ authStore.user?.username || authStore.user?.email.split('@')[0] }}</span>
+          <span class="font-mono text-emerald-600 dark:text-emerald-400 font-semibold break-all">@{{ authStore.user?.username || authStore.user?.email.split('@')[0] }}</span>
         </div>
-        <div class="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-slate-800">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 py-1.5 border-b border-slate-100 dark:border-slate-800">
           <span>Email Terdaftar</span>
-          <span class="font-mono text-slate-900 dark:text-slate-100">{{ authStore.user?.email }}</span>
+          <span class="font-mono text-slate-900 dark:text-slate-100 break-all">{{ authStore.user?.email }}</span>
         </div>
-        <div class="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-slate-800">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 py-1.5 border-b border-slate-100 dark:border-slate-800">
           <span>Hak Akses (Role)</span>
           <span class="font-semibold text-emerald-600 dark:text-emerald-400">
             {{ authStore.isSuperAdmin ? 'Administrator (Super Admin)' : 'Pengguna Standar' }}
           </span>
         </div>
-        <div class="flex items-center justify-between py-1.5">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 py-1.5">
           <span>Skema Database</span>
           <span class="font-mono text-slate-900 dark:text-slate-100">sisa-uang (Cloud Firestore)</span>
         </div>
@@ -1556,7 +2173,7 @@ async function confirmAndExecuteImport() {
           to="/control-panel"
           class="min-h-[44px] w-full px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
         >
-          <ShieldCheck class="w-4 h-4" />
+          <ShieldCheck class="w-4 h-4 shrink-0" />
           <span>Kembali ke Control Panel (/control-panel)</span>
         </RouterLink>
       </div>
