@@ -26,7 +26,7 @@ export function sanitizeString(raw: string, maxLen: number, fallback = ''): stri
   return val.slice(0, maxLen);
 }
 
-// Exact Firebase configuration provided by user for project "sisa-uang" and named database "sisa-uang"
+// Exact Firebase configuration provided by user for project "sisa-uang-dfb7b" and named database "sisa-uang"
 const app = initializeApp(firebaseConfig);
 
 // Connect specifically to named database "sisa-uang" (firebaseConfig.firestoreDatabaseId === "sisa-uang")

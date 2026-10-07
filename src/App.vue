@@ -561,18 +561,7 @@ async function handleLogout() {
           </RouterLink>
 
           <div class="flex items-center shrink-0">
-            <!-- Mobile Navbar Quick Add Transaction button for regular users, or theme button for admin -->
             <button
-              v-if="!authStore.isSuperAdmin"
-              type="button"
-              class="min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1 whitespace-nowrap shadow-2xs"
-              @click="financeStore.openAddTransactionModal()"
-            >
-              <Plus class="w-3.5 h-3.5 shrink-0" />
-              <span>{{ t('nav.quickAdd') }}</span>
-            </button>
-            <button
-              v-else
               type="button"
               class="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300"
               :title="t('theme.label')"

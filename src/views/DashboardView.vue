@@ -95,14 +95,7 @@ function getDateBadge(dateStr: string) {
           <span>{{ t('nav.controlPanel') }}</span>
         </RouterLink>
 
-        <button
-          type="button"
-          class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shadow-xs"
-          @click="financeStore.openAddTransactionModal()"
-        >
-          <Plus class="w-4 h-4 shrink-0" />
-          <span>{{ t('dashboard.addTransaction') }}</span>
-        </button>
+        
       </div>
     </div>
 

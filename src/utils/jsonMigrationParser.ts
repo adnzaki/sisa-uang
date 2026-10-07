@@ -953,39 +953,100 @@ export function buildJsonMigrationAnalysis(
     { id: string; holderName: string; walletId: string; walletName: string; ownerId: string }
   >();
 
-  // Index any master `owners` / `pemilik` lookup table (rows that have id + name/owner_name without wallet_id)
+  // Helper to check if a row represents a pivot allocation linked to a specific wallet (e.g. `tb_kepemilikan_sumber_dana`)
+  const hasWalletForeignKey = (row: Record<string, any>): boolean =>
+    pickCol(row, [
+      'wallet_id',
+      'id_wallet',
+      'sumber_dana_id',
+      'id_sumber_dana',
+      'dompet_id',
+      'id_dompet',
+      'rekening_id',
+      'source_id',
+      'sumber_id',
+      'id_sumber',
+    ]) !== undefined;
+
+  // Index any master `tb_kepemilikan_dana` / `owners` / `pemilik` lookup table
+  // (tables or rows that define master owner names like id + nama_kepemilikan_dana / nama_pemilik without a wallet foreign key)
   const ownerMasterNameById = new Map<string, string>();
+  const ownerMasterRowById = new Map<string, Record<string, any>>();
+
   for (const t of activeTables) {
-    const tName = t.tableName.toLowerCase();
-    if (tName === 'owners' || tName === 'owner' || tName === 'pemilik' || tName === 'fund_owners') {
-      for (const r of t.rows) {
-        const oid = String(pickCol(r, ['id', 'owner_id', 'id_pemilik']) ?? '').trim();
-        const oName = String(
-          pickCol(r, ['name', 'owner_name', 'holder_name', 'nama', 'nama_pemilik', 'pemilik']) ?? ''
+    const tName = t.tableName.toLowerCase().trim();
+    const isLikelyOwnerTable =
+      t.detectedCategory === 'wallet_owners' ||
+      tName.includes('kepemilikan_dana') ||
+      tName.includes('pemilik_dana') ||
+      tName === 'owners' ||
+      tName === 'owner' ||
+      tName === 'pemilik' ||
+      tName === 'fund_owners' ||
+      tName === 'tb_pemilik' ||
+      tName === 'tb_kepemilikan';
+
+    if (!isLikelyOwnerTable) continue;
+
+    for (const r of t.rows) {
+      // Only index as master owner lookup if this row does NOT have a wallet foreign key
+      // OR if the table itself is explicitly `tb_kepemilikan_dana` / `pemilik_dana` (not `sumber_dana`)
+      const isMasterTable =
+        (tName.includes('kepemilikan_dana') || tName.includes('pemilik_dana') || tName === 'owners' || tName === 'pemilik') &&
+        !tName.includes('sumber');
+
+      if (!hasWalletForeignKey(r) || isMasterTable) {
+        const oid = String(
+          pickCol(r, [
+            'id',
+            'id_kepemilikan_dana',
+            'kepemilikan_dana_id',
+            'id_kepemilikan',
+            'kepemilikan_id',
+            'owner_id',
+            'id_pemilik',
+            'pemilik_id',
+            'id_pemilik_dana',
+            'pemilik_dana_id',
+          ]) ?? ''
         ).trim();
+
+        const oName = String(
+          pickCol(
+            r,
+            [
+              'nama_kepemilikan_dana',
+              'nama_kepemilikan',
+              'nama_pemilik_dana',
+              'nama_pemilik',
+              'kepemilikan_dana',
+              'pemilik_dana',
+              'holder_name',
+              'owner_name',
+              'nama',
+              'name',
+              'pemilik',
+              'kepemilikan',
+              'owner',
+              'holder',
+              'title',
+              'keterangan',
+            ],
+            ['nama', 'name', 'pemilik', 'kepemilikan', 'holder', 'owner']
+          ) ?? ''
+        ).trim();
+
         if (oid && oName && !/^\d+$/.test(oName)) {
           ownerMasterNameById.set(oid, oName);
+          ownerMasterRowById.set(oid, r);
         }
       }
     }
   }
 
-  // Separate pivot wallet_owners rows from master owners rows if both are in walletOwnersTables
+  // Separate pivot wallet_owners rows (`tb_kepemilikan_sumber_dana`) from master owner lookup rows (`tb_kepemilikan_dana`)
   const rawWalletOwnerRows = getIncludedRows(walletOwnersTables);
-  const walletOwnerRowsToProcess = rawWalletOwnerRows.filter((r) => {
-    const hasWalletCol =
-      pickCol(r, [
-        'wallet_id',
-        'id_wallet',
-        'sumber_dana_id',
-        'id_sumber_dana',
-        'dompet_id',
-        'id_dompet',
-        'rekening_id',
-        'source_id',
-      ]) !== undefined;
-    return hasWalletCol || rawWalletOwnerRows.length === 0;
-  });
+  const walletOwnerRowsToProcess = rawWalletOwnerRows.filter((r) => hasWalletForeignKey(r));
   const effectiveOwnerRows =
     walletOwnerRowsToProcess.length > 0 ? walletOwnerRowsToProcess : rawWalletOwnerRows;
 
@@ -994,6 +1055,8 @@ export function buildJsonMigrationAnalysis(
     const rawId = String(
       pickCol(fo, [
         'id',
+        'id_kepemilikan_sumber_dana',
+        'kepemilikan_sumber_dana_id',
         'wallet_owner_id',
         'id_kepemilikan',
         'fund_owner_id',
@@ -1002,9 +1065,28 @@ export function buildJsonMigrationAnalysis(
         'pemilik_id',
       ]) ?? idx + 1
     );
+
+    // Foreign key pointing to `tb_kepemilikan_dana.id`
     const fkOwnerId = String(
-      pickCol(fo, ['owner_id', 'id_pemilik', 'pemilik_id', 'holder_id']) ?? ''
+      pickCol(
+        fo,
+        [
+          'kepemilikan_dana_id',
+          'id_kepemilikan_dana',
+          'kepemilikan_id',
+          'id_kepemilikan',
+          'pemilik_dana_id',
+          'id_pemilik_dana',
+          'pemilik_id',
+          'id_pemilik',
+          'owner_id',
+          'holder_id',
+          'fund_owner_id',
+        ],
+        ['kepemilikan_dana', 'pemilik_dana', 'id_kepemilikan', 'kepemilikan_id', 'id_pemilik', 'pemilik_id', 'owner_id']
+      ) ?? ''
     ).trim();
+
     const rawWalletId = String(
       pickCol(
         fo,
@@ -1017,6 +1099,8 @@ export function buildJsonMigrationAnalysis(
           'id_dompet',
           'rekening_id',
           'source_id',
+          'sumber_id',
+          'id_sumber',
         ],
         ['wallet', 'sumber', 'dompet', 'rekening']
       ) ?? '1'
@@ -1034,29 +1118,55 @@ export function buildJsonMigrationAnalysis(
       balance: 0,
     };
 
-    const rawUser = String(pickCol(fo, ['user_id', 'id_user', 'created_by']) ?? '');
+    const masterOwnerRow = fkOwnerId ? ownerMasterRowById.get(fkOwnerId) : undefined;
+    const rawUser = String(
+      pickCol(fo, ['user_id', 'id_user', 'created_by']) ??
+        (masterOwnerRow ? pickCol(masterOwnerRow, ['user_id', 'id_user', 'created_by']) : '') ??
+        ''
+    );
     const ownerUid =
       (rawUser && legacyUserIdToUid.get(rawUser)) || parentWallet.ownerId || defaultOwnerUid;
 
     const fundOwnerId = sanitizeId(`su_holder_${rawId}`);
-    const explicitHolderName = pickCol(fo, [
-      'holder_name',
-      'owner_name',
-      'nama_pemilik',
-      'nama_kepemilikan',
-      'pemilik_dana',
-      'pemilik',
-      'owner',
-      'holder',
-      'name',
-      'nama',
-    ]);
-    const joinedMasterOwnerName = fkOwnerId ? ownerMasterNameById.get(fkOwnerId) : undefined;
+    const rawExplicitHolderName = pickCol(
+      fo,
+      [
+        'holder_name',
+        'owner_name',
+        'nama_kepemilikan_dana',
+        'nama_pemilik_dana',
+        'nama_pemilik',
+        'nama_kepemilikan',
+        'kepemilikan_dana',
+        'pemilik_dana',
+        'pemilik',
+        'owner',
+        'holder',
+        'name',
+        'nama',
+      ]
+    );
+    // Avoid using a numeric foreign key accidentally stored in a generic column as the holder name
+    const explicitHolderName =
+      rawExplicitHolderName !== undefined &&
+      rawExplicitHolderName !== null &&
+      !/^\d+$/.test(String(rawExplicitHolderName).trim())
+        ? String(rawExplicitHolderName).trim()
+        : undefined;
+
+    const joinedMasterOwnerName =
+      (fkOwnerId ? ownerMasterNameById.get(fkOwnerId) : undefined) ||
+      (rawExplicitHolderName && /^\d+$/.test(String(rawExplicitHolderName).trim())
+        ? ownerMasterNameById.get(String(rawExplicitHolderName).trim())
+        : undefined) ||
+      ownerMasterNameById.get(rawId);
 
     const holderName = sanitizeString(
       joinedMasterOwnerName ??
         explicitHolderName ??
-        (fkOwnerId ? fkOwnerId : `Pemilik #${rawId}`),
+        (fkOwnerId && ownerMasterNameById.has(fkOwnerId)
+          ? ownerMasterNameById.get(fkOwnerId)
+          : `Pemilik #${fkOwnerId || rawId}`),
       MAX_HOLD_NAME_LENGTH,
       'Pribadi'
     );
@@ -1070,16 +1180,29 @@ export function buildJsonMigrationAnalysis(
       0
     );
 
-    legacyFundOwnerIdMap.set(rawId, {
+    const holderEntry = {
       id: fundOwnerId,
       holderName,
       walletId: parentWallet.id,
       walletName: parentWallet.name,
       ownerId: ownerUid,
-    });
+    };
+
+    // Index by pivot ID (`tb_kepemilikan_sumber_dana.id`), composite `(wallet_id, kepemilikan_dana_id)`, and master ID (`tb_kepemilikan_dana.id`)
+    legacyFundOwnerIdMap.set(rawId, holderEntry);
+    if (fkOwnerId) {
+      legacyFundOwnerIdMap.set(`${rawWalletId}_${fkOwnerId}`, holderEntry);
+      if (!legacyFundOwnerIdMap.has(`master_${fkOwnerId}`)) {
+        legacyFundOwnerIdMap.set(`master_${fkOwnerId}`, holderEntry);
+      }
+      if (!legacyFundOwnerIdMap.has(fkOwnerId)) {
+        legacyFundOwnerIdMap.set(fkOwnerId, holderEntry);
+      }
+    }
 
     const updatedAtIso = String(pickCol(fo, ['updated_at', 'updatedAt']) ?? nowIso);
     const softDel = extractSoftDeleteFromRow(fo, updatedAtIso);
+    const masterSoftDel = masterOwnerRow ? extractSoftDeleteFromRow(masterOwnerRow, updatedAtIso) : { deleted: false, deletedAt: null };
 
     normalizedWalletOwners.push({
       id: fundOwnerId,
@@ -1088,8 +1211,8 @@ export function buildJsonMigrationAnalysis(
       walletName: parentWallet.name,
       holderName,
       balance,
-      deleted: softDel.deleted,
-      deletedAt: softDel.deletedAt,
+      deleted: softDel.deleted || masterSoftDel.deleted,
+      deletedAt: softDel.deletedAt || masterSoftDel.deletedAt,
       createdAt: String(pickCol(fo, ['created_at', 'createdAt']) ?? nowIso),
       updatedAt: updatedAtIso,
     });
@@ -1183,20 +1306,25 @@ export function buildJsonMigrationAnalysis(
       pickCol(
         t,
         [
+          'kepemilikan_sumber_dana_id',
+          'id_kepemilikan_sumber_dana',
+          'kepemilikan_dana_id',
+          'id_kepemilikan_dana',
           'fund_owner_id',
           'wallet_owner_id',
           'pemilik_dana_id',
           'id_pemilik_dana',
           'pemilik_id',
           'id_pemilik',
+          'kepemilikan_id',
+          'id_kepemilikan',
           'owner_id',
           'holder_id',
           'from_owner_id',
-          'kepemilikan_id',
         ],
-        ['pemilik', 'holder', 'owner']
+        ['kepemilikan', 'pemilik', 'holder', 'owner']
       ) ?? ''
-    );
+    ).trim();
 
     const rawWalletId = String(
       pickCol(
@@ -1214,9 +1342,17 @@ export function buildJsonMigrationAnalysis(
         ],
         ['wallet', 'sumber', 'dompet', 'rekening']
       ) ?? '1'
-    );
+    ).trim();
 
-    const matchedFundOwner = rawFundOwnerId ? legacyFundOwnerIdMap.get(rawFundOwnerId) : undefined;
+    const matchedFundOwner = rawFundOwnerId
+      ? legacyFundOwnerIdMap.get(`${rawWalletId}_${rawFundOwnerId}`) ||
+        legacyFundOwnerIdMap.get(rawFundOwnerId) ||
+        legacyFundOwnerIdMap.get(`master_${rawFundOwnerId}`)
+      : undefined;
+    const matchedMasterOwnerName = rawFundOwnerId
+      ? ownerMasterNameById.get(rawFundOwnerId)
+      : undefined;
+
     const matchedWallet =
       legacyWalletIdMap.get(rawWalletId) ||
       (matchedFundOwner
@@ -1243,14 +1379,30 @@ export function buildJsonMigrationAnalysis(
       'Sumber Dana Utama'
     );
 
-    const fallbackHolderForWallet = normalizedWalletOwners.find((fo) => fo.walletId === walletId);
+    const fallbackHolderForWallet =
+      (matchedMasterOwnerName
+        ? normalizedWalletOwners.find(
+            (fo) =>
+              fo.walletId === walletId &&
+              fo.holderName.toLowerCase() === matchedMasterOwnerName.toLowerCase()
+          )
+        : undefined) || normalizedWalletOwners.find((fo) => fo.walletId === walletId);
+
     const fundOwnerId =
       matchedFundOwner?.id ||
       fallbackHolderForWallet?.id ||
       sanitizeId(`su_holder_${rawFundOwnerId || 'default'}`);
     const fundOwnerName = sanitizeString(
-      pickCol(t, ['fund_owner_name', 'nama_pemilik_dana', 'nama_pemilik', 'pemilik_dana', 'pemilik']) ??
+      pickCol(t, [
+        'fund_owner_name',
+        'nama_kepemilikan_dana',
+        'nama_pemilik_dana',
+        'nama_pemilik',
+        'pemilik_dana',
+        'pemilik',
+      ]) ??
         matchedFundOwner?.holderName ??
+        matchedMasterOwnerName ??
         fallbackHolderForWallet?.holderName ??
         'Pribadi',
       MAX_HOLD_NAME_LENGTH,
@@ -1366,10 +1518,17 @@ export function buildJsonMigrationAnalysis(
     };
 
     if (mappedType === 'transfer') {
-      const rawToWalletStr = String(toWalletRaw ?? rawWalletId);
-      const rawToOwnerStr = String(toOwnerRaw ?? '');
+      const rawToWalletStr = String(toWalletRaw ?? rawWalletId).trim();
+      const rawToOwnerStr = String(toOwnerRaw ?? '').trim();
 
-      const matchedToOwner = rawToOwnerStr ? legacyFundOwnerIdMap.get(rawToOwnerStr) : undefined;
+      const matchedToOwner = rawToOwnerStr
+        ? legacyFundOwnerIdMap.get(`${rawToWalletStr}_${rawToOwnerStr}`) ||
+          legacyFundOwnerIdMap.get(rawToOwnerStr) ||
+          legacyFundOwnerIdMap.get(`master_${rawToOwnerStr}`)
+        : undefined;
+      const matchedToMasterName = rawToOwnerStr
+        ? ownerMasterNameById.get(rawToOwnerStr)
+        : undefined;
       const matchedToWallet =
         legacyWalletIdMap.get(rawToWalletStr) ||
         (matchedToOwner
@@ -1394,6 +1553,7 @@ export function buildJsonMigrationAnalysis(
       txDoc.toFundOwnerName = sanitizeString(
         pickCol(t, ['to_fund_owner_name', 'ke_nama_pemilik_dana', 'pemilik_tujuan']) ??
           matchedToOwner?.holderName ??
+          matchedToMasterName ??
           'Istri',
         MAX_HOLD_NAME_LENGTH,
         'Istri'
@@ -1729,7 +1889,8 @@ export function buildJsonMigrationAnalysis(
         { fieldName: 'updatedAt', dataType: 'timestamp', required: true, description: 'Waktu pembaruan saldo kepemilikan terakhir' },
       ],
       changeExplanations: [
-        'Mempertahankan mekanisme Soft Delete (`deleted` & `deletedAt`) dari tabel `wallet_owners` / `owners` lama sehingga alokasi kepemilikan dana yang dihapus tetap tersimpan historinya dan dapat dipulihkan.',
+        'Melakukan relasi otomatis (JOIN) antara tabel alokasi sumber dana (`tb_kepemilikan_sumber_dana`) dengan tabel master pemilik dana (`tb_kepemilikan_dana`), sehingga nama asli pemilik dana terimpor secara utuh ke field `holderName` tanpa menghasilkan label generik seperti "Pemilik #3".',
+        'Mempertahankan mekanisme Soft Delete (`deleted` & `deletedAt`) dari tabel `tb_kepemilikan_sumber_dana` & `tb_kepemilikan_dana` lama sehingga alokasi kepemilikan dana yang dihapus tetap tersimpan historinya dan dapat dipulihkan.',
         'Memisahkan kepemilikan dana ke koleksi khusus `wallet_owners` yang berelasi ke `wallets` (`walletId`), sehingga 1 sumber dana (mis. Mandiri) bisa dibagi ke beberapa pemilik (Pribadi, Istri, dll).',
         'Menambahkan field denormalisasi `walletName` untuk mempercepat pemuatan halaman dan menghemat kuota Read Firestore tanpa perlu melakukan query JOIN berlapis.',
       ],
