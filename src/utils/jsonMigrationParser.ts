@@ -855,7 +855,14 @@ export function buildJsonMigrationAnalysis(
   const normalizedWallets: NormalizedWalletDoc[] = [];
   const legacyWalletIdMap = new Map<
     string,
-    { id: string; name: string; ownerId: string; balance: number }
+    {
+      id: string;
+      name: string;
+      ownerId: string;
+      balance: number;
+      deleted: boolean;
+      deletedAt: string | null;
+    }
   >();
 
   const walletRowsToProcess = getIncludedRows(walletsTables);
@@ -930,7 +937,14 @@ export function buildJsonMigrationAnalysis(
     const updatedAtIso = String(pickCol(w, ['updated_at', 'updatedAt']) ?? nowIso);
     const softDel = extractSoftDeleteFromRow(w, updatedAtIso);
 
-    legacyWalletIdMap.set(rawId, { id: walletId, name, ownerId: ownerUid, balance });
+    legacyWalletIdMap.set(rawId, {
+      id: walletId,
+      name,
+      ownerId: ownerUid,
+      balance,
+      deleted: softDel.deleted,
+      deletedAt: softDel.deletedAt,
+    });
 
     normalizedWallets.push({
       id: walletId,
@@ -1116,6 +1130,8 @@ export function buildJsonMigrationAnalysis(
       ),
       ownerId: defaultOwnerUid,
       balance: 0,
+      deleted: false,
+      deletedAt: null,
     };
 
     const masterOwnerRow = fkOwnerId ? ownerMasterRowById.get(fkOwnerId) : undefined;
@@ -1203,6 +1219,10 @@ export function buildJsonMigrationAnalysis(
     const updatedAtIso = String(pickCol(fo, ['updated_at', 'updatedAt']) ?? nowIso);
     const softDel = extractSoftDeleteFromRow(fo, updatedAtIso);
     const masterSoftDel = masterOwnerRow ? extractSoftDeleteFromRow(masterOwnerRow, updatedAtIso) : { deleted: false, deletedAt: null };
+    const isEffectivelyDeleted =
+      softDel.deleted || masterSoftDel.deleted || Boolean(parentWallet.deleted);
+    const effectiveDeletedAt =
+      softDel.deletedAt || masterSoftDel.deletedAt || parentWallet.deletedAt || null;
 
     normalizedWalletOwners.push({
       id: fundOwnerId,
@@ -1211,8 +1231,8 @@ export function buildJsonMigrationAnalysis(
       walletName: parentWallet.name,
       holderName,
       balance,
-      deleted: softDel.deleted || masterSoftDel.deleted,
-      deletedAt: softDel.deletedAt || masterSoftDel.deletedAt,
+      deleted: isEffectivelyDeleted,
+      deletedAt: isEffectivelyDeleted ? effectiveDeletedAt : null,
       createdAt: String(pickCol(fo, ['created_at', 'createdAt']) ?? nowIso),
       updatedAt: updatedAtIso,
     });
