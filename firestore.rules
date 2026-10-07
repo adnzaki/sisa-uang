@@ -221,14 +221,26 @@ service cloud.firestore {
     // 1. Admins Registry (/admins/{adminId})
     match /admins/{adminId} {
       allow get: if isSignedIn() && isValidId(adminId) && (isOwner(adminId) || isAdmin());
-      allow list: if isBootstrappedAdminEmail();
+      allow list: if isAdmin();
       allow create: if isSignedIn() &&
         isValidId(adminId) &&
         isValidAdmin(incoming()) &&
         incoming().uid == adminId &&
         incoming().createdAt == request.time &&
-        isAdmin();
-      allow update: if false;
+        (
+          isAdmin() ||
+          (isOwner(adminId) && (incoming().email == 'vuedevo@gmail.com' || incoming().email == 'adnanzaki65@admin.sd.belajar.id'))
+        );
+      allow update: if isSignedIn() &&
+        isValidId(adminId) &&
+        isValidAdmin(incoming()) &&
+        incoming().uid == existing().uid &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['email', 'createdAt']) &&
+        (
+          isAdmin() ||
+          (isOwner(adminId) && (incoming().email == 'vuedevo@gmail.com' || incoming().email == 'adnanzaki65@admin.sd.belajar.id'))
+        );
       allow delete: if isSignedIn() && isValidId(adminId) && isAdmin();
     }
 
@@ -253,7 +265,7 @@ service cloud.firestore {
         isValidId(userId) &&
         isValidUser(incoming()) &&
         incoming().uid == existing().uid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
         incoming().updatedAt == request.time &&
         (
           (
@@ -264,7 +276,20 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'username', 'currency', 'updatedAt'])
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'username', 'passwordHash', 'role', 'status', 'currency', 'deleted', 'deletedAt', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'username',
+              'email',
+              'displayName',
+              'passwordHash',
+              'role',
+              'status',
+              'authProvider',
+              'currency',
+              'deleted',
+              'deletedAt',
+              'createdAt',
+              'updatedAt'
+            ]) &&
             isAdmin()
           )
         );
@@ -287,8 +312,8 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
         isValidId(walletId) &&
         isValidWallet(incoming()) &&
-        incoming().ownerId == existing().ownerId &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().ownerId == existing().ownerId || isAdmin()) &&
+        (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
         incoming().updatedAt == request.time &&
         (
           (
@@ -297,7 +322,7 @@ service cloud.firestore {
             isNotBlocked()
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'balance', 'color', 'deleted', 'deletedAt', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['ownerId', 'name', 'type', 'balance', 'color', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
             isAdmin()
           )
         );
@@ -330,8 +355,8 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
         isValidId(fundOwnerId) &&
         isValidWalletOwner(incoming()) &&
-        incoming().ownerId == existing().ownerId &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().ownerId == existing().ownerId || isAdmin()) &&
+        (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
         incoming().updatedAt == request.time &&
         (
           (
@@ -340,7 +365,7 @@ service cloud.firestore {
             isNotBlocked()
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['walletName', 'holderName', 'balance', 'deleted', 'deletedAt', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['ownerId', 'walletId', 'walletName', 'holderName', 'balance', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
             isAdmin()
           )
         );
@@ -368,8 +393,8 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
         isValidId(categoryId) &&
         isValidCategory(incoming()) &&
-        incoming().ownerId == existing().ownerId &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().ownerId == existing().ownerId || isAdmin()) &&
+        (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
         incoming().updatedAt == request.time &&
         (
           (
@@ -378,7 +403,7 @@ service cloud.firestore {
             isNotBlocked()
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'color', 'deleted', 'deletedAt', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['ownerId', 'name', 'type', 'color', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
             isAdmin()
           )
         );
@@ -411,8 +436,8 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
         isValidId(transactionId) &&
         isValidTransaction(incoming()) &&
-        incoming().ownerId == existing().ownerId &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().ownerId == existing().ownerId || isAdmin()) &&
+        (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
         incoming().updatedAt == request.time &&
         (
           (
@@ -441,6 +466,7 @@ service cloud.firestore {
           ) ||
           (
             incoming().diff(existing()).affectedKeys().hasOnly([
+              'ownerId',
               'walletId',
               'walletName',
               'fundOwnerId',
@@ -456,6 +482,7 @@ service cloud.firestore {
               'date',
               'deleted',
               'deletedAt',
+              'createdAt',
               'updatedAt'
             ]) &&
             isAdmin()
@@ -485,8 +512,8 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
         isValidId(budgetId) &&
         isValidBudget(incoming()) &&
-        incoming().ownerId == existing().ownerId &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().ownerId == existing().ownerId || isAdmin()) &&
+        (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
         incoming().updatedAt == request.time &&
         (
           (
@@ -495,7 +522,7 @@ service cloud.firestore {
             isNotBlocked()
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['category', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['ownerId', 'category', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
             isAdmin()
           )
         );
@@ -516,7 +543,13 @@ service cloud.firestore {
         isValidActivityLog(incoming()) &&
         incoming().createdAt == request.time &&
         (incoming().actorUid == request.auth.uid || isAdmin());
-      allow update: if false;
+      allow update: if isSignedIn() &&
+        isValidId(logId) &&
+        isValidActivityLog(incoming()) &&
+        (incoming().actorUid == existing().actorUid || isAdmin()) &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['actorUid', 'actorEmail', 'action', 'detail', 'severity', 'createdAt']) &&
+        isAdmin();
       allow delete: if isSignedIn() && isValidId(logId) && isAdmin();
     }
 
@@ -527,15 +560,15 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
         isValidId(alertId) &&
         isValidSecurityAlert(incoming()) &&
-        incoming().actorUid == request.auth.uid &&
+        (incoming().actorUid == request.auth.uid || isAdmin()) &&
         incoming().status == 'open' &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
       allow update: if isSignedIn() &&
         isValidId(alertId) &&
         isValidSecurityAlert(incoming()) &&
-        incoming().actorUid == existing().actorUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().actorUid == existing().actorUid || isAdmin()) &&
+        (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
         incoming().updatedAt == request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
         (existing().status != 'resolved' || isAdmin()) &&

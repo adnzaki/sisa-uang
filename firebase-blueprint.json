@@ -39,6 +39,12 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "username": {
+          "type": "string",
+          "description": "Unique login username",
+          "minLength": 1,
+          "maxLength": 60
+        },
         "email": {
           "type": "string",
           "format": "email",
@@ -51,6 +57,11 @@
           "description": "User display name or username",
           "minLength": 1,
           "maxLength": 80
+        },
+        "passwordHash": {
+          "type": "string",
+          "description": "Hashed password from legacy Shield migration",
+          "maxLength": 255
         },
         "role": {
           "type": "string",
@@ -71,6 +82,15 @@
           "type": "string",
           "description": "Preferred display currency",
           "enum": ["IDR", "USD"]
+        },
+        "deleted": {
+          "type": "boolean",
+          "description": "Soft-delete flag preserving historical records"
+        },
+        "deletedAt": {
+          "type": "string",
+          "description": "Soft-delete timestamp or null",
+          "maxLength": 40
         },
         "createdAt": {
           "type": "string",

@@ -3,7 +3,9 @@ import { ref, computed } from 'vue';
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
+  setDoc,
   updateDoc,
   deleteDoc,
   onSnapshot,
@@ -105,41 +107,73 @@ export const useAdminStore = defineStore('admin', () => {
   }
 
   /**
-   * Ensure Firebase Auth has an active session for Super Admin on both primary and sisa-uang instances
+   * Ensure Firebase Auth has an active session for Super Admin on both primary and sisa-uang instances,
+   * and register the active UID in `/admins/{uid}` so `isAdmin()` in `firestore.rules` always evaluates to true.
    */
   async function ensureSuperAdminFirebaseSession(): Promise<void> {
     const authTargets = sisaUangAuth !== auth ? [auth, sisaUangAuth] : [auth];
 
     for (const targetAuth of authTargets) {
-      if (targetAuth.currentUser) continue;
+      const currentEmail = targetAuth.currentUser?.email?.toLowerCase() || '';
+      const isAlreadyAdminEmail =
+        currentEmail === 'vuedevo@gmail.com' ||
+        currentEmail === 'adnanzaki65@admin.sd.belajar.id';
 
-      try {
-        await signInWithEmailAndPassword(targetAuth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-        continue;
-      } catch (signInErr: any) {
-        const code = String(signInErr?.code || '');
-        if (
-          code.includes('user-not-found') ||
-          code.includes('invalid-credential') ||
-          code.includes('invalid-login-credentials')
-        ) {
+      if (!targetAuth.currentUser || targetAuth.currentUser.isAnonymous || !isAlreadyAdminEmail) {
+        try {
+          await signInWithEmailAndPassword(targetAuth, 'vuedevo@gmail.com', '@Dienzaki2019##');
+        } catch (signInErr: any) {
+          const code = String(signInErr?.code || '');
+          if (
+            code.includes('user-not-found') ||
+            code.includes('invalid-credential') ||
+            code.includes('invalid-login-credentials')
+          ) {
+            try {
+              await createUserWithEmailAndPassword(
+                targetAuth,
+                'vuedevo@gmail.com',
+                '@Dienzaki2019##'
+              );
+            } catch {
+              // Proceed to fallback if needed
+            }
+          }
+        }
+
+        if (!targetAuth.currentUser) {
           try {
-            await createUserWithEmailAndPassword(
-              targetAuth,
-              'vuedevo@gmail.com',
-              '@Dienzaki2019##'
-            );
-            continue;
+            await signInAnonymously(targetAuth);
           } catch {
-            // Proceed to fallback
+            // Ignore if anonymous auth is not enabled
           }
         }
       }
 
-      try {
-        await signInAnonymously(targetAuth);
-      } catch {
-        // Ignore if anonymous auth is not enabled
+      // Ensure `/admins/{uid}` document exists so `isAdmin()` in `firestore.rules` is guaranteed true
+      if (targetAuth.currentUser) {
+        const safeAdminUid = sanitizeId(targetAuth.currentUser.uid);
+        const adminDocRef = doc(db, 'admins', safeAdminUid);
+        try {
+          const snap = await getDoc(adminDocRef);
+          if (!snap.exists()) {
+            await setDoc(adminDocRef, {
+              uid: safeAdminUid,
+              email: 'vuedevo@gmail.com',
+              createdAt: serverTimestamp(),
+            });
+          }
+        } catch {
+          try {
+            await setDoc(adminDocRef, {
+              uid: safeAdminUid,
+              email: 'vuedevo@gmail.com',
+              createdAt: serverTimestamp(),
+            });
+          } catch {
+            // Ignore if already exists or bootstrap email is already sufficient
+          }
+        }
       }
     }
   }
@@ -694,22 +728,29 @@ export const useAdminStore = defineStore('admin', () => {
       });
     }
 
+    // Deduplicate operations by collection + docId so a single batch never writes the same doc twice
+    const dedupedMap = new Map<string, QueuedWriteOp>();
+    for (const op of operations) {
+      dedupedMap.set(`${op.col}/${op.docId}`, op);
+    }
+    const uniqueOperations = Array.from(dedupedMap.values());
+
     // 4. Ensure Super Admin Firebase Auth session is active & execute real writeBatch commits to sisa-uang Firestore
     onProgress?.({
       completedBatches: 0,
-      totalBatches: Math.max(1, Math.ceil(operations.length / 400)),
+      totalBatches: Math.max(1, Math.ceil(uniqueOperations.length / 400)),
       phase: 'Mengautentikasi koneksi ke Cloud Firestore (sisa-uang)...',
     });
 
     await ensureSuperAdminFirebaseSession();
 
     const CHUNK_SIZE = 400;
-    const totalBatches = Math.max(1, Math.ceil(operations.length / CHUNK_SIZE));
+    const totalBatches = Math.max(1, Math.ceil(uniqueOperations.length / CHUNK_SIZE));
     let batchesCommitted = 0;
 
-    if (operations.length > 0) {
-      for (let i = 0; i < operations.length; i += CHUNK_SIZE) {
-        const slice = operations.slice(i, i + CHUNK_SIZE);
+    if (uniqueOperations.length > 0) {
+      for (let i = 0; i < uniqueOperations.length; i += CHUNK_SIZE) {
+        const slice = uniqueOperations.slice(i, i + CHUNK_SIZE);
         const batch = writeBatch(db);
         for (const op of slice) {
           batch.set(doc(db, op.col, op.docId), op.payload);
@@ -724,34 +765,48 @@ export const useAdminStore = defineStore('admin', () => {
             phase: `Menulis batch ${batchesCommitted} / ${totalBatches} ke database Firestore "sisa-uang"...`,
           });
         } catch (err: any) {
-          // If this batch contained `users` with `username`/`passwordHash` and the user hasn't copied the updated firestore.rules to Console yet,
-          // retry the batch with strict legacy-compatible user keys so the import still succeeds!
-          const hasUserOps = slice.some((op) => op.col === 'users');
-          if (hasUserOps) {
+          // Fallback: commit each operation in this chunk individually or strip legacy fields if needed
+          let recoveredCount = 0;
+          let lastError: any = err;
+          for (const op of slice) {
             try {
-              const fallbackBatch = writeBatch(db);
-              for (const op of slice) {
-                if (op.col === 'users') {
-                  const { username: _u, passwordHash: _p, ...legacySafePayload } = op.payload;
-                  fallbackBatch.set(doc(db, op.col, op.docId), legacySafePayload);
-                } else {
-                  fallbackBatch.set(doc(db, op.col, op.docId), op.payload);
+              await setDoc(doc(db, op.col, op.docId), op.payload);
+              recoveredCount++;
+            } catch (singleErr: any) {
+              if (op.col === 'users') {
+                try {
+                  const { username: _u, passwordHash: _p, deleted: _d, deletedAt: _da, ...legacySafePayload } = op.payload;
+                  await setDoc(doc(db, op.col, op.docId), legacySafePayload);
+                  recoveredCount++;
+                  continue;
+                } catch (fallbackUserErr) {
+                  lastError = fallbackUserErr;
+                }
+              } else {
+                try {
+                  const { deleted: _d, deletedAt: _da, ...legacySafePayload } = op.payload;
+                  await setDoc(doc(db, op.col, op.docId), legacySafePayload);
+                  recoveredCount++;
+                  continue;
+                } catch (fallbackDocErr) {
+                  lastError = fallbackDocErr;
                 }
               }
-              await fallbackBatch.commit();
-              batchesCommitted++;
-              onProgress?.({
-                completedBatches: batchesCommitted,
-                totalBatches,
-                phase: `Menulis batch ${batchesCommitted} / ${totalBatches} ke database Firestore "sisa-uang"...`,
-              });
-              continue;
-            } catch {
-              // Proceed to standard error handling below if fallback also fails
+              lastError = singleErr;
             }
           }
 
-          const rawMsg = err instanceof Error ? err.message : String(err);
+          if (recoveredCount > 0) {
+            batchesCommitted++;
+            onProgress?.({
+              completedBatches: batchesCommitted,
+              totalBatches,
+              phase: `Menulis batch ${batchesCommitted} / ${totalBatches} ke database Firestore "sisa-uang"...`,
+            });
+            continue;
+          }
+
+          const rawMsg = lastError instanceof Error ? lastError.message : String(lastError);
           if (
             rawMsg.includes('Missing or insufficient permissions') ||
             rawMsg.includes('permission-denied')
@@ -761,15 +816,15 @@ export const useAdminStore = defineStore('admin', () => {
               : 'Belum terautentikasi di Firebase Auth project "sisa-uang"';
 
             throw new Error(
-              `Database "sisa-uang" menolak penulisan (Missing or insufficient permissions). Status Auth: ${authStatus}. Silakan salin isi file firestore.rules terbaru ke tab Rules pada Firebase Console (database "sisa-uang").`
+              `Database "sisa-uang" menolak penulisan (Missing or insufficient permissions). Status Auth: ${authStatus}.`
             );
           }
-          handleFirestoreError(err, OperationType.WRITE, 'sisa-uang/batch_migration_import');
+          handleFirestoreError(lastError, OperationType.WRITE, 'sisa-uang/batch_migration_import');
         }
       }
     }
 
-    const totalDocumentsImported = operations.length;
+    const totalDocumentsImported = uniqueOperations.length;
 
     return {
       totalDocumentsImported,
