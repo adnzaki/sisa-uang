@@ -204,11 +204,36 @@ export function formatTransactionDateBadge(
 
 export const useFinanceStore = defineStore('finance', () => {
   const wallets = ref<WalletItem[]>([]);
-  const walletOwners = ref<WalletOwnerItem[]>([]);
+  const rawWalletOwners = ref<WalletOwnerItem[]>([]);
   const userCategories = ref<CategoryItem[]>([]);
   const defaultCategories = ref<CategoryItem[]>([]);
   const rawTransactions = ref<TransactionItem[]>([]);
   const budgets = ref<BudgetItem[]>([]);
+
+  /**
+   * Active Wallet Owners (Kepemilikan Sumber Dana):
+   * Must satisfy BOTH criteria:
+   * 1. `fo.deleted !== true` on the `wallet_owners` document itself
+   * 2. Its parent wallet (`fo.walletId`) exists in active `wallets` (`w.deleted !== true`)
+   */
+  const walletOwners = computed<WalletOwnerItem[]>(() => {
+    const activeWalletMap = new Map<string, WalletItem>();
+    for (const w of wallets.value) {
+      if (!w.deleted) {
+        activeWalletMap.set(w.id, w);
+      }
+    }
+
+    return rawWalletOwners.value
+      .filter((fo) => !fo.deleted && activeWalletMap.has(fo.walletId))
+      .map((fo) => {
+        const parentWallet = activeWalletMap.get(fo.walletId)!;
+        return {
+          ...fo,
+          walletName: parentWallet.name || fo.walletName,
+        };
+      });
+  });
 
   const isLoading = ref(false);
   const isSyncedWithFirestore = ref(false);
@@ -253,7 +278,7 @@ export const useFinanceStore = defineStore('finance', () => {
     if (!uid) return;
     try {
       localStorage.setItem(storageKey('wallets', uid), JSON.stringify(wallets.value));
-      localStorage.setItem(storageKey('wallet_owners', uid), JSON.stringify(walletOwners.value));
+      localStorage.setItem(storageKey('wallet_owners', uid), JSON.stringify(rawWalletOwners.value));
       localStorage.setItem(storageKey('user_categories', uid), JSON.stringify(userCategories.value));
       localStorage.setItem(storageKey('budgets', uid), JSON.stringify(budgets.value));
       // Only cache up to 300 recent transactions in localStorage to avoid quota issues
@@ -335,11 +360,14 @@ export const useFinanceStore = defineStore('finance', () => {
   }
 
   /**
-   * Synchronize parent wallet total balance from its `wallet_owners` documents in Firestore.
+   * Synchronize parent wallet total balance from its active `wallet_owners` documents in Firestore.
    */
   function syncWalletTotalBalancesFromHolders() {
     for (const w of wallets.value) {
-      const holders = walletOwners.value.filter((fo) => fo.walletId === w.id);
+      if (w.deleted) continue;
+      const holders = rawWalletOwners.value.filter(
+        (fo) => !fo.deleted && fo.walletId === w.id
+      );
       if (holders.length > 0) {
         w.balance = holders.reduce((sum, h) => sum + Number(h.balance || 0), 0);
       }
@@ -509,7 +537,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
     // Clear state first so dummy or previous user data never leaks
     wallets.value = [];
-    walletOwners.value = [];
+    rawWalletOwners.value = [];
     userCategories.value = [];
     rawTransactions.value = [];
     budgets.value = [];
@@ -522,8 +550,14 @@ export const useFinanceStore = defineStore('finance', () => {
       const savedTransactions = localStorage.getItem(storageKey('transactions', uid));
       const savedBudgets = localStorage.getItem(storageKey('budgets', uid));
 
-      if (savedWallets) wallets.value = JSON.parse(savedWallets);
-      if (savedHolders) walletOwners.value = JSON.parse(savedHolders);
+      if (savedWallets) {
+        wallets.value = (JSON.parse(savedWallets) as WalletItem[]).filter((w) => !w.deleted);
+      }
+      if (savedHolders) {
+        rawWalletOwners.value = (JSON.parse(savedHolders) as WalletOwnerItem[]).filter(
+          (fo) => !fo.deleted
+        );
+      }
       if (savedUserCats) userCategories.value = JSON.parse(savedUserCats);
       if (savedTransactions) rawTransactions.value = JSON.parse(savedTransactions);
       if (savedBudgets) budgets.value = JSON.parse(savedBudgets);
@@ -563,7 +597,7 @@ export const useFinanceStore = defineStore('finance', () => {
       unsubWalletOwners = onSnapshot(
         holdersQuery,
         (snap) => {
-          walletOwners.value = snap.docs
+          rawWalletOwners.value = snap.docs
             .map((d) => ({
               id: d.id,
               ...(d.data() as Omit<WalletOwnerItem, 'id'>),
@@ -687,15 +721,24 @@ export const useFinanceStore = defineStore('finance', () => {
     }
   }
 
-  // Helper to get fund owners for a specific wallet
+  // Helper to get active fund owners for a specific active wallet
   function getHoldersByWalletId(walletId: string): WalletOwnerItem[] {
-    return walletOwners.value.filter((fo) => fo.walletId === walletId);
+    const parentWallet = wallets.value.find((w) => w.id === walletId && !w.deleted);
+    if (!parentWallet) return [];
+    return walletOwners.value.filter((fo) => !fo.deleted && fo.walletId === walletId);
   }
 
-  // Summary of Fund Ownership across all wallets (Konsep Kepemilikan Dana SisaUang)
+  // Summary of Fund Ownership across all active wallets (Konsep Kepemilikan Dana SisaUang)
+  // Requires 2 checks:
+  // 1. `fo.deleted !== true` in `wallet_owners`
+  // 2. Relational `fo.walletId` exists in `wallets` AND `parentWallet.deleted !== true`
   const ownershipSummary = computed<OwnershipSummaryItem[]>(() => {
     const map = new Map<string, OwnershipSummaryItem>();
     for (const fo of walletOwners.value) {
+      if (fo.deleted) continue;
+      const parentWallet = wallets.value.find((w) => w.id === fo.walletId && !w.deleted);
+      if (!parentWallet) continue;
+
       const rawKey = String(fo.holderName || 'Pribadi').trim();
       const existing = map.get(rawKey) || {
         rawHolderName: rawKey,
@@ -704,8 +747,7 @@ export const useFinanceStore = defineStore('finance', () => {
         walletCount: 0,
         wallets: [],
       };
-      const parentWallet = wallets.value.find((w) => w.id === fo.walletId);
-      const wName = parentWallet?.name || fo.walletName || 'Sumber Dana';
+      const wName = parentWallet.name || fo.walletName || 'Sumber Dana';
 
       existing.totalBalance += Number(fo.balance || 0);
       existing.walletCount += 1;
