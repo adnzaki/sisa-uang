@@ -56,7 +56,7 @@ const walletSelectOptions = computed<SelectOptionItem[]>(() =>
 );
 
 function openAddHolderModal(wallet?: WalletItem) {
-  selectedWalletId.value = wallet?.id || financeStore.wallets[0]?.id || '';
+  selectedWalletId.value = wallet?.id || '';
   newHolderName.value = '';
   newHolderBalance.value = '';
   showAddHolderModal.value = true;
@@ -290,47 +290,31 @@ async function handleSaveGlobalRename() {
     <AppModal
       v-model="showAddHolderModal"
       title="Tambah Kepemilikan Dana"
-      subtitle="Alokasikan pemilik dana baru ke dalam salah satu sumber dana"
     >
-      <form id="add-holder-form" class="space-y-4" @submit.prevent="handleAddHolder">
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Pilih Dompet / Sumber Dana
-          </label>
-          <CustomSelect
-            v-model="selectedWalletId"
-            :options="walletSelectOptions"
-            placeholder="Pilih sumber dana"
-          />
-        </div>
+      <form id="add-holder-form" class="space-y-3.5" @submit.prevent="handleAddHolder">
+        <CustomSelect
+          v-model="selectedWalletId"
+          :options="walletSelectOptions"
+          placeholder="Sumber Dana"
+        />
 
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Nama Pemilik Dana
-          </label>
-          <input
-            v-model="newHolderName"
-            type="text"
-            required
-            maxlength="60"
-            placeholder="Contoh: Istri, Pribadi, Tabungan Anak..."
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+        <input
+          v-model="newHolderName"
+          type="text"
+          required
+          maxlength="60"
+          placeholder="Nama Pemilik Dana (Misal: Pribadi, Istri, Tabungan Anak)"
+          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        />
 
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Saldo Kepemilikan (IDR)
-          </label>
-          <input
-            v-model.number="newHolderBalance"
-            type="number"
-            step="any"
-            required
-            placeholder="0"
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-base font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+        <input
+          v-model.number="newHolderBalance"
+          type="number"
+          step="any"
+          required
+          placeholder="Saldo Kepemilikan (Rp)"
+          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        />
       </form>
 
       <template #footer>
@@ -338,7 +322,7 @@ async function handleSaveGlobalRename() {
           <button
             type="submit"
             form="add-holder-form"
-            class="w-full sm:w-auto min-h-[46px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+            class="w-full sm:w-auto min-h-[48px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
           >
             <Check class="w-4 h-4 shrink-0" />
             <span>Simpan Kepemilikan</span>
@@ -353,39 +337,30 @@ async function handleSaveGlobalRename() {
     <AppModal
       v-model="isEditHolderOpen"
       title="Detail & Ubah Kepemilikan Dana"
-      :subtitle="editingHolder ? `Sumber Dana: ${editingHolder.walletName}` : ''"
     >
       <form
         v-if="editingHolder"
         id="edit-holder-form"
-        class="space-y-4"
+        class="space-y-3.5"
         @submit.prevent="handleSaveEditHolder"
       >
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Nama Pemilik Dana
-          </label>
-          <input
-            v-model="editHolderName"
-            type="text"
-            required
-            maxlength="60"
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+        <input
+          v-model="editHolderName"
+          type="text"
+          required
+          maxlength="60"
+          placeholder="Nama Pemilik Dana"
+          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        />
 
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Saldo Saat Ini (IDR)
-          </label>
-          <input
-            v-model.number="editHolderBalance"
-            type="number"
-            step="any"
-            required
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-base font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+        <input
+          v-model.number="editHolderBalance"
+          type="number"
+          step="any"
+          required
+          placeholder="Saldo Saat Ini (Rp)"
+          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        />
       </form>
 
       <template #footer>
@@ -393,7 +368,7 @@ async function handleSaveGlobalRename() {
           <button
             v-if="financeStore.getHoldersByWalletId(editingHolder.holder.walletId).length > 1"
             type="button"
-            class="min-h-[46px] px-4 py-2.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0"
+            class="min-h-[48px] px-4 py-2.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0"
             @click="handleDeleteEditingHolder"
           >
             <Trash2 class="w-4 h-4 shrink-0" />
@@ -404,7 +379,7 @@ async function handleSaveGlobalRename() {
           <button
             type="submit"
             form="edit-holder-form"
-            class="flex-1 sm:flex-initial min-h-[46px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+            class="flex-1 sm:flex-initial min-h-[48px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
           >
             <Check class="w-4 h-4 shrink-0" />
             <span>Simpan Perubahan</span>
@@ -419,31 +394,21 @@ async function handleSaveGlobalRename() {
     <AppModal
       v-model="isGlobalRenameOpen"
       title="Ubah Nama Kepemilikan Serentak"
-      :subtitle="
-        renamingGlobalOwner
-          ? `Mengubah ${renamingGlobalOwner.displayHolderName} di ${renamingGlobalOwner.walletCount} sumber dana`
-          : ''
-      "
     >
       <form
         v-if="renamingGlobalOwner"
         id="global-rename-form"
-        class="space-y-4"
+        class="space-y-3.5"
         @submit.prevent="handleSaveGlobalRename"
       >
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Nama Kepemilikan Baru
-          </label>
-          <input
-            v-model="renameOwnerNewLabel"
-            type="text"
-            required
-            maxlength="50"
-            placeholder="Contoh: Pribadi / Istri"
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+        <input
+          v-model="renameOwnerNewLabel"
+          type="text"
+          required
+          maxlength="50"
+          placeholder="Nama Kepemilikan Baru (Misal: Pribadi, Istri)"
+          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        />
       </form>
 
       <template #footer>

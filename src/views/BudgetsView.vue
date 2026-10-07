@@ -30,8 +30,8 @@ const expenseCategoryOptions = computed<SelectOptionItem[]>(() =>
 function openAddBudgetModal() {
   isEditingBudget.value = false;
   editingBudgetId.value = null;
-  category.value = financeStore.expenseCategoryNames[0] || 'Makan dan Minum';
-  limitAmount.value = 2000000;
+  category.value = '';
+  limitAmount.value = '';
   showBudgetForm.value = true;
 }
 
@@ -45,7 +45,7 @@ function openEditBudgetModal(b: { id: string; category: string; limitAmount: num
 
 async function handleSaveBudget() {
   const num = Number(limitAmount.value || 0);
-  if (num <= 0) return;
+  if (!category.value.trim() || num <= 0) return;
   await financeStore.saveBudget({
     category: category.value,
     limitAmount: num,
@@ -201,36 +201,26 @@ async function handleDeleteEditingBudget() {
     <AppModal
       v-model="showBudgetForm"
       :title="isEditingBudget ? 'Detail & Ubah Anggaran' : 'Atur Batas Anggaran Bulanan'"
-      subtitle="Tetapkan batas pengeluaran bulanan untuk kategori pilihan"
     >
-      <form id="budget-form" class="space-y-4" @submit.prevent="handleSaveBudget">
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Kategori Pengeluaran
-          </label>
-          <CustomSelect
-            v-model="category"
-            :options="expenseCategoryOptions"
-            :disabled="isEditingBudget"
-            searchable
-            search-placeholder="Ketik untuk mencari kategori..."
-            placeholder="Pilih kategori pengeluaran"
-          />
-        </div>
+      <form id="budget-form" class="space-y-3.5" @submit.prevent="handleSaveBudget">
+        <CustomSelect
+          v-model="category"
+          :options="expenseCategoryOptions"
+          :disabled="isEditingBudget"
+          searchable
+          search-placeholder="Ketik untuk mencari kategori..."
+          placeholder="Kategori Pengeluaran"
+        />
 
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            {{ t('budgets.limit') }} Bulanan (IDR)
-          </label>
-          <input
-            v-model.number="limitAmount"
-            type="number"
-            min="10000"
-            step="any"
-            required
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-base font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+        <input
+          v-model.number="limitAmount"
+          type="number"
+          min="10000"
+          step="any"
+          required
+          :placeholder="`${t('budgets.limit')} Bulanan (Rp)`"
+          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        />
       </form>
 
       <template #footer>

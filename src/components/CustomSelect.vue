@@ -196,44 +196,56 @@ onBeforeUnmount(() => {
     <button
       type="button"
       :disabled="disabled"
-      :aria-label="ariaLabel"
+      :aria-label="ariaLabel || placeholder"
       :aria-expanded="isOpen"
-      class="w-full flex items-center justify-between gap-2.5 rounded-xl border text-left transition-all duration-150 focus:outline-none disabled:opacity-50"
+      class="w-full flex items-center justify-between gap-2.5 border text-left transition-all duration-150 focus:outline-none disabled:opacity-50"
       :class="[
         size === 'sm'
-          ? 'min-h-[44px] sm:min-h-[40px] px-3.5 py-2 text-xs sm:text-xs'
-          : 'min-h-[50px] sm:min-h-[46px] px-4 py-2.5 text-sm',
+          ? 'min-h-[44px] sm:min-h-[40px] px-3.5 py-2 rounded-xl text-xs'
+          : 'min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl text-sm sm:text-base',
         isOpen
           ? accentColor === 'indigo'
             ? 'border-indigo-600 ring-2 ring-indigo-500/15 bg-white dark:bg-slate-900'
             : 'border-emerald-600 ring-2 ring-emerald-500/15 bg-white dark:bg-slate-900'
-          : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700',
+          : 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700',
       ]"
       @click="toggleDropdown"
     >
-      <div class="flex items-center gap-2 min-w-0 flex-1">
+      <div class="flex items-center gap-2.5 min-w-0 flex-1">
         <slot name="icon" />
-        <div class="min-w-0 flex-1 truncate">
-          <span
-            v-if="selectedOption"
-            class="font-medium text-slate-900 dark:text-slate-100 truncate"
-          >
-            {{ selectedOption.label }}
-          </span>
-          <span
-            v-else-if="modelValue !== '' && modelValue !== null && modelValue !== undefined"
-            class="font-medium text-slate-900 dark:text-slate-100 truncate"
-          >
-            {{ modelValue }}
-          </span>
-          <span v-else class="text-slate-400 dark:text-slate-500 truncate">
+        <div class="min-w-0 flex-1">
+          <template v-if="selectedOption">
+            <div
+              v-if="size !== 'sm' && placeholder"
+              class="text-[11px] font-medium text-slate-400 dark:text-slate-500 leading-tight truncate mb-0.5"
+            >
+              {{ placeholder }}
+            </div>
+            <div class="truncate">
+              <span class="font-medium text-slate-900 dark:text-slate-100">
+                {{ selectedOption.label }}
+              </span>
+              <span
+                v-if="selectedOption.sublabel"
+                class="ml-1.5 text-xs text-slate-500 dark:text-slate-400 font-money"
+              >
+                {{ selectedOption.sublabel }}
+              </span>
+            </div>
+          </template>
+          <template v-else-if="modelValue !== '' && modelValue !== null && modelValue !== undefined">
+            <div
+              v-if="size !== 'sm' && placeholder"
+              class="text-[11px] font-medium text-slate-400 dark:text-slate-500 leading-tight truncate mb-0.5"
+            >
+              {{ placeholder }}
+            </div>
+            <div class="font-medium text-slate-900 dark:text-slate-100 truncate">
+              {{ modelValue }}
+            </div>
+          </template>
+          <span v-else class="block text-slate-500 dark:text-slate-400 truncate">
             {{ placeholder }}
-          </span>
-          <span
-            v-if="selectedOption?.sublabel"
-            class="ml-1.5 text-xs text-slate-500 dark:text-slate-400 font-money"
-          >
-            {{ selectedOption.sublabel }}
           </span>
         </div>
       </div>

@@ -32,6 +32,8 @@ import { useFinanceStore } from './stores/finance';
 import { useAdminStore } from './stores/admin';
 import { useNotificationStore } from './stores/notification';
 import QuickTransactionModal from './components/QuickTransactionModal.vue';
+import PWAInstallButton from './components/PWAInstallButton.vue';
+import OfflineIndicator from './components/OfflineIndicator.vue';
 
 const { t, locale } = useI18n();
 const route = useRoute();
@@ -520,6 +522,9 @@ async function handleLogout() {
 
         <!-- Sidebar Bottom Controls: Always visible Theme Options, User Info & Explicit Logout Button -->
         <div class="space-y-3 pt-3 border-t border-slate-200/80 dark:border-slate-800 shrink-0">
+          <!-- In-App PWA Install Button -->
+          <PWAInstallButton variant="sidebar" />
+
           <!-- Theme Options Label + 3-Way Segmented Control -->
           <div class="space-y-1.5">
             <div class="text-[11px] font-medium text-slate-500 dark:text-slate-400 px-1 flex items-center justify-between">
@@ -603,7 +608,9 @@ async function handleLogout() {
             Sisa Uang
           </RouterLink>
 
-          <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2.5">
+            <PWAInstallButton variant="topbar" />
+
             <!-- "+ Catat Transaksi" ONLY for Regular Users -->
             <button
               v-if="!authStore.isSuperAdmin"
@@ -633,7 +640,9 @@ async function handleLogout() {
           <!-- Empty spacer instead of Sisa Uang app title on mobile -->
           <div class="flex-1"></div>
 
-          <div class="flex items-center shrink-0">
+          <div class="flex items-center gap-1.5 shrink-0">
+            <PWAInstallButton variant="topbar" />
+
             <button
               type="button"
               class="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
@@ -835,6 +844,8 @@ async function handleLogout() {
                 <span>{{ t('nav.logout') }}</span>
               </button>
             </div>
+
+            <PWAInstallButton variant="sidebar" />
           </div>
         </div>
       </div>
@@ -1003,5 +1014,8 @@ async function handleLogout() {
       <!-- Global Quick Transaction Modal (Only for Regular Users) -->
       <QuickTransactionModal v-if="!authStore.isSuperAdmin" />
     </div>
+
+    <!-- Global PWA Offline Mode Indicator -->
+    <OfflineIndicator />
   </div>
 </template>

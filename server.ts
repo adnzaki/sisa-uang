@@ -1,4 +1,5 @@
 import express, { Request, Response, NextFunction } from 'express';
+import http from 'http';
 import { createServer as createViteServer } from 'vite';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
@@ -170,6 +171,7 @@ function sanitizeUser(u: ServerUserRecord): Omit<ServerUserRecord, 'passwordHash
 
 async function startServer() {
   const app = express();
+  const httpServer = http.createServer(app);
   const PORT = 3000;
 
   app.use(express.json({ limit: '100mb' }));
@@ -957,9 +959,42 @@ async function startServer() {
   // =========================================================================
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: {
+          server: httpServer,
+        },
+      },
       appType: 'spa',
     });
+
+    // Prevent @vite/client from throwing "WebSocket closed without opened" in preview environments where HMR WebSockets are disabled
+    app.use(async (req: Request, res: Response, next: NextFunction) => {
+      if (req.path === '/@vite/client') {
+        try {
+          const transformed = await vite.transformRequest(req.url);
+          if (transformed?.code) {
+            const safeClientCode = transformed.code
+              .replace(
+                'const createWebSocketModuleRunnerTransport = (options) => {',
+                'const createWebSocketModuleRunnerTransport = (_options) => ({ async connect() {}, disconnect() {}, send() {} }); const __unusedWebSocketTransport = (options) => {'
+              )
+              .replace(
+                /new Error\("WebSocket closed without opened\."\)/g,
+                'null'
+              );
+            res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+            res.status(200).send(safeClientCode);
+            return;
+          }
+        } catch {
+          // Fallback to default vite middleware
+        }
+      }
+      next();
+    });
+
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(__dirname, 'dist');
@@ -969,7 +1004,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Sisa Uang server running on http://0.0.0.0:${PORT}`);
   });
 }

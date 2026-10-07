@@ -400,33 +400,22 @@ async function handleDeleteEditingCategory() {
     <AppModal
       v-model="showAddCategoryModal"
       title="Tambah Kategori Kustom Baru"
-      subtitle="Buat kategori pemasukan atau pengeluaran sesuai kebutuhan Anda"
     >
-      <form id="add-category-modal-form" class="space-y-4" @submit.prevent="handleAddCategory">
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Nama Kategori Kustom
-          </label>
-          <input
-            v-model="newCatName"
-            type="text"
-            required
-            maxlength="50"
-            placeholder="Contoh: Belanja Dapur, Sedekah, Royalti..."
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+      <form id="add-category-modal-form" class="space-y-3.5" @submit.prevent="handleAddCategory">
+        <input
+          v-model="newCatName"
+          type="text"
+          required
+          maxlength="50"
+          placeholder="Nama Kategori Kustom (Misal: Belanja Dapur, Sedekah)"
+          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        />
 
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Jenis Kategori
-          </label>
-          <CustomSelect
-            v-model="newCatType"
-            :options="categoryTypeOptions"
-            placeholder="Pilih jenis kategori"
-          />
-        </div>
+        <CustomSelect
+          v-model="newCatType"
+          :options="categoryTypeOptions"
+          placeholder="Jenis Kategori"
+        />
       </form>
 
       <template #footer>
@@ -434,7 +423,7 @@ async function handleDeleteEditingCategory() {
           <button
             type="submit"
             form="add-category-modal-form"
-            class="w-full sm:w-auto min-h-[46px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+            class="w-full sm:w-auto min-h-[48px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
           >
             <Check class="w-4 h-4 shrink-0" />
             <span>Simpan Kategori</span>
@@ -449,37 +438,27 @@ async function handleDeleteEditingCategory() {
     <AppModal
       v-model="isEditCategoryOpen"
       title="Ubah Kategori Kustom"
-      :subtitle="editingCategory ? `Kategori: ${editingCategory.name}` : ''"
     >
       <form
         v-if="editingCategory"
         id="edit-category-modal-form"
-        class="space-y-4"
+        class="space-y-3.5"
         @submit.prevent="handleSaveEditCategory"
       >
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Nama Kategori
-          </label>
-          <input
-            v-model="editCatName"
-            type="text"
-            required
-            maxlength="50"
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-          />
-        </div>
+        <input
+          v-model="editCatName"
+          type="text"
+          required
+          maxlength="50"
+          placeholder="Nama Kategori"
+          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        />
 
-        <div>
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Jenis Kategori
-          </label>
-          <CustomSelect
-            v-model="editCatType"
-            :options="categoryTypeOptions"
-            placeholder="Pilih jenis kategori"
-          />
-        </div>
+        <CustomSelect
+          v-model="editCatType"
+          :options="categoryTypeOptions"
+          placeholder="Jenis Kategori"
+        />
       </form>
 
       <template #footer>
