@@ -12,6 +12,7 @@ import {
   formatTransactionDateBadge,
 } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
+import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 
 const { t, locale } = useI18n();
 const financeStore = useFinanceStore();
@@ -21,6 +22,29 @@ const typeFilter = ref<'all' | 'income' | 'expense' | 'transfer'>('all');
 const searchQuery = ref('');
 const selectedWalletId = ref<string>('all');
 const selectedHolderFilter = ref<string>('all');
+
+const periodFilterOptions = computed<SelectOptionItem[]>(() => [
+  { value: 'all', label: 'Semua Periode' },
+  ...financeStore.availablePeriods.map((p) => ({
+    value: p,
+    label: formatPeriodLabel(p, locale.value === 'id' ? 'id-ID' : 'en-US'),
+  })),
+]);
+
+const typeFilterOptions = computed<SelectOptionItem[]>(() => [
+  { value: 'all', label: 'Semua Jenis' },
+  { value: 'expense', label: t('transactions.expense') },
+  { value: 'income', label: t('transactions.income') },
+  { value: 'transfer', label: t('transactions.transfer') },
+]);
+
+const walletFilterOptions = computed<SelectOptionItem[]>(() => [
+  { value: 'all', label: 'Semua Sumber Dana' },
+  ...financeStore.wallets.map((w) => ({
+    value: w.id,
+    label: w.name,
+  })),
+]);
 
 const filteredTransactions = computed(() => {
   return financeStore.periodTransactions.filter((tx) => {
@@ -67,6 +91,14 @@ const uniqueHolderNames = computed(() => {
   return Array.from(set);
 });
 
+const holderFilterOptions = computed<SelectOptionItem[]>(() => [
+  { value: 'all', label: 'Semua Kepemilikan' },
+  ...uniqueHolderNames.value.map((name) => ({
+    value: name,
+    label: name,
+  })),
+]);
+
 const filteredTotalIncome = computed(() =>
   filteredTransactions.value
     .filter((tx) => tx.type === 'income')
@@ -74,9 +106,13 @@ const filteredTotalIncome = computed(() =>
 );
 
 const filteredTotalExpense = computed(() =>
-  filteredTransactions.value
-    .filter((tx) => tx.type === 'expense')
-    .reduce((acc, tx) => acc + Number(tx.amount || 0), 0)
+  filteredTransactions.value.reduce((acc, tx) => {
+    if (tx.type === 'expense') return acc + Number(tx.amount || 0);
+    if (tx.type === 'transfer' && Number(tx.adminFee || 0) > 0) {
+      return acc + Number(tx.adminFee || 0);
+    }
+    return acc;
+  }, 0)
 );
 
 const filteredNetDifference = computed(
@@ -117,7 +153,7 @@ function getDateBadge(dateStr: string) {
         <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
           TOTAL PEMASUKAN
         </div>
-        <div class="text-xl sm:text-2xl font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400 mt-1 truncate">
+        <div class="text-xl sm:text-2xl font-money font-bold text-emerald-600 dark:text-emerald-400 mt-1 truncate">
           {{ themeStore.formatMoney(filteredTotalIncome) }}
         </div>
       </div>
@@ -126,7 +162,7 @@ function getDateBadge(dateStr: string) {
         <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
           TOTAL PENGELUARAN
         </div>
-        <div class="text-xl sm:text-2xl font-mono font-bold tabular-nums text-rose-600 dark:text-rose-400 mt-1 truncate">
+        <div class="text-xl sm:text-2xl font-money font-bold text-rose-600 dark:text-rose-400 mt-1 truncate">
           {{ themeStore.formatMoney(filteredTotalExpense) }}
         </div>
       </div>
@@ -136,7 +172,7 @@ function getDateBadge(dateStr: string) {
           SELISIH BERSIH
         </div>
         <div
-          class="text-xl sm:text-2xl font-mono font-bold tabular-nums mt-1 truncate"
+          class="text-xl sm:text-2xl font-money font-bold mt-1 truncate"
           :class="
             filteredNetDifference >= 0
               ? 'text-emerald-600 dark:text-emerald-400'
@@ -161,63 +197,39 @@ function getDateBadge(dateStr: string) {
         />
       </div>
 
-      <!-- 2x2 Filter Grid on Mobile, 4 Columns on Desktop -->
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-        <select
+      <!-- 2x2 Filter Grid on Mobile, 4 Columns on Desktop (Using CustomSelect) -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+        <CustomSelect
           v-model="financeStore.selectedPeriod"
+          :options="periodFilterOptions"
+          size="sm"
           aria-label="Pilih Periode Bulan"
-          class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600 truncate"
-        >
-          <option value="all">Semua Periode</option>
-          <option
-            v-for="p in financeStore.availablePeriods"
-            :key="p"
-            :value="p"
-          >
-            {{ formatPeriodLabel(p, locale === 'id' ? 'id-ID' : 'en-US') }}
-          </option>
-        </select>
+        />
 
-        <select
+        <CustomSelect
           v-model="typeFilter"
+          :options="typeFilterOptions"
+          size="sm"
           aria-label="Filter Jenis Transaksi"
-          class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600 truncate"
-        >
-          <option value="all">Semua Jenis</option>
-          <option value="expense">{{ t('transactions.expense') }}</option>
-          <option value="income">{{ t('transactions.income') }}</option>
-          <option value="transfer">{{ t('transactions.transfer') }}</option>
-        </select>
+        />
 
-        <select
+        <CustomSelect
           v-model="selectedWalletId"
+          :options="walletFilterOptions"
+          size="sm"
+          searchable
+          search-placeholder="Cari sumber dana..."
           aria-label="Filter Sumber Dana"
-          class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600 truncate"
-        >
-          <option value="all">Semua Sumber Dana</option>
-          <option
-            v-for="w in financeStore.wallets"
-            :key="w.id"
-            :value="w.id"
-          >
-            {{ w.name }}
-          </option>
-        </select>
+        />
 
-        <select
+        <CustomSelect
           v-model="selectedHolderFilter"
+          :options="holderFilterOptions"
+          size="sm"
+          searchable
+          search-placeholder="Cari kepemilikan..."
           aria-label="Filter Kepemilikan"
-          class="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600 truncate"
-        >
-          <option value="all">Semua Kepemilikan</option>
-          <option
-            v-for="holderName in uniqueHolderNames"
-            :key="holderName"
-            :value="holderName"
-          >
-            {{ holderName }}
-          </option>
-        </select>
+        />
       </div>
     </div>
 
@@ -271,7 +283,7 @@ function getDateBadge(dateStr: string) {
                 : 'bg-rose-50/90 dark:bg-rose-950/40 border-rose-200/60 dark:border-rose-900/50 text-rose-600 dark:text-rose-400'
             "
           >
-            <span class="text-base sm:text-lg font-bold font-mono leading-none">
+            <span class="text-base sm:text-lg font-bold font-money leading-none">
               {{ getDateBadge(tx.date).day }}
             </span>
             <span class="text-[10px] font-semibold leading-tight mt-1 text-center px-0.5 truncate max-w-full">
@@ -310,18 +322,26 @@ function getDateBadge(dateStr: string) {
               {{ tx.note }}
             </div>
 
-            <!-- Amount -->
-            <div
-              class="text-sm sm:text-base font-mono font-bold tabular-nums mt-0.5"
-              :class="
-                tx.type === 'income'
-                  ? 'text-emerald-600 dark:text-emerald-400'
-                  : tx.type === 'transfer'
-                  ? 'text-indigo-600 dark:text-indigo-400'
-                  : 'text-rose-600 dark:text-rose-400'
-              "
-            >
-              {{ tx.type === 'income' ? '+' : tx.type === 'transfer' ? '⇄ ' : '-' }}{{ themeStore.formatMoney(tx.amount) }}
+            <!-- Amount + Optional Admin Fee Badge -->
+            <div class="flex flex-wrap items-center gap-2 mt-0.5">
+              <span
+                class="text-sm sm:text-base font-money font-bold"
+                :class="
+                  tx.type === 'income'
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : tx.type === 'transfer'
+                    ? 'text-indigo-600 dark:text-indigo-400'
+                    : 'text-rose-600 dark:text-rose-400'
+                "
+              >
+                {{ tx.type === 'income' ? '+' : tx.type === 'transfer' ? '⇄ ' : '-' }}{{ themeStore.formatMoney(tx.amount) }}
+              </span>
+              <span
+                v-if="tx.type === 'transfer' && Number(tx.adminFee || 0) > 0"
+                class="px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 text-[10px] font-money font-semibold"
+              >
+                +Biaya Admin {{ themeStore.formatMoney(Number(tx.adminFee)) }}
+              </span>
             </div>
           </div>
         </div>

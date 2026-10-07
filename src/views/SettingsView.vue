@@ -7,6 +7,8 @@ import {
   Moon,
   Monitor,
   Globe,
+  Type,
+  Code2,
   ShieldCheck,
   Database,
   Upload,
@@ -155,7 +157,7 @@ async function handleSaveProfile() {
           <div class="grid grid-cols-2 gap-2">
             <button
               type="button"
-              class="min-h-[44px] px-2 rounded-xl border text-xs font-mono font-semibold transition-colors"
+              class="min-h-[44px] px-2 rounded-xl border text-xs font-money font-semibold transition-colors"
               :class="
                 themeStore.currency === 'IDR'
                   ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
@@ -167,7 +169,7 @@ async function handleSaveProfile() {
             </button>
             <button
               type="button"
-              class="min-h-[44px] px-2 rounded-xl border text-xs font-mono font-semibold transition-colors"
+              class="min-h-[44px] px-2 rounded-xl border text-xs font-money font-semibold transition-colors"
               :class="
                 themeStore.currency === 'USD'
                   ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
@@ -179,6 +181,113 @@ async function handleSaveProfile() {
             </button>
           </div>
         </div>
+      </div>
+    </section>
+
+    <!-- Typography for Money Numbers (Sans Default vs Monospace / Coding Font) -->
+    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
+      <div class="flex items-start justify-between gap-3">
+        <div class="space-y-0.5">
+          <div class="flex items-center gap-2">
+            <Type class="w-4 h-4 text-emerald-600 shrink-0" />
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Tipografi & Jenis Font Angka Uang
+            </h2>
+          </div>
+          <p class="text-xs text-slate-500 dark:text-slate-400">
+            Pilih jenis huruf untuk menampilkan nominal saldo, pemasukan, dan pengeluaran di seluruh aplikasi.
+          </p>
+        </div>
+
+        <span class="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/70 dark:border-emerald-900/50 text-[11px] font-bold text-emerald-700 dark:text-emerald-300 shrink-0">
+          {{ themeStore.moneyFont === 'sans' ? 'Standar (Default)' : 'Coding / Mono' }}
+        </span>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <!-- Option 1: Font Standar Aplikasi (Plus Jakarta Sans) - Default -->
+        <button
+          type="button"
+          class="p-4 rounded-2xl border text-left transition-all flex flex-col justify-between gap-3 cursor-pointer"
+          :class="
+            themeStore.moneyFont === 'sans'
+              ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/35 ring-2 ring-emerald-500/15'
+              : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-slate-50/40 dark:bg-slate-950/40'
+          "
+          @click="themeStore.setMoneyFont('sans')"
+        >
+          <div class="flex items-start justify-between gap-2 w-full">
+            <div class="flex items-center gap-2">
+              <div
+                class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
+                :class="
+                  themeStore.moneyFont === 'sans'
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                "
+              >
+                <Type class="w-4 h-4" />
+              </div>
+              <div>
+                <div class="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
+                  Font Standar Aplikasi
+                </div>
+                <div class="text-[11px] text-slate-500 dark:text-slate-400">
+                  Plus Jakarta Sans (Selaras teks aplikasi · Default)
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800 text-base sm:text-lg font-bold tabular-nums text-emerald-600 dark:text-emerald-400"
+            style="font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+          >
+            Rp 12.450.000
+          </div>
+        </button>
+
+        <!-- Option 2: Font Coding / Monospace (JetBrains Mono) -->
+        <button
+          type="button"
+          class="p-4 rounded-2xl border text-left transition-all flex flex-col justify-between gap-3 cursor-pointer"
+          :class="
+            themeStore.moneyFont === 'mono'
+              ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/35 ring-2 ring-emerald-500/15'
+              : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-slate-50/40 dark:bg-slate-950/40'
+          "
+          @click="themeStore.setMoneyFont('mono')"
+        >
+          <div class="flex items-start justify-between gap-2 w-full">
+            <div class="flex items-center gap-2">
+              <div
+                class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
+                :class="
+                  themeStore.moneyFont === 'mono'
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                "
+              >
+                <Code2 class="w-4 h-4" />
+              </div>
+              <div>
+                <div class="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
+                  Font Coding / Monospace
+                </div>
+                <div class="text-[11px] text-slate-500 dark:text-slate-400">
+                  JetBrains Mono (Gaya angka finansial & koding)
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800 text-base sm:text-lg font-bold tabular-nums text-emerald-600 dark:text-emerald-400"
+            style="font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace"
+          >
+            Rp 12.450.000
+          </div>
+        </button>
       </div>
     </section>
 

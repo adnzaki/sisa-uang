@@ -47,6 +47,17 @@
     font-family: var(--font-money);
     font-variant-numeric: tabular-nums;
   }
+
+  @media (max-width: 639px) {
+    input[type="text"],
+    input[type="number"],
+    input[type="email"],
+    input[type="password"],
+    input[type="search"] {
+      min-height: 48px;
+      font-size: 0.875rem;
+    }
+  }
 }
 
 /* ========================================================================= */

@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { watch, onMounted, onBeforeUnmount } from 'vue';
+import { computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { X } from 'lucide-vue-next';
 
 const props = withDefaults(
   defineProps<{
-    open: boolean;
+    modelValue?: boolean;
+    open?: boolean;
     title: string;
     subtitle?: string;
     maxWidth?: 'md' | 'lg' | 'xl' | '2xl';
     hideFooter?: boolean;
   }>(),
   {
+    modelValue: undefined,
+    open: undefined,
     subtitle: '',
     maxWidth: 'lg',
     hideFooter: false,
@@ -18,34 +21,42 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
+  (e: 'update:modelValue', value: boolean): void;
   (e: 'close'): void;
 }>();
+
+const isOpen = computed(() => Boolean(props.modelValue ?? props.open));
+
+function closeModal() {
+  emit('update:modelValue', false);
+  emit('close');
+}
 
 const modalInstanceKey = `su_modal_${Math.random().toString(36).slice(2, 9)}`;
 let hasPushedHistoryState = false;
 let isClosedByBackButton = false;
 
 function handlePopState() {
-  if (!props.open) return;
+  if (!isOpen.value) return;
   if (hasPushedHistoryState) {
     isClosedByBackButton = true;
     hasPushedHistoryState = false;
-    emit('close');
+    closeModal();
   }
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  if (!props.open) return;
+  if (!isOpen.value) return;
   if (e.key === 'Escape') {
-    emit('close');
+    closeModal();
   }
 }
 
 watch(
-  () => props.open,
-  (isOpen) => {
+  isOpen,
+  (val) => {
     if (typeof window === 'undefined') return;
-    if (isOpen) {
+    if (val) {
       isClosedByBackButton = false;
       try {
         const currentState = window.history.state || {};
@@ -99,9 +110,9 @@ onBeforeUnmount(() => {
 <template>
   <Transition name="modal">
     <div
-      v-if="open"
+      v-if="isOpen"
       class="fixed inset-0 z-50 flex items-stretch sm:items-center justify-center bg-black/55 backdrop-blur-xs p-0 sm:p-4"
-      @click.self="emit('close')"
+      @click.self="closeModal"
     >
       <!--
         Mobile (< sm): Full screen (w-full h-dvh max-h-dvh rounded-none)
@@ -122,18 +133,12 @@ onBeforeUnmount(() => {
         ]"
       >
         <!-- FIXED MODAL HEADER (Top) -->
-        <div class="shrink-0 px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between gap-3 z-10">
+        <div class="shrink-0 px-3.5 sm:px-6 py-3 sm:py-4 border-b border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between gap-3 z-10">
           <div class="min-w-0 flex-1">
             <slot name="header">
               <h2 class="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 truncate">
                 {{ title }}
               </h2>
-              <p
-                v-if="subtitle"
-                class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1"
-              >
-                {{ subtitle }}
-              </p>
             </slot>
           </div>
 
@@ -142,8 +147,8 @@ onBeforeUnmount(() => {
             <button
               type="button"
               aria-label="Tutup modal"
-              class="min-h-[42px] min-w-[42px] flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              @click="emit('close')"
+              class="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              @click="closeModal"
             >
               <X class="w-5 h-5" />
             </button>
@@ -151,14 +156,14 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- SCROLLABLE MODAL CONTENT (Middle) -->
-        <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 sm:p-6">
+        <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3.5 py-4 sm:p-6">
           <slot />
         </div>
 
         <!-- FIXED MODAL FOOTER (Bottom) -->
         <div
           v-if="!hideFooter && $slots.footer"
-          class="shrink-0 px-4 sm:px-6 py-3.5 sm:py-4 border-t border-slate-200/80 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-10"
+          class="shrink-0 px-3.5 sm:px-6 py-3 sm:py-4 border-t border-slate-200/80 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-10"
         >
           <slot name="footer" />
         </div>

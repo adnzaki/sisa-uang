@@ -22,6 +22,7 @@ import {
 } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
+import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 
 const { t, locale } = useI18n();
 const financeStore = useFinanceStore();
@@ -29,6 +30,17 @@ const themeStore = useThemeStore();
 const authStore = useAuthStore();
 
 const recentTransactions = computed(() => financeStore.periodTransactions.slice(0, 8));
+
+const periodOptions = computed<SelectOptionItem[]>(() => [
+  {
+    value: 'all',
+    label: `Semua Periode (${financeStore.transactions.length} Transaksi)`,
+  },
+  ...financeStore.availablePeriods.map((p) => ({
+    value: p,
+    label: formatPeriodLabel(p, locale.value === 'id' ? 'id-ID' : 'en-US'),
+  })),
+]);
 
 const budgetUtilizationPercent = computed(() => {
   if (financeStore.totalBudgetLimit <= 0) return 0;
@@ -67,23 +79,17 @@ function getDateBadge(dateStr: string) {
       </div>
 
       <div class="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2">
-        <!-- Period Selector (Synced with real Firestore transaction months) -->
-        <div class="relative flex items-center w-full sm:w-auto">
-          <Calendar class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 absolute left-3 pointer-events-none" />
-          <select
+        <!-- Period Selector (CustomSelect synced with real Firestore transaction months) -->
+        <div class="w-full sm:w-64">
+          <CustomSelect
             v-model="financeStore.selectedPeriod"
+            :options="periodOptions"
             aria-label="Pilih Periode Bulan"
-            class="w-full sm:w-auto min-h-[44px] pl-8 pr-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600 truncate"
           >
-            <option value="all">Semua Periode ({{ financeStore.transactions.length }} Transaksi)</option>
-            <option
-              v-for="p in financeStore.availablePeriods"
-              :key="p"
-              :value="p"
-            >
-              {{ formatPeriodLabel(p, locale === 'id' ? 'id-ID' : 'en-US') }}
-            </option>
-          </select>
+            <template #icon>
+              <Calendar class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            </template>
+          </CustomSelect>
         </div>
 
         <RouterLink
@@ -94,8 +100,6 @@ function getDateBadge(dateStr: string) {
           <ShieldAlert class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
           <span>{{ t('nav.controlPanel') }}</span>
         </RouterLink>
-
-        
       </div>
     </div>
 
@@ -113,7 +117,7 @@ function getDateBadge(dateStr: string) {
             </span>
           </div>
           <div
-            class="text-2xl sm:text-4xl font-mono font-bold tabular-nums tracking-tight text-slate-900 dark:text-slate-100 truncate"
+            class="text-2xl sm:text-4xl font-money font-bold tracking-tight text-slate-900 dark:text-slate-100 truncate"
           >
             {{ themeStore.formatMoney(financeStore.sisaUangBulanIni) }}
           </div>
@@ -121,14 +125,14 @@ function getDateBadge(dateStr: string) {
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600 dark:text-slate-400">
             <span>
               {{ t('app.safeDailySpend') }}:
-              <strong class="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+              <strong class="font-money text-emerald-600 dark:text-emerald-400">
                 {{ themeStore.formatMoney(financeStore.safeDailySpend) }}/hari
               </strong>
             </span>
             <span aria-hidden="true">·</span>
             <span>
               Rasio Tabungan:
-              <strong class="font-mono tabular-nums text-slate-900 dark:text-slate-100">
+              <strong class="font-money text-slate-900 dark:text-slate-100">
                 {{ financeStore.savingsRate }}%
               </strong>
             </span>
@@ -136,7 +140,7 @@ function getDateBadge(dateStr: string) {
             <span>
               Selisih Periode:
               <strong
-                class="font-mono tabular-nums"
+                class="font-money"
                 :class="
                   financeStore.periodNetCashflow >= 0
                     ? 'text-emerald-600 dark:text-emerald-400'
@@ -152,7 +156,7 @@ function getDateBadge(dateStr: string) {
           <div v-if="financeStore.totalBudgetLimit > 0" class="space-y-1.5 pt-1">
             <div class="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
               <span>Serapan Anggaran ({{ activePeriodLabel }})</span>
-              <span class="font-mono tabular-nums">{{ budgetUtilizationPercent }}% terpakai</span>
+              <span class="font-money">{{ budgetUtilizationPercent }}% terpakai</span>
             </div>
             <div class="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
               <div
@@ -191,7 +195,7 @@ function getDateBadge(dateStr: string) {
             <span class="text-xs text-slate-500 dark:text-slate-400 truncate">
               {{ t('dashboard.totalBalance') }}
             </span>
-            <span class="text-sm font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100 shrink-0">
+            <span class="text-sm font-money font-bold text-slate-900 dark:text-slate-100 shrink-0">
               {{ themeStore.formatMoney(financeStore.totalBalance) }}
             </span>
           </div>
@@ -201,7 +205,7 @@ function getDateBadge(dateStr: string) {
               <ArrowDownLeft class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span class="truncate">{{ t('dashboard.monthlyIncome') }}</span>
             </span>
-            <span class="text-sm font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400 shrink-0">
+            <span class="text-sm font-money font-bold text-emerald-600 dark:text-emerald-400 shrink-0">
               +{{ themeStore.formatMoney(financeStore.monthlyIncome) }}
             </span>
           </div>
@@ -211,7 +215,7 @@ function getDateBadge(dateStr: string) {
               <ArrowUpRight class="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
               <span class="truncate">{{ t('dashboard.monthlyExpense') }}</span>
             </span>
-            <span class="text-sm font-mono font-bold tabular-nums text-rose-600 dark:text-rose-400 shrink-0">
+            <span class="text-sm font-money font-bold text-rose-600 dark:text-rose-400 shrink-0">
               -{{ themeStore.formatMoney(financeStore.monthlyExpense) }}
             </span>
           </div>
@@ -221,7 +225,7 @@ function getDateBadge(dateStr: string) {
               <ArrowLeftRight class="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
               <span class="truncate">Transfer Antar Dana</span>
             </span>
-            <span class="text-sm font-mono font-bold tabular-nums text-indigo-600 dark:text-indigo-400 shrink-0">
+            <span class="text-sm font-money font-bold text-indigo-600 dark:text-indigo-400 shrink-0">
               ⇄ {{ themeStore.formatMoney(financeStore.monthlyTransfer) }}
             </span>
           </div>
@@ -262,10 +266,10 @@ function getDateBadge(dateStr: string) {
               {{ owner.walletCount }} sumber
             </span>
           </div>
-          <div class="text-lg font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400 truncate">
+          <div class="text-lg font-money font-bold text-emerald-600 dark:text-emerald-400 truncate">
             {{ themeStore.formatMoney(owner.totalBalance) }}
           </div>
-          <div class="text-xs text-slate-500 dark:text-slate-400 truncate">
+          <div class="text-xs text-slate-500 dark:text-slate-400 truncate font-money">
             {{ owner.wallets.map((w) => `${w.walletName}: ${themeStore.formatMoney(w.balance)}`).join(' · ') }}
           </div>
         </RouterLink>
@@ -319,17 +323,19 @@ function getDateBadge(dateStr: string) {
           <div class="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 truncate">
             {{ wallet.name }}
           </div>
-          <div class="text-base sm:text-lg font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400 truncate">
+          <div class="text-base sm:text-lg font-money font-bold text-emerald-600 dark:text-emerald-400 truncate">
             {{ themeStore.formatMoney(wallet.balance) }}
           </div>
           <div class="text-xs text-slate-500 dark:text-slate-400 truncate">
             Pemilik:
-            {{
-              financeStore
-                .getHoldersByWalletId(wallet.id)
-                .map((h) => `${formatHolderName(h.holderName)} (${themeStore.formatMoney(h.balance)})`)
-                .join(', ') || 'Pribadi'
-            }}
+            <span class="font-money">
+              {{
+                financeStore
+                  .getHoldersByWalletId(wallet.id)
+                  .map((h) => `${formatHolderName(h.holderName)} (${themeStore.formatMoney(h.balance)})`)
+                  .join(', ') || 'Pribadi'
+              }}
+            </span>
           </div>
         </RouterLink>
       </div>
@@ -400,7 +406,7 @@ function getDateBadge(dateStr: string) {
                     : 'bg-rose-50/90 dark:bg-rose-950/40 border-rose-200/60 dark:border-rose-900/50 text-rose-600 dark:text-rose-400'
                 "
               >
-                <span class="text-sm sm:text-base font-bold font-mono leading-none">
+                <span class="text-sm sm:text-base font-bold font-money leading-none">
                   {{ getDateBadge(tx.date).day }}
                 </span>
                 <span class="text-[10px] font-semibold leading-tight mt-1 text-center px-0.5 truncate max-w-full">
@@ -436,17 +442,25 @@ function getDateBadge(dateStr: string) {
                   {{ tx.note }}
                 </div>
 
-                <div
-                  class="text-sm font-mono font-bold tabular-nums mt-0.5"
-                  :class="
-                    tx.type === 'income'
-                      ? 'text-emerald-600 dark:text-emerald-400'
-                      : tx.type === 'transfer'
-                      ? 'text-indigo-600 dark:text-indigo-400'
-                      : 'text-rose-600 dark:text-rose-400'
-                  "
-                >
-                  {{ tx.type === 'income' ? '+' : tx.type === 'transfer' ? '⇄ ' : '-' }}{{ themeStore.formatMoney(tx.amount) }}
+                <div class="flex flex-wrap items-center gap-2 mt-0.5">
+                  <span
+                    class="text-sm font-money font-bold"
+                    :class="
+                      tx.type === 'income'
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : tx.type === 'transfer'
+                        ? 'text-indigo-600 dark:text-indigo-400'
+                        : 'text-rose-600 dark:text-rose-400'
+                    "
+                  >
+                    {{ tx.type === 'income' ? '+' : tx.type === 'transfer' ? '⇄ ' : '-' }}{{ themeStore.formatMoney(tx.amount) }}
+                  </span>
+                  <span
+                    v-if="tx.type === 'transfer' && Number(tx.adminFee || 0) > 0"
+                    class="px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 text-[10px] font-money font-semibold"
+                  >
+                    +Biaya Admin {{ themeStore.formatMoney(Number(tx.adminFee)) }}
+                  </span>
                 </div>
               </div>
             </div>
@@ -508,7 +522,7 @@ function getDateBadge(dateStr: string) {
               <span class="font-bold text-slate-800 dark:text-slate-200 truncate">
                 {{ b.category }}
               </span>
-              <span class="font-mono tabular-nums text-slate-500 dark:text-slate-400 shrink-0">
+              <span class="font-money text-slate-500 dark:text-slate-400 shrink-0">
                 {{ t('budgets.remaining') }}:
                 <strong class="text-slate-900 dark:text-slate-100">
                   {{ themeStore.formatMoney(b.remaining) }}
@@ -530,7 +544,7 @@ function getDateBadge(dateStr: string) {
               ></div>
             </div>
 
-            <div class="flex items-center justify-between text-[11px] text-slate-400 font-mono tabular-nums">
+            <div class="flex items-center justify-between text-[11px] text-slate-400 font-money">
               <span>Terpakai {{ themeStore.formatMoney(b.spentAmount) }}</span>
               <span>Batas {{ themeStore.formatMoney(b.limitAmount) }} ({{ b.percentage }}%)</span>
             </div>

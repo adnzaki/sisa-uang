@@ -45,6 +45,8 @@ import {
   type ConvertedFirestoreCollections,
   type TargetCollectionCategory,
 } from '../utils/jsonMigrationParser';
+import AppModal from '../components/AppModal.vue';
+import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -466,6 +468,48 @@ function formatExplorerCellValue(val: any): string {
   if (typeof val === 'object') return JSON.stringify(val);
   return String(val);
 }
+
+const isInspectingRawDocOpen = computed({
+  get: () => inspectingRawDoc.value !== null,
+  set: (val: boolean) => {
+    if (!val) inspectingRawDoc.value = null;
+  },
+});
+
+const explorerSoftDeleteOptions: SelectOptionItem[] = [
+  { value: 'all', label: 'Semua Dokumen' },
+  { value: 'active', label: 'Hanya Aktif (!deleted)' },
+  { value: 'deleted', label: 'Hanya Terhapus (deleted: true)' },
+];
+
+const explorerFieldSelectOptions = computed<SelectOptionItem[]>(() =>
+  explorerAvailableFields.value.map((f) => ({
+    value: f,
+    label: f === '__docId' ? '__docId (Document ID)' : f,
+  }))
+);
+
+const explorerOperatorSelectOptions = computed<SelectOptionItem[]>(() =>
+  EXPLORER_OPERATOR_OPTIONS.map((op) => ({
+    value: op.value,
+    label: op.label,
+  }))
+);
+
+const explorerLimitSelectOptions: SelectOptionItem[] = [
+  { value: 10, label: '10 baris' },
+  { value: 25, label: '25 baris' },
+  { value: 50, label: '50 baris' },
+  { value: 100, label: '100 baris' },
+  { value: 500, label: '500 baris' },
+];
+
+const tablePageSizeSelectOptions: SelectOptionItem[] = [
+  { value: 10, label: '10 / hal' },
+  { value: 25, label: '25 / hal' },
+  { value: 50, label: '50 / hal' },
+  { value: 100, label: '100 / hal' },
+];
 
 async function copyInspectingDocJson() {
   if (!inspectingRawDoc.value) return;
@@ -1268,15 +1312,12 @@ async function confirmAndExecuteImport() {
             <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
               Status Soft Delete
             </label>
-            <select
+            <CustomSelect
               v-model="explorerSoftDeleteFilter"
-              class="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600"
+              :options="explorerSoftDeleteOptions"
+              size="sm"
               @change="explorerCurrentPage = 1"
-            >
-              <option value="all">Semua Dokumen</option>
-              <option value="active">Hanya Aktif (!deleted)</option>
-              <option value="deleted">Hanya Terhapus (deleted: true)</option>
-            </select>
+            />
           </div>
 
           <!-- Sort Field (ORDER BY) -->
@@ -1284,14 +1325,12 @@ async function confirmAndExecuteImport() {
             <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
               Urutkan Kolom (ORDER BY)
             </label>
-            <select
+            <CustomSelect
               v-model="explorerSortField"
-              class="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600"
-            >
-              <option v-for="f in explorerAvailableFields" :key="f" :value="f">
-                {{ f === '__docId' ? '__docId (Document ID)' : f }}
-              </option>
-            </select>
+              :options="explorerFieldSelectOptions"
+              searchable
+              size="sm"
+            />
           </div>
 
           <!-- Sort Direction (ASC / DESC) -->
@@ -1301,7 +1340,7 @@ async function confirmAndExecuteImport() {
             </label>
             <button
               type="button"
-              class="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-800 dark:text-slate-200 flex items-center justify-between gap-2 hover:border-emerald-500 transition-colors"
+              class="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-800 dark:text-slate-200 flex items-center justify-between gap-2 hover:border-emerald-500 transition-colors"
               @click="explorerSortOrder = explorerSortOrder === 'asc' ? 'desc' : 'asc'"
             >
               <span>{{ explorerSortOrder === 'asc' ? 'ASC (A-Z / 0-9)' : 'DESC (Z-A / 9-0)' }}</span>
@@ -1315,17 +1354,12 @@ async function confirmAndExecuteImport() {
             <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
               Limit
             </label>
-            <select
-              v-model.number="explorerLimitPerPage"
-              class="w-full min-h-[40px] px-2 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600"
+            <CustomSelect
+              v-model="explorerLimitPerPage"
+              :options="explorerLimitSelectOptions"
+              size="sm"
               @change="explorerCurrentPage = 1"
-            >
-              <option :value="10">10</option>
-              <option :value="25">25</option>
-              <option :value="50">50</option>
-              <option :value="100">100</option>
-              <option :value="500">500</option>
-            </select>
+            />
           </div>
         </div>
 
@@ -1374,32 +1408,23 @@ async function confirmAndExecuteImport() {
 
             <!-- Field Selector -->
             <div class="sm:col-span-4">
-              <select
+              <CustomSelect
                 v-model="cond.field"
-                class="w-full min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs font-mono font-semibold text-slate-800 dark:text-slate-200"
+                :options="explorerFieldSelectOptions"
+                searchable
+                size="sm"
                 @change="explorerCurrentPage = 1"
-              >
-                <option v-for="f in explorerAvailableFields" :key="f" :value="f">
-                  {{ f }}
-                </option>
-              </select>
+              />
             </div>
 
             <!-- Operator Selector (==, !=, LIKE, >, <, IN, IS_TRUE, etc.) -->
             <div class="sm:col-span-3">
-              <select
+              <CustomSelect
                 v-model="cond.operator"
-                class="w-full min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-300"
+                :options="explorerOperatorSelectOptions"
+                size="sm"
                 @change="explorerCurrentPage = 1"
-              >
-                <option
-                  v-for="op in EXPLORER_OPERATOR_OPTIONS"
-                  :key="op.value"
-                  :value="op.value"
-                >
-                  {{ op.label }}
-                </option>
-              </select>
+              />
             </div>
 
             <!-- Value Input -->
@@ -1619,70 +1644,54 @@ async function confirmAndExecuteImport() {
         }}</pre>
       </div>
 
-      <!-- Modal Inspect Single Raw Document -->
-      <div
-        v-if="inspectingRawDoc"
-        class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs p-0 sm:p-4"
-        @click.self="inspectingRawDoc = null"
+      <!-- Modal Inspect Single Raw Document (AppModal) -->
+      <AppModal
+        v-model="isInspectingRawDocOpen"
+        title="Inspeksi Detail Dokumen Mentah Firestore"
+        :subtitle="inspectingRawDoc ? `/${explorerSelectedCollection}/${inspectingRawDoc.__docId}` : ''"
+        max-width="2xl"
       >
-        <div class="w-full max-w-2xl max-h-[88dvh] flex flex-col rounded-t-3xl sm:rounded-2xl bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 p-4 sm:p-6 shadow-2xl space-y-4">
-          <div class="flex items-start justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3">
-            <div class="min-w-0">
-              <div class="text-[11px] font-mono font-bold uppercase text-emerald-600 dark:text-emerald-400">
-                /{{ explorerSelectedCollection }}/{{ inspectingRawDoc.__docId }}
+        <div v-if="inspectingRawDoc" class="space-y-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div
+              v-for="fieldKey in Object.keys(inspectingRawDoc)"
+              :key="fieldKey"
+              class="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 p-3 space-y-1"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                  {{ fieldKey }}
+                </span>
+                <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                  {{ inspectingRawDoc[fieldKey] === null ? 'null' : typeof inspectingRawDoc[fieldKey] }}
+                </span>
               </div>
-              <h3 class="text-base font-bold text-slate-900 dark:text-slate-100 truncate mt-0.5">
-                Inspeksi Detail Dokumen Mentah Firestore
-              </h3>
-            </div>
-            <div class="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                class="min-h-[36px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5"
-                @click="copyInspectingDocJson"
-              >
-                <Copy class="w-3.5 h-3.5" />
-                <span>{{ inspectingDocCopied ? 'Tersalin!' : 'Salin JSON' }}</span>
-              </button>
-              <button
-                type="button"
-                class="min-h-[36px] min-w-[36px] rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-center text-slate-500"
-                @click="inspectingRawDoc = null"
-              >
-                <X class="w-4 h-4" />
-              </button>
+              <div class="text-xs font-mono text-slate-900 dark:text-slate-100 break-all">
+                {{ formatExplorerCellValue(inspectingRawDoc[fieldKey]) }}
+              </div>
             </div>
           </div>
 
-          <div class="overflow-y-auto space-y-3 pr-1">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <div
-                v-for="fieldKey in Object.keys(inspectingRawDoc)"
-                :key="fieldKey"
-                class="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 p-3 space-y-1"
-              >
-                <div class="flex items-center justify-between gap-2">
-                  <span class="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400">
-                    {{ fieldKey }}
-                  </span>
-                  <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
-                    {{ inspectingRawDoc[fieldKey] === null ? 'null' : typeof inspectingRawDoc[fieldKey] }}
-                  </span>
-                </div>
-                <div class="text-xs font-mono text-slate-900 dark:text-slate-100 break-all">
-                  {{ formatExplorerCellValue(inspectingRawDoc[fieldKey]) }}
-                </div>
-              </div>
-            </div>
-
-            <div class="rounded-xl border border-slate-800 bg-slate-950 p-3.5 overflow-x-auto">
-              <pre class="text-xs font-mono text-emerald-300">{{
-                JSON.stringify(inspectingRawDoc, null, 2)
-              }}</pre>
-            </div>
+          <div class="rounded-xl border border-slate-800 bg-slate-950 p-3.5 overflow-x-auto">
+            <pre class="text-xs font-mono text-emerald-300">{{
+              JSON.stringify(inspectingRawDoc, null, 2)
+            }}</pre>
           </div>
         </div>
-      </div>
+
+        <template #footer>
+          <div class="flex items-center justify-end w-full">
+            <button
+              type="button"
+              class="w-full sm:w-auto min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5"
+              @click="copyInspectingDocJson"
+            >
+              <Copy class="w-4 h-4 shrink-0" />
+              <span>{{ inspectingDocCopied ? 'JSON Tersalin!' : 'Salin JSON Dokumen' }}</span>
+            </button>
+          </div>
+        </template>
+      </AppModal>
     </section>
 
     <!-- ===================================================================== -->
@@ -2369,16 +2378,14 @@ async function confirmAndExecuteImport() {
                   </button>
                 </div>
 
-                <select
-                  v-model.number="rawTablePageSize"
-                  class="min-h-[38px] px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-semibold text-slate-700 dark:text-slate-300"
-                  @change="rawTableCurrentPage = 1"
-                >
-                  <option :value="10">10 / hal</option>
-                  <option :value="25">25 / hal</option>
-                  <option :value="50">50 / hal</option>
-                  <option :value="100">100 / hal</option>
-                </select>
+                <div class="w-28 shrink-0">
+                  <CustomSelect
+                    v-model="rawTablePageSize"
+                    :options="tablePageSizeSelectOptions"
+                    size="sm"
+                    @change="rawTableCurrentPage = 1"
+                  />
+                </div>
 
                 <button
                   type="button"
@@ -2789,16 +2796,14 @@ async function confirmAndExecuteImport() {
                   </button>
                 </div>
 
-                <select
-                  v-model.number="convertedPageSize"
-                  class="min-h-[36px] px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-semibold text-slate-700 dark:text-slate-300"
-                  @change="convertedCurrentPage = 1"
-                >
-                  <option :value="10">10 / hal</option>
-                  <option :value="25">25 / hal</option>
-                  <option :value="50">50 / hal</option>
-                  <option :value="100">100 / hal</option>
-                </select>
+                <div class="w-28 shrink-0">
+                  <CustomSelect
+                    v-model="convertedPageSize"
+                    :options="tablePageSizeSelectOptions"
+                    size="sm"
+                    @change="convertedCurrentPage = 1"
+                  />
+                </div>
               </div>
             </div>
 
@@ -3101,28 +3106,19 @@ async function confirmAndExecuteImport() {
     </section>
 
     <!-- ===================================================================== -->
-    <!-- MODAL: Confirm Delete Firestore Database Tables (Single or Bulk)      -->
+    <!-- MODAL: Confirm Delete Firestore Database Tables (AppModal)            -->
     <!-- ===================================================================== -->
-    <div
-      v-if="showDeleteFirestoreConfirmModal"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4"
-      @click.self="if (!isDeletingFirestoreCols) showDeleteFirestoreConfirmModal = false;"
+    <AppModal
+      v-model="showDeleteFirestoreConfirmModal"
+      :title="`Konfirmasi Hapus ${pendingDeleteFirestoreCols.length} Tabel Database`"
+      subtitle="Penghapusan permanen dokumen pada Cloud Firestore (sisa-uang)"
+      max-width="lg"
     >
-      <div
-        class="w-full max-w-lg max-h-[92dvh] overflow-y-auto rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-6 shadow-xl space-y-5"
-      >
-        <div class="space-y-2">
-          <div class="w-11 h-11 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center">
-            <Trash2 class="w-5 h-5" />
-          </div>
-          <h3 class="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100">
-            Konfirmasi Hapus {{ pendingDeleteFirestoreCols.length }} Tabel Database
-          </h3>
-          <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-            Apakah Anda yakin ingin mengosongkan/menghapus seluruh isi dari
-            <strong>{{ pendingDeleteFirestoreCols.length }} tabel/koleksi</strong> berikut di Cloud Firestore (<code>sisa-uang</code>)?
-          </p>
-        </div>
+      <div class="space-y-4">
+        <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+          Apakah Anda yakin ingin mengosongkan/menghapus seluruh isi dari
+          <strong>{{ pendingDeleteFirestoreCols.length }} tabel/koleksi</strong> berikut di Cloud Firestore (<code>sisa-uang</code>)?
+        </p>
 
         <div class="rounded-2xl border border-rose-200/80 dark:border-rose-900/50 bg-rose-50/40 dark:bg-rose-950/25 p-4 space-y-2.5 text-xs">
           <div class="font-semibold text-rose-900 dark:text-rose-200">
@@ -3144,51 +3140,36 @@ async function confirmAndExecuteImport() {
             {{ deleteFirestoreProgressText }}
           </p>
         </div>
+      </div>
 
-        <div class="flex flex-col-reverse sm:grid sm:grid-cols-2 gap-2.5 pt-1">
+      <template #footer>
+        <div class="flex items-center justify-end w-full">
           <button
             type="button"
             :disabled="isDeletingFirestoreCols"
-            class="w-full min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
-            @click="showDeleteFirestoreConfirmModal = false"
-          >
-            Batal
-          </button>
-          <button
-            type="button"
-            :disabled="isDeletingFirestoreCols"
-            class="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+            class="w-full sm:w-auto min-h-[46px] px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
             @click="confirmAndExecuteFirestoreCollectionsDelete"
           >
             <Trash2 class="w-4 h-4 shrink-0" />
             <span>{{ isDeletingFirestoreCols ? 'Menghapus Tabel...' : `Ya, Hapus ${pendingDeleteFirestoreCols.length} Tabel` }}</span>
           </button>
         </div>
-      </div>
-    </div>
+      </template>
+    </AppModal>
 
     <!-- ===================================================================== -->
-    <!-- MODAL: Confirm Import Database to Firestore                           -->
+    <!-- MODAL: Confirm Import Database to Firestore (AppModal)                -->
     <!-- ===================================================================== -->
-    <div
-      v-if="showConfirmModal && migrationAnalysis"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4"
-      @click.self="showConfirmModal = false"
+    <AppModal
+      v-model="showConfirmModal"
+      title="Konfirmasi Import Database Baru ke Cloud Firestore"
+      subtitle="Eksekusi Atomic WriteBatch ke database sisa-uang"
+      max-width="lg"
     >
-      <div
-        class="w-full max-w-lg max-h-[92dvh] overflow-y-auto rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-6 shadow-xl space-y-5"
-      >
-        <div class="space-y-2">
-          <div class="w-11 h-11 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-            <Database class="w-5 h-5" />
-          </div>
-          <h3 class="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100">
-            Konfirmasi Import Database Baru ke Cloud Firestore
-          </h3>
-          <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-            Apakah Anda yakin ingin menjalankan proses migrasi dan penulisan data hasil konversi ke database Cloud Firestore (<strong>sisa-uang</strong>)?
-          </p>
-        </div>
+      <div v-if="migrationAnalysis" class="space-y-4">
+        <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+          Apakah Anda yakin ingin menjalankan proses migrasi dan penulisan data hasil konversi ke database Cloud Firestore (<strong>sisa-uang</strong>)?
+        </p>
 
         <div class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/50 bg-emerald-50/50 dark:bg-emerald-950/30 p-4 space-y-2.5 text-xs">
           <div class="font-semibold text-emerald-900 dark:text-emerald-200">
@@ -3222,27 +3203,21 @@ async function confirmAndExecuteImport() {
             </li>
           </ol>
         </div>
+      </div>
 
-        <div class="flex flex-col-reverse sm:grid sm:grid-cols-2 gap-2.5 pt-1">
+      <template #footer>
+        <div class="flex items-center justify-end w-full">
           <button
             type="button"
             :disabled="isImporting"
-            class="w-full min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-            @click="showConfirmModal = false"
-          >
-            Tidak, Batalkan
-          </button>
-          <button
-            type="button"
-            :disabled="isImporting"
-            class="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+            class="w-full sm:w-auto min-h-[46px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
             @click="confirmAndExecuteImport"
           >
             <CheckCircle2 class="w-4 h-4 shrink-0" />
             <span>{{ isImporting ? (importProgressText || 'Menjalankan WriteBatch...') : 'Ya, Jalankan Import' }}</span>
           </button>
         </div>
-      </div>
-    </div>
+      </template>
+    </AppModal>
   </div>
 </template>

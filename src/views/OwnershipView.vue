@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { RouterLink } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { Wallet, Plus, Trash2, Check, X, Users } from 'lucide-vue-next';
+import { Wallet, Plus, Trash2, Check, Users } from 'lucide-vue-next';
 import {
   useFinanceStore,
   WalletItem,
@@ -11,6 +11,8 @@ import {
   formatHolderName,
 } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
+import AppModal from '../components/AppModal.vue';
+import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 
 const { t } = useI18n();
 const financeStore = useFinanceStore();
@@ -27,9 +29,31 @@ const editingHolder = ref<{ holder: WalletOwnerItem; walletName: string } | null
 const editHolderName = ref('');
 const editHolderBalance = ref<number | ''>(0);
 
+const isEditHolderOpen = computed({
+  get: () => editingHolder.value !== null,
+  set: (val: boolean) => {
+    if (!val) editingHolder.value = null;
+  },
+});
+
 // 3. Modal: Global Rename Ownership Across Wallets (Tap on Summary Card)
 const renamingGlobalOwner = ref<OwnershipSummaryItem | null>(null);
 const renameOwnerNewLabel = ref('');
+
+const isGlobalRenameOpen = computed({
+  get: () => renamingGlobalOwner.value !== null,
+  set: (val: boolean) => {
+    if (!val) renamingGlobalOwner.value = null;
+  },
+});
+
+const walletSelectOptions = computed<SelectOptionItem[]>(() =>
+  financeStore.wallets.map((w) => ({
+    value: w.id,
+    label: w.name,
+    sublabel: `Total Saldo: ${themeStore.formatMoney(w.balance)}`,
+  }))
+);
 
 function openAddHolderModal(wallet?: WalletItem) {
   selectedWalletId.value = wallet?.id || financeStore.wallets[0]?.id || '';
@@ -143,7 +167,7 @@ async function handleSaveGlobalRename() {
             </span>
           </div>
 
-          <div class="text-lg sm:text-xl font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+          <div class="text-lg sm:text-xl font-money font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
             {{ themeStore.formatMoney(owner.totalBalance) }}
           </div>
 
@@ -154,7 +178,7 @@ async function handleSaveGlobalRename() {
               class="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400"
             >
               <span class="truncate">{{ wItem.walletName }}</span>
-              <span class="font-mono tabular-nums font-semibold text-slate-700 dark:text-slate-300 shrink-0">
+              <span class="font-money tabular-nums font-semibold text-slate-700 dark:text-slate-300 shrink-0">
                 {{ themeStore.formatMoney(wItem.balance) }}
               </span>
             </div>
@@ -209,7 +233,7 @@ async function handleSaveGlobalRename() {
                 <h3 class="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 truncate">
                   {{ w.name }}
                 </h3>
-                <div class="text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                <div class="text-xs font-money font-semibold text-emerald-600 dark:text-emerald-400">
                   Total: {{ themeStore.formatMoney(w.balance) }}
                 </div>
               </div>
@@ -240,7 +264,7 @@ async function handleSaveGlobalRename() {
                 <div class="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
                   {{ formatHolderName(holder.holderName) }}
                 </div>
-                <div class="text-sm sm:text-base font-mono font-bold tabular-nums text-slate-700 dark:text-slate-300 mt-0.5 truncate">
+                <div class="text-sm sm:text-base font-money font-bold tabular-nums text-slate-700 dark:text-slate-300 mt-0.5 truncate">
                   {{ themeStore.formatMoney(holder.balance) }}
                 </div>
               </div>
@@ -261,240 +285,179 @@ async function handleSaveGlobalRename() {
     </section>
 
     <!-- =================================================================== -->
-    <!-- MODAL 1: Tambah Kepemilikan Dana ke Sumber Dana                     -->
+    <!-- MODAL 1: Tambah Kepemilikan Dana ke Sumber Dana (AppModal)          -->
     <!-- =================================================================== -->
-    <div
-      v-if="showAddHolderModal"
-      class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-0 sm:p-4"
-      @click.self="showAddHolderModal = false"
+    <AppModal
+      v-model="showAddHolderModal"
+      title="Tambah Kepemilikan Dana"
+      subtitle="Alokasikan pemilik dana baru ke dalam salah satu sumber dana"
     >
-      <div class="w-full max-w-md rounded-t-3xl sm:rounded-2xl bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 p-5 shadow-xl space-y-4">
-        <div class="w-10 h-1.5 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto sm:hidden"></div>
-        <div class="flex items-center justify-between gap-2">
-          <h2 class="text-base font-bold text-slate-900 dark:text-slate-100">
-            Tambah Kepemilikan Dana
-          </h2>
-          <button
-            type="button"
-            class="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
-            @click="showAddHolderModal = false"
-          >
-            <X class="w-5 h-5" />
-          </button>
+      <form id="add-holder-form" class="space-y-4" @submit.prevent="handleAddHolder">
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+            Pilih Dompet / Sumber Dana
+          </label>
+          <CustomSelect
+            v-model="selectedWalletId"
+            :options="walletSelectOptions"
+            placeholder="Pilih sumber dana"
+          />
         </div>
 
-        <form class="space-y-3.5" @submit.prevent="handleAddHolder">
-          <div>
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-              Pilih Dompet / Sumber Dana
-            </label>
-            <select
-              v-model="selectedWalletId"
-              class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-            >
-              <option v-for="w in financeStore.wallets" :key="w.id" :value="w.id">
-                {{ w.name }} ({{ themeStore.formatMoney(w.balance) }})
-              </option>
-            </select>
-          </div>
-
-          <div>
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-              Nama Pemilik Dana
-            </label>
-            <input
-              v-model="newHolderName"
-              type="text"
-              required
-              maxlength="60"
-              placeholder="Contoh: Istri, Pribadi, Tabungan Anak..."
-              class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-            />
-          </div>
-
-          <div>
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-              Saldo Kepemilikan (IDR)
-            </label>
-            <input
-              v-model.number="newHolderBalance"
-              type="number"
-              step="any"
-              required
-              placeholder="0"
-              class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-base font-mono font-semibold tabular-nums text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-            />
-          </div>
-
-          <div class="pt-2 flex items-center justify-end gap-2">
-            <button
-              type="button"
-              class="min-h-[44px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300"
-              @click="showAddHolderModal = false"
-            >
-              Batal
-            </button>
-            <button
-              type="submit"
-              class="min-h-[44px] px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5"
-            >
-              <Check class="w-4 h-4" />
-              <span>Simpan</span>
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <!-- =================================================================== -->
-    <!-- MODAL 2: Detail & Ubah Kepemilikan Dana (Saat Kartu Diklik)         -->
-    <!-- =================================================================== -->
-    <div
-      v-if="editingHolder"
-      class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-0 sm:p-4"
-      @click.self="editingHolder = null"
-    >
-      <div class="w-full max-w-md rounded-t-3xl sm:rounded-2xl bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 p-5 shadow-xl space-y-4">
-        <div class="w-10 h-1.5 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto sm:hidden"></div>
-        <div class="flex items-center justify-between gap-2">
-          <div>
-            <h2 class="text-base font-bold text-slate-900 dark:text-slate-100">
-              Detail & Ubah Kepemilikan Dana
-            </h2>
-            <p class="text-xs text-slate-500 dark:text-slate-400">
-              Sumber Dana: <strong>{{ editingHolder.walletName }}</strong>
-            </p>
-          </div>
-          <button
-            type="button"
-            class="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
-            @click="editingHolder = null"
-          >
-            <X class="w-5 h-5" />
-          </button>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+            Nama Pemilik Dana
+          </label>
+          <input
+            v-model="newHolderName"
+            type="text"
+            required
+            maxlength="60"
+            placeholder="Contoh: Istri, Pribadi, Tabungan Anak..."
+            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+          />
         </div>
 
-        <form class="space-y-3.5" @submit.prevent="handleSaveEditHolder">
-          <div>
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-              Nama Pemilik Dana
-            </label>
-            <input
-              v-model="editHolderName"
-              type="text"
-              required
-              maxlength="60"
-              class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-            />
-          </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+            Saldo Kepemilikan (IDR)
+          </label>
+          <input
+            v-model.number="newHolderBalance"
+            type="number"
+            step="any"
+            required
+            placeholder="0"
+            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-base font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+          />
+        </div>
+      </form>
 
-          <div>
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-              Saldo Saat Ini (IDR)
-            </label>
-            <input
-              v-model.number="editHolderBalance"
-              type="number"
-              step="any"
-              required
-              class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-base font-mono font-semibold tabular-nums text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-            />
-          </div>
-
-          <div class="pt-2 flex items-center justify-between gap-2">
-            <button
-              v-if="financeStore.getHoldersByWalletId(editingHolder.holder.walletId).length > 1"
-              type="button"
-              class="min-h-[44px] px-3.5 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center gap-1.5"
-              @click="handleDeleteEditingHolder"
-            >
-              <Trash2 class="w-4 h-4" />
-              <span>Hapus</span>
-            </button>
-            <div v-else></div>
-
-            <div class="flex items-center gap-2">
-              <button
-                type="button"
-                class="min-h-[44px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300"
-                @click="editingHolder = null"
-              >
-                Batal
-              </button>
-              <button
-                type="submit"
-                class="min-h-[44px] px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5"
-              >
-                <Check class="w-4 h-4" />
-                <span>Simpan</span>
-              </button>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <!-- =================================================================== -->
-    <!-- MODAL 3: Ubah Nama Kepemilikan Lintas Sumber Dana                   -->
-    <!-- =================================================================== -->
-    <div
-      v-if="renamingGlobalOwner"
-      class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-0 sm:p-4"
-      @click.self="renamingGlobalOwner = null"
-    >
-      <div class="w-full max-w-md rounded-t-3xl sm:rounded-2xl bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 p-5 shadow-xl space-y-4">
-        <div class="w-10 h-1.5 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto sm:hidden"></div>
-        <div class="flex items-center justify-between gap-2">
-          <div>
-            <h2 class="text-base font-bold text-slate-900 dark:text-slate-100">
-              Ubah Nama Kepemilikan Serentak
-            </h2>
-            <p class="text-xs text-slate-500 dark:text-slate-400">
-              Mengubah <strong>{{ renamingGlobalOwner.displayHolderName }}</strong> di {{ renamingGlobalOwner.walletCount }} sumber dana.
-            </p>
-          </div>
+      <template #footer>
+        <div class="flex items-center justify-end w-full">
           <button
-            type="button"
-            class="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
-            @click="renamingGlobalOwner = null"
+            type="submit"
+            form="add-holder-form"
+            class="w-full sm:w-auto min-h-[46px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
           >
-            <X class="w-5 h-5" />
+            <Check class="w-4 h-4 shrink-0" />
+            <span>Simpan Kepemilikan</span>
           </button>
         </div>
+      </template>
+    </AppModal>
 
-        <form class="space-y-3.5" @submit.prevent="handleSaveGlobalRename">
-          <div>
-            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-              Nama Kepemilikan Baru
-            </label>
-            <input
-              v-model="renameOwnerNewLabel"
-              type="text"
-              required
-              maxlength="50"
-              placeholder="Contoh: Pribadi / Istri"
-              class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-            />
-          </div>
+    <!-- =================================================================== -->
+    <!-- MODAL 2: Detail & Ubah Kepemilikan Dana (AppModal)                  -->
+    <!-- =================================================================== -->
+    <AppModal
+      v-model="isEditHolderOpen"
+      title="Detail & Ubah Kepemilikan Dana"
+      :subtitle="editingHolder ? `Sumber Dana: ${editingHolder.walletName}` : ''"
+    >
+      <form
+        v-if="editingHolder"
+        id="edit-holder-form"
+        class="space-y-4"
+        @submit.prevent="handleSaveEditHolder"
+      >
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+            Nama Pemilik Dana
+          </label>
+          <input
+            v-model="editHolderName"
+            type="text"
+            required
+            maxlength="60"
+            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+          />
+        </div>
 
-          <div class="pt-2 flex items-center justify-end gap-2">
-            <button
-              type="button"
-              class="min-h-[44px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300"
-              @click="renamingGlobalOwner = null"
-            >
-              Batal
-            </button>
-            <button
-              type="submit"
-              class="min-h-[44px] px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5"
-            >
-              <Check class="w-4 h-4" />
-              <span>Simpan</span>
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+            Saldo Saat Ini (IDR)
+          </label>
+          <input
+            v-model.number="editHolderBalance"
+            type="number"
+            step="any"
+            required
+            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-base font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+          />
+        </div>
+      </form>
+
+      <template #footer>
+        <div v-if="editingHolder" class="flex items-center justify-between gap-2 w-full">
+          <button
+            v-if="financeStore.getHoldersByWalletId(editingHolder.holder.walletId).length > 1"
+            type="button"
+            class="min-h-[46px] px-4 py-2.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0"
+            @click="handleDeleteEditingHolder"
+          >
+            <Trash2 class="w-4 h-4 shrink-0" />
+            <span>Hapus</span>
+          </button>
+          <div v-else></div>
+
+          <button
+            type="submit"
+            form="edit-holder-form"
+            class="flex-1 sm:flex-initial min-h-[46px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+          >
+            <Check class="w-4 h-4 shrink-0" />
+            <span>Simpan Perubahan</span>
+          </button>
+        </div>
+      </template>
+    </AppModal>
+
+    <!-- =================================================================== -->
+    <!-- MODAL 3: Ubah Nama Kepemilikan Lintas Sumber Dana (AppModal)        -->
+    <!-- =================================================================== -->
+    <AppModal
+      v-model="isGlobalRenameOpen"
+      title="Ubah Nama Kepemilikan Serentak"
+      :subtitle="
+        renamingGlobalOwner
+          ? `Mengubah ${renamingGlobalOwner.displayHolderName} di ${renamingGlobalOwner.walletCount} sumber dana`
+          : ''
+      "
+    >
+      <form
+        v-if="renamingGlobalOwner"
+        id="global-rename-form"
+        class="space-y-4"
+        @submit.prevent="handleSaveGlobalRename"
+      >
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+            Nama Kepemilikan Baru
+          </label>
+          <input
+            v-model="renameOwnerNewLabel"
+            type="text"
+            required
+            maxlength="50"
+            placeholder="Contoh: Pribadi / Istri"
+            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+          />
+        </div>
+      </form>
+
+      <template #footer>
+        <div class="flex items-center justify-end w-full">
+          <button
+            type="submit"
+            form="global-rename-form"
+            class="w-full sm:w-auto min-h-[46px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+          >
+            <Check class="w-4 h-4 shrink-0" />
+            <span>Simpan Nama Baru</span>
+          </button>
+        </div>
+      </template>
+    </AppModal>
   </div>
 </template>
