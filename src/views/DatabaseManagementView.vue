@@ -21,6 +21,16 @@ import {
   RefreshCw,
   ShieldCheck,
   AlertTriangle,
+  Search,
+  Filter,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Plus,
+  X,
+  Eye,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useAdminStore } from '../stores/admin';
@@ -43,16 +53,25 @@ const adminStore = useAdminStore();
 const notificationStore = useNotificationStore();
 
 // =========================================================================
-// Active Tab State: 'import' (Impor Database) | 'delete' (Hapus Database)
+// Active Tab State: 'explorer' (Data Explorer) | 'import' (Impor Database) | 'delete' (Hapus Database)
 // =========================================================================
-const activeDbTab = ref<'import' | 'delete'>(
-  route.query.tab === 'delete' ? 'delete' : 'import'
+function resolveInitialDbTab(qTab: unknown): 'explorer' | 'import' | 'delete' {
+  if (qTab === 'import') return 'import';
+  if (qTab === 'delete') return 'delete';
+  return 'explorer';
+}
+
+const activeDbTab = ref<'explorer' | 'import' | 'delete'>(
+  resolveInitialDbTab(route.query.tab)
 );
 
-function switchDbTab(tab: 'import' | 'delete') {
+function switchDbTab(tab: 'explorer' | 'import' | 'delete') {
   activeDbTab.value = tab;
   router.replace({ path: '/database', query: { tab } });
-  if (tab === 'delete') {
+  if (tab === 'explorer') {
+    loadFirestoreCollectionStats();
+    loadExplorerCollectionDocs(explorerSelectedCollection.value);
+  } else if (tab === 'delete') {
     loadFirestoreCollectionStats();
   }
 }
@@ -60,14 +79,410 @@ function switchDbTab(tab: 'import' | 'delete') {
 watch(
   () => route.query.tab,
   (qTab) => {
-    if (qTab === 'delete') {
-      activeDbTab.value = 'delete';
+    const resolved = resolveInitialDbTab(qTab);
+    activeDbTab.value = resolved;
+    if (resolved === 'explorer') {
       loadFirestoreCollectionStats();
-    } else if (qTab === 'import') {
-      activeDbTab.value = 'import';
+      loadExplorerCollectionDocs(explorerSelectedCollection.value);
+    } else if (resolved === 'delete') {
+      loadFirestoreCollectionStats();
     }
   }
 );
+
+// =========================================================================
+// TAB 0: Data Explorer (Raw Firestore Query, Where, Like, Sort & Order)
+// =========================================================================
+export type ExplorerOperator =
+  | '=='
+  | '!='
+  | 'LIKE'
+  | 'NOT_LIKE'
+  | 'STARTS_WITH'
+  | 'ENDS_WITH'
+  | '>'
+  | '>='
+  | '<'
+  | '<='
+  | 'IN'
+  | 'IS_NULL'
+  | 'IS_NOT_NULL'
+  | 'IS_TRUE'
+  | 'IS_FALSE';
+
+interface ExplorerWhereCondition {
+  id: string;
+  field: string;
+  operator: ExplorerOperator;
+  value: string;
+}
+
+const EXPLORER_COLLECTIONS = [
+  { name: 'users', label: 'users' },
+  { name: 'wallets', label: 'wallets' },
+  { name: 'wallet_owners', label: 'wallet_owners' },
+  { name: 'categories', label: 'categories' },
+  { name: 'transactions', label: 'transactions' },
+  { name: 'budgets', label: 'budgets' },
+  { name: 'activity_logs', label: 'activity_logs' },
+  { name: 'security_alerts', label: 'security_alerts' },
+  { name: 'admins', label: 'admins' },
+];
+
+const EXPLORER_OPERATOR_OPTIONS: { value: ExplorerOperator; label: string; needsValue: boolean }[] = [
+  { value: 'LIKE', label: 'LIKE (%mengandung teks%)', needsValue: true },
+  { value: '==', label: '= (Sama dengan / Exact)', needsValue: true },
+  { value: '!=', label: '!= (Tidak sama dengan)', needsValue: true },
+  { value: 'NOT_LIKE', label: 'NOT LIKE (Tidak mengandung)', needsValue: true },
+  { value: 'STARTS_WITH', label: 'STARTS WITH (Diawali dengan)', needsValue: true },
+  { value: 'ENDS_WITH', label: 'ENDS WITH (Diakhiri dengan)', needsValue: true },
+  { value: '>', label: '> (Lebih besar dari)', needsValue: true },
+  { value: '>=', label: '>= (Lebih besar / sama)', needsValue: true },
+  { value: '<', label: '< (Lebih kecil dari)', needsValue: true },
+  { value: '<=', label: '<= (Lebih kecil / sama)', needsValue: true },
+  { value: 'IN', label: 'IN (Daftar nilai dipisah koma)', needsValue: true },
+  { value: 'IS_TRUE', label: 'IS TRUE (Bernilai true)', needsValue: false },
+  { value: 'IS_FALSE', label: 'IS FALSE (Bernilai false / tidak ada)', needsValue: false },
+  { value: 'IS_NULL', label: 'IS NULL / Kosong', needsValue: false },
+  { value: 'IS_NOT_NULL', label: 'IS NOT NULL / Terisi', needsValue: false },
+];
+
+const explorerSelectedCollection = ref<string>('wallet_owners');
+const explorerRawDocs = ref<Record<string, any>[]>([]);
+const isLoadingExplorerDocs = ref<boolean>(false);
+const explorerGlobalLikeSearch = ref<string>('');
+const explorerSoftDeleteFilter = ref<'all' | 'active' | 'deleted'>('all');
+const explorerWhereLogic = ref<'AND' | 'OR'>('AND');
+const explorerWhereConditions = ref<ExplorerWhereCondition[]>([]);
+const explorerSortField = ref<string>('__docId');
+const explorerSortOrder = ref<'asc' | 'desc'>('asc');
+const explorerLimitPerPage = ref<number>(25);
+const explorerCurrentPage = ref<number>(1);
+const explorerViewMode = ref<'table' | 'json'>('table');
+const inspectingRawDoc = ref<Record<string, any> | null>(null);
+const inspectingDocCopied = ref<boolean>(false);
+
+async function loadExplorerCollectionDocs(colName: string) {
+  if (!authStore.isSuperAdmin) return;
+  explorerSelectedCollection.value = colName;
+  isLoadingExplorerDocs.value = true;
+  try {
+    const docs = await adminStore.fetchFirestoreRawCollectionDocs(colName);
+    explorerRawDocs.value = docs;
+    explorerCurrentPage.value = 1;
+    // If current sort field does not exist in new collection, reset to __docId
+    const availableCols = explorerAvailableFields.value;
+    if (explorerSortField.value !== '__docId' && !availableCols.includes(explorerSortField.value)) {
+      explorerSortField.value = '__docId';
+    }
+  } catch (err) {
+    notificationStore.notifyError(
+      'Gagal Memuat Data Koleksi',
+      err,
+      `Tidak dapat membaca dokumen dari koleksi "${colName}".`
+    );
+  } finally {
+    isLoadingExplorerDocs.value = false;
+  }
+}
+
+const explorerAvailableFields = computed<string[]>(() => {
+  const fieldSet = new Set<string>(['__docId']);
+  for (const docItem of explorerRawDocs.value) {
+    Object.keys(docItem).forEach((k) => fieldSet.add(k));
+  }
+  const arr = Array.from(fieldSet);
+  const priority = ['__docId', 'id', 'uid', 'ownerId', 'walletId', 'walletName', 'holderName', 'name', 'type', 'category', 'balance', 'amount', 'deleted', 'deletedAt', 'date', 'createdAt', 'updatedAt'];
+  return arr.sort((a, b) => {
+    const ia = priority.indexOf(a);
+    const ib = priority.indexOf(b);
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    return a.localeCompare(b);
+  });
+});
+
+function addExplorerWhereCondition() {
+  const defaultField =
+    explorerAvailableFields.value.find((f) => f !== '__docId') || '__docId';
+  explorerWhereConditions.value.push({
+    id: `cond_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    field: defaultField,
+    operator: 'LIKE',
+    value: '',
+  });
+  explorerCurrentPage.value = 1;
+}
+
+function removeExplorerWhereCondition(id: string) {
+  explorerWhereConditions.value = explorerWhereConditions.value.filter((c) => c.id !== id);
+  explorerCurrentPage.value = 1;
+}
+
+function resetExplorerFilters() {
+  explorerGlobalLikeSearch.value = '';
+  explorerSoftDeleteFilter.value = 'all';
+  explorerWhereLogic.value = 'AND';
+  explorerWhereConditions.value = [];
+  explorerSortField.value = '__docId';
+  explorerSortOrder.value = 'asc';
+  explorerCurrentPage.value = 1;
+}
+
+function toggleColumnSort(field: string) {
+  if (explorerSortField.value === field) {
+    explorerSortOrder.value = explorerSortOrder.value === 'asc' ? 'desc' : 'asc';
+  } else {
+    explorerSortField.value = field;
+    explorerSortOrder.value = 'asc';
+  }
+}
+
+function operatorNeedsValue(op: ExplorerOperator): boolean {
+  const found = EXPLORER_OPERATOR_OPTIONS.find((o) => o.value === op);
+  return found ? found.needsValue : true;
+}
+
+function evaluateSingleWhereCondition(
+  docItem: Record<string, any>,
+  cond: ExplorerWhereCondition
+): boolean {
+  const rawVal = docItem[cond.field];
+  const op = cond.operator;
+
+  if (op === 'IS_NULL') {
+    return rawVal === null || rawVal === undefined || String(rawVal).trim() === '';
+  }
+  if (op === 'IS_NOT_NULL') {
+    return rawVal !== null && rawVal !== undefined && String(rawVal).trim() !== '';
+  }
+  if (op === 'IS_TRUE') {
+    return rawVal === true || String(rawVal).toLowerCase().trim() === 'true' || rawVal === 1 || rawVal === '1';
+  }
+  if (op === 'IS_FALSE') {
+    return (
+      rawVal === false ||
+      rawVal === null ||
+      rawVal === undefined ||
+      String(rawVal).toLowerCase().trim() === 'false' ||
+      rawVal === 0 ||
+      rawVal === '0'
+    );
+  }
+
+  const targetStr = String(cond.value ?? '').trim();
+  if (!targetStr) return true; // Ignore empty value input until user types
+
+  const docStr =
+    rawVal === null || rawVal === undefined
+      ? ''
+      : typeof rawVal === 'object'
+      ? JSON.stringify(rawVal)
+      : String(rawVal);
+
+  const docLower = docStr.toLowerCase();
+  const targetLower = targetStr.toLowerCase();
+
+  if (op === 'LIKE') {
+    // Support SQL `%` wildcard or standard substring match
+    if (targetLower.includes('%')) {
+      const escaped = targetLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*');
+      return new RegExp(`^${escaped}$`, 'i').test(docStr);
+    }
+    return docLower.includes(targetLower);
+  }
+  if (op === 'NOT_LIKE') {
+    return !docLower.includes(targetLower);
+  }
+  if (op === 'STARTS_WITH') {
+    return docLower.startsWith(targetLower);
+  }
+  if (op === 'ENDS_WITH') {
+    return docLower.endsWith(targetLower);
+  }
+  if (op === 'IN') {
+    const items = targetLower
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return items.some((item) => docLower === item);
+  }
+
+  // Numeric comparison if both sides are valid numbers
+  const docNum = Number(rawVal);
+  const targetNum = Number(targetStr);
+  const bothNumeric =
+    rawVal !== null &&
+    rawVal !== undefined &&
+    rawVal !== '' &&
+    typeof rawVal !== 'boolean' &&
+    !Number.isNaN(docNum) &&
+    !Number.isNaN(targetNum);
+
+  if (op === '==') {
+    return bothNumeric ? docNum === targetNum : docLower === targetLower;
+  }
+  if (op === '!=') {
+    return bothNumeric ? docNum !== targetNum : docLower !== targetLower;
+  }
+  if (op === '>') {
+    return bothNumeric ? docNum > targetNum : docStr.localeCompare(targetStr) > 0;
+  }
+  if (op === '>=') {
+    return bothNumeric ? docNum >= targetNum : docStr.localeCompare(targetStr) >= 0;
+  }
+  if (op === '<') {
+    return bothNumeric ? docNum < targetNum : docStr.localeCompare(targetStr) < 0;
+  }
+  if (op === '<=') {
+    return bothNumeric ? docNum <= targetNum : docStr.localeCompare(targetStr) <= 0;
+  }
+
+  return true;
+}
+
+const explorerFilteredAndSortedDocs = computed<Record<string, any>[]>(() => {
+  const globalQ = explorerGlobalLikeSearch.value.trim().toLowerCase();
+  const softFilter = explorerSoftDeleteFilter.value;
+  const activeConds = explorerWhereConditions.value.filter(
+    (c) => !operatorNeedsValue(c.operator) || c.value.trim() !== ''
+  );
+
+  const filtered = explorerRawDocs.value.filter((docItem) => {
+    // 1. Soft-delete status quick filter
+    if (softFilter === 'active' && docItem.deleted === true) return false;
+    if (softFilter === 'deleted' && docItem.deleted !== true) return false;
+
+    // 2. Global LIKE search across all fields
+    if (globalQ) {
+      const matchesAnyField = Object.entries(docItem).some(([k, v]) => {
+        const valStr =
+          v === null || v === undefined
+            ? 'null'
+            : typeof v === 'object'
+            ? JSON.stringify(v)
+            : String(v);
+        return (
+          k.toLowerCase().includes(globalQ) || valStr.toLowerCase().includes(globalQ)
+        );
+      });
+      if (!matchesAnyField) return false;
+    }
+
+    // 3. Structured WHERE conditions (AND / OR)
+    if (activeConds.length > 0) {
+      if (explorerWhereLogic.value === 'AND') {
+        const allPass = activeConds.every((c) => evaluateSingleWhereCondition(docItem, c));
+        if (!allPass) return false;
+      } else {
+        const anyPass = activeConds.some((c) => evaluateSingleWhereCondition(docItem, c));
+        if (!anyPass) return false;
+      }
+    }
+
+    return true;
+  });
+
+  // 4. Sort & Order
+  const sField = explorerSortField.value || '__docId';
+  const dir = explorerSortOrder.value === 'asc' ? 1 : -1;
+
+  return [...filtered].sort((a, b) => {
+    const va = a[sField];
+    const vb = b[sField];
+
+    if (va === vb) return 0;
+    if (va === null || va === undefined) return 1 * dir;
+    if (vb === null || vb === undefined) return -1 * dir;
+
+    const na = Number(va);
+    const nb = Number(vb);
+    if (
+      typeof va !== 'boolean' &&
+      typeof vb !== 'boolean' &&
+      va !== '' &&
+      vb !== '' &&
+      !Number.isNaN(na) &&
+      !Number.isNaN(nb)
+    ) {
+      return (na - nb) * dir;
+    }
+
+    return (
+      String(va).localeCompare(String(vb), undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      }) * dir
+    );
+  });
+});
+
+const explorerTotalPages = computed(() =>
+  Math.max(1, Math.ceil(explorerFilteredAndSortedDocs.value.length / explorerLimitPerPage.value))
+);
+
+const explorerPaginatedDocs = computed<Record<string, any>[]>(() => {
+  const page = Math.min(explorerCurrentPage.value, explorerTotalPages.value);
+  const start = (page - 1) * explorerLimitPerPage.value;
+  return explorerFilteredAndSortedDocs.value.slice(start, start + explorerLimitPerPage.value);
+});
+
+const explorerQuerySummarySql = computed<string>(() => {
+  const parts: string[] = [`SELECT * FROM ${explorerSelectedCollection.value}`];
+  const whereClauses: string[] = [];
+
+  if (explorerSoftDeleteFilter.value === 'active') {
+    whereClauses.push('deleted != true');
+  } else if (explorerSoftDeleteFilter.value === 'deleted') {
+    whereClauses.push('deleted == true');
+  }
+
+  if (explorerGlobalLikeSearch.value.trim()) {
+    whereClauses.push(`ANY_FIELD LIKE '%${explorerGlobalLikeSearch.value.trim()}%'`);
+  }
+
+  for (const c of explorerWhereConditions.value) {
+    if (!operatorNeedsValue(c.operator)) {
+      whereClauses.push(`${c.field} ${c.operator}`);
+    } else if (c.value.trim() !== '') {
+      whereClauses.push(`${c.field} ${c.operator} '${c.value.trim()}'`);
+    }
+  }
+
+  if (whereClauses.length > 0) {
+    parts.push(`WHERE ${whereClauses.join(` ${explorerWhereLogic.value} `)}`);
+  }
+
+  parts.push(`ORDER BY ${explorerSortField.value} ${explorerSortOrder.value.toUpperCase()}`);
+  parts.push(`LIMIT ${explorerLimitPerPage.value}`);
+  return parts.join(' ');
+});
+
+function formatExplorerCellValue(val: any): string {
+  if (val === null) return 'null';
+  if (val === undefined) return '-';
+  if (typeof val === 'boolean') return val ? 'true' : 'false';
+  if (typeof val === 'object') return JSON.stringify(val);
+  return String(val);
+}
+
+async function copyInspectingDocJson() {
+  if (!inspectingRawDoc.value) return;
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(inspectingRawDoc.value, null, 2));
+    inspectingDocCopied.value = true;
+    notificationStore.notifySuccess(
+      'Dokumen JSON Disalin',
+      `Dokumen "${inspectingRawDoc.value.__docId}" telah disalin ke clipboard.`
+    );
+    setTimeout(() => {
+      inspectingDocCopied.value = false;
+    }, 2000);
+  } catch {
+    // Ignore
+  }
+}
 
 // =========================================================================
 // TAB 2: Hapus Database (Live Firestore Collections Cleanup / Bulk Delete)
@@ -102,6 +517,7 @@ async function loadFirestoreCollectionStats() {
 onMounted(() => {
   if (authStore.isSuperAdmin) {
     loadFirestoreCollectionStats();
+    loadExplorerCollectionDocs(explorerSelectedCollection.value);
   }
 });
 
@@ -195,6 +611,9 @@ const initialParsedTablesSnapshot = ref<ParsedPhpMyAdminTable[]>([]);
 const rawTables = ref<ParsedPhpMyAdminTable[]>([]);
 const activeRawTableIdx = ref<number>(0);
 const selectedRawTableNames = ref<string[]>([]);
+const rawTableCurrentPage = ref<number>(1);
+const rawTablePageSize = ref<number>(25);
+const rawTableSearchQuery = ref<string>('');
 
 const schemaDesignGenerated = ref<boolean>(false);
 const activeSchemaIdx = ref<number>(0);
@@ -202,6 +621,9 @@ const activeSchemaIdx = ref<number>(0);
 const dataConversionCompleted = ref<boolean>(false);
 const activeConvertedTab = ref<keyof ConvertedFirestoreCollections>('wallets');
 const convertedPreviewMode = ref<'table' | 'json'>('table');
+const convertedCurrentPage = ref<number>(1);
+const convertedPageSize = ref<number>(25);
+const convertedSearchQuery = ref<string>('');
 const jsonCopied = ref<boolean>(false);
 
 const showConfirmModal = ref<boolean>(false);
@@ -256,6 +678,10 @@ function processJsonContent(jsonContent: string, fileLabel: string) {
     rawTables.value = parsedTables;
     selectedRawTableNames.value = [];
     activeRawTableIdx.value = 0;
+    rawTableCurrentPage.value = 1;
+    rawTableSearchQuery.value = '';
+    convertedCurrentPage.value = 1;
+    convertedSearchQuery.value = '';
 
     const totalRows = parsedTables.reduce((acc, t) => acc + t.rows.length, 0);
     notificationStore.notifySuccess(
@@ -443,6 +869,45 @@ const activeRawTable = computed<ParsedPhpMyAdminTable | null>(() => {
   return rawTables.value[activeRawTableIdx.value] || rawTables.value[0];
 });
 
+function selectRawTableTab(idx: number) {
+  activeRawTableIdx.value = idx;
+  rawTableCurrentPage.value = 1;
+}
+
+const filteredActiveRawTableRows = computed<Record<string, any>[]>(() => {
+  if (!activeRawTable.value) return [];
+  const q = rawTableSearchQuery.value.trim().toLowerCase();
+  if (!q) return activeRawTable.value.rows;
+  return activeRawTable.value.rows.filter((r) =>
+    Object.values(r).some((val) =>
+      val !== null && val !== undefined && String(val).toLowerCase().includes(q)
+    )
+  );
+});
+
+const rawTableTotalPages = computed(() =>
+  Math.max(1, Math.ceil(filteredActiveRawTableRows.value.length / rawTablePageSize.value))
+);
+
+const paginatedActiveRawTableRows = computed<Record<string, any>[]>(() => {
+  const page = Math.min(rawTableCurrentPage.value, rawTableTotalPages.value);
+  const start = (page - 1) * rawTablePageSize.value;
+  return filteredActiveRawTableRows.value.slice(start, start + rawTablePageSize.value);
+});
+
+const rawTableVisiblePages = computed<number[]>(() => {
+  const total = rawTableTotalPages.value;
+  const current = Math.min(rawTableCurrentPage.value, total);
+  const pages: number[] = [];
+  const start = Math.max(1, current - 2);
+  const end = Math.min(total, start + 4);
+  const adjustedStart = Math.max(1, end - 4);
+  for (let i = adjustedStart; i <= end; i++) {
+    pages.push(i);
+  }
+  return pages;
+});
+
 const activeSchemaCollection = computed(() => {
   if (!migrationAnalysis.value || migrationAnalysis.value.newSchemaDesigns.length === 0) {
     return null;
@@ -475,9 +940,48 @@ const convertedCollectionTabs = computed(() => {
   ];
 });
 
+function selectConvertedTab(tabKey: keyof ConvertedFirestoreCollections) {
+  activeConvertedTab.value = tabKey;
+  convertedCurrentPage.value = 1;
+}
+
 const activeConvertedRows = computed<Record<string, any>[]>(() => {
   if (!migrationAnalysis.value) return [];
   return migrationAnalysis.value.convertedCollections[activeConvertedTab.value] || [];
+});
+
+const filteredActiveConvertedRows = computed<Record<string, any>[]>(() => {
+  const rows = activeConvertedRows.value;
+  const q = convertedSearchQuery.value.trim().toLowerCase();
+  if (!q) return rows;
+  return rows.filter((r) =>
+    Object.values(r).some((val) =>
+      val !== null && val !== undefined && String(val).toLowerCase().includes(q)
+    )
+  );
+});
+
+const convertedTotalPages = computed(() =>
+  Math.max(1, Math.ceil(filteredActiveConvertedRows.value.length / convertedPageSize.value))
+);
+
+const paginatedActiveConvertedRows = computed<Record<string, any>[]>(() => {
+  const page = Math.min(convertedCurrentPage.value, convertedTotalPages.value);
+  const start = (page - 1) * convertedPageSize.value;
+  return filteredActiveConvertedRows.value.slice(start, start + convertedPageSize.value);
+});
+
+const convertedVisiblePages = computed<number[]>(() => {
+  const total = convertedTotalPages.value;
+  const current = Math.min(convertedCurrentPage.value, total);
+  const pages: number[] = [];
+  const start = Math.max(1, current - 2);
+  const end = Math.min(total, start + 4);
+  const adjustedStart = Math.max(1, end - 4);
+  for (let i = adjustedStart; i <= end; i++) {
+    pages.push(i);
+  }
+  return pages;
 });
 
 const activeConvertedColumns = computed<string[]>(() => {
@@ -562,11 +1066,35 @@ async function confirmAndExecuteImport() {
         </p>
       </div>
 
-      <!-- Segmented 2-Tab Navigation Bar -->
-      <div class="grid grid-cols-2 gap-2 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs">
+      <!-- Segmented 3-Tab Navigation Bar (Data Explorer | Impor Database | Hapus Database) -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs">
         <button
           type="button"
-          class="min-h-[46px] px-3 sm:px-5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all"
+          class="min-h-[46px] px-3 sm:px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all"
+          :class="
+            activeDbTab === 'explorer'
+              ? 'bg-emerald-600 text-white shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+          "
+          @click="switchDbTab('explorer')"
+        >
+          <Search class="w-4 h-4 shrink-0" />
+          <span class="truncate">Data Explorer</span>
+          <span
+            class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono shrink-0"
+            :class="
+              activeDbTab === 'explorer'
+                ? 'bg-white/20 text-white'
+                : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
+            "
+          >
+            {{ explorerRawDocs.length }} dok
+          </span>
+        </button>
+
+        <button
+          type="button"
+          class="min-h-[46px] px-3 sm:px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all"
           :class="
             activeDbTab === 'import'
               ? 'bg-emerald-600 text-white shadow-xs'
@@ -578,7 +1106,7 @@ async function confirmAndExecuteImport() {
           <span class="truncate">Impor Database</span>
           <span
             v-if="rawTables.length > 0"
-            class="hidden sm:inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono"
+            class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono shrink-0"
             :class="
               activeDbTab === 'import'
                 ? 'bg-white/20 text-white'
@@ -591,7 +1119,7 @@ async function confirmAndExecuteImport() {
 
         <button
           type="button"
-          class="min-h-[46px] px-3 sm:px-5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all"
+          class="min-h-[46px] px-3 sm:px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all"
           :class="
             activeDbTab === 'delete'
               ? 'bg-rose-600 text-white shadow-xs'
@@ -602,7 +1130,7 @@ async function confirmAndExecuteImport() {
           <Trash2 class="w-4 h-4 shrink-0" />
           <span class="truncate">Hapus Database</span>
           <span
-            class="hidden sm:inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono"
+            class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono shrink-0"
             :class="
               activeDbTab === 'delete'
                 ? 'bg-white/20 text-white'
@@ -614,6 +1142,548 @@ async function confirmAndExecuteImport() {
         </button>
       </div>
     </div>
+
+    <!-- ===================================================================== -->
+    <!-- TAB 0: DATA EXPLORER (Raw Firestore Query, Where, Like, Sort & Order) -->
+    <!-- ===================================================================== -->
+    <section
+      v-if="activeDbTab === 'explorer'"
+      class="rounded-2xl sm:rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-7 space-y-5 w-full min-w-0 overflow-x-hidden"
+    >
+      <!-- Explorer Header -->
+      <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+        <div class="space-y-1 min-w-0">
+          <div class="flex items-center gap-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+            <Search class="w-4 h-4 shrink-0" />
+            <span class="truncate">Firestore Data Explorer · Database "sisa-uang"</span>
+          </div>
+          <h2 class="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 break-words">
+            Penelusuran & Query Data Mentah Cloud Firestore
+          </h2>
+          <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed break-words">
+            Tampilkan, cari, dan telusuri seluruh dokumen mentah secara langsung dari Cloud Firestore menggunakan klausa <code>WHERE</code>, pencarian <code>LIKE (%...%)</code>, filter <code>deleted</code>, <code>ORDER BY</code> (Sort ASC/DESC), serta inspeksi JSON per dokumen.
+          </p>
+        </div>
+
+        <div class="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            :disabled="isLoadingExplorerDocs"
+            class="w-full sm:w-auto min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 hover:border-emerald-500 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+            @click="loadExplorerCollectionDocs(explorerSelectedCollection)"
+          >
+            <RefreshCw class="w-3.5 h-3.5 shrink-0" :class="isLoadingExplorerDocs ? 'animate-spin text-emerald-600' : ''" />
+            <span>Muat Ulang Data</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Collection Selector Pills -->
+      <div class="space-y-2">
+        <div class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          1. Pilih Tabel / Koleksi Firestore
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button
+            v-for="col in EXPLORER_COLLECTIONS"
+            :key="col.name"
+            type="button"
+            class="min-h-[38px] px-3.5 py-1.5 rounded-xl border text-xs font-mono font-semibold flex items-center gap-2 transition-all"
+            :class="
+              explorerSelectedCollection === col.name
+                ? 'border-emerald-600 bg-emerald-600 text-white shadow-2xs'
+                : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 hover:border-emerald-400'
+            "
+            @click="loadExplorerCollectionDocs(col.name)"
+          >
+            <span>{{ col.label }}</span>
+            <span
+              v-if="firestoreCollectionsStats.find((s) => s.collectionName === col.name)"
+              class="px-1.5 py-0.5 rounded-md text-[10px]"
+              :class="
+                explorerSelectedCollection === col.name
+                  ? 'bg-white/20 text-white'
+                  : 'bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+              "
+            >
+              {{
+                firestoreCollectionsStats
+                  .find((s) => s.collectionName === col.name)
+                  ?.docCount.toLocaleString('id-ID')
+              }}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Query Builder Box: Global LIKE, Soft Delete Filter, Sort/Order, and Multi-WHERE Clauses -->
+      <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 p-3.5 sm:p-4 space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div class="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
+            <Filter class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <span>2. Filter Pencarian (LIKE, WHERE, SORT &amp; ORDER BY)</span>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              class="min-h-[36px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              @click="addExplorerWhereCondition"
+            >
+              <Plus class="w-3.5 h-3.5 shrink-0" />
+              <span>Tambah Klausa WHERE</span>
+            </button>
+            <button
+              type="button"
+              class="min-h-[36px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:border-slate-300 flex items-center gap-1.5 transition-colors"
+              @click="resetExplorerFilters"
+            >
+              <RotateCcw class="w-3.5 h-3.5 shrink-0" />
+              <span>Reset Query</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Row 1: Global LIKE Search + Status Deleted Filter + Sort Field + Sort Order + Limit -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
+          <!-- Global LIKE Search -->
+          <div class="sm:col-span-2 lg:col-span-4">
+            <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+              Pencarian Global (LIKE %kata_kunci% di Semua Kolom)
+            </label>
+            <div class="relative">
+              <Search class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                v-model="explorerGlobalLikeSearch"
+                type="text"
+                placeholder="Cari ID, nama, saldo, walletId, email..."
+                class="w-full min-h-[40px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+                @input="explorerCurrentPage = 1"
+              />
+            </div>
+          </div>
+
+          <!-- Soft Delete Status Filter -->
+          <div class="lg:col-span-2">
+            <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+              Status Soft Delete
+            </label>
+            <select
+              v-model="explorerSoftDeleteFilter"
+              class="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600"
+              @change="explorerCurrentPage = 1"
+            >
+              <option value="all">Semua Dokumen</option>
+              <option value="active">Hanya Aktif (!deleted)</option>
+              <option value="deleted">Hanya Terhapus (deleted: true)</option>
+            </select>
+          </div>
+
+          <!-- Sort Field (ORDER BY) -->
+          <div class="lg:col-span-3">
+            <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+              Urutkan Kolom (ORDER BY)
+            </label>
+            <select
+              v-model="explorerSortField"
+              class="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600"
+            >
+              <option v-for="f in explorerAvailableFields" :key="f" :value="f">
+                {{ f === '__docId' ? '__docId (Document ID)' : f }}
+              </option>
+            </select>
+          </div>
+
+          <!-- Sort Direction (ASC / DESC) -->
+          <div class="lg:col-span-2">
+            <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+              Arah Urutan (SORT)
+            </label>
+            <button
+              type="button"
+              class="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-800 dark:text-slate-200 flex items-center justify-between gap-2 hover:border-emerald-500 transition-colors"
+              @click="explorerSortOrder = explorerSortOrder === 'asc' ? 'desc' : 'asc'"
+            >
+              <span>{{ explorerSortOrder === 'asc' ? 'ASC (A-Z / 0-9)' : 'DESC (Z-A / 9-0)' }}</span>
+              <ArrowUp v-if="explorerSortOrder === 'asc'" class="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <ArrowDown v-else class="w-3.5 h-3.5 text-amber-500 shrink-0" />
+            </button>
+          </div>
+
+          <!-- Page Size (LIMIT) -->
+          <div class="lg:col-span-1">
+            <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+              Limit
+            </label>
+            <select
+              v-model.number="explorerLimitPerPage"
+              class="w-full min-h-[40px] px-2 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:border-emerald-600"
+              @change="explorerCurrentPage = 1"
+            >
+              <option :value="10">10</option>
+              <option :value="25">25</option>
+              <option :value="50">50</option>
+              <option :value="100">100</option>
+              <option :value="500">500</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Row 2: Dynamic Multi-WHERE Conditions -->
+        <div v-if="explorerWhereConditions.length > 0" class="space-y-2.5 pt-2 border-t border-slate-200/80 dark:border-slate-800">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-xs font-bold text-slate-700 dark:text-slate-300">
+              Klausa Kondisi Spesifik (WHERE)
+            </span>
+            <div class="inline-flex items-center gap-1 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-1">
+              <button
+                type="button"
+                class="px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition-colors"
+                :class="
+                  explorerWhereLogic === 'AND'
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-slate-600 dark:text-slate-400'
+                "
+                @click="explorerWhereLogic = 'AND'"
+              >
+                AND (Semua Terpenuhi)
+              </button>
+              <button
+                type="button"
+                class="px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition-colors"
+                :class="
+                  explorerWhereLogic === 'OR'
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-slate-600 dark:text-slate-400'
+                "
+                @click="explorerWhereLogic = 'OR'"
+              >
+                OR (Salah Satu)
+              </button>
+            </div>
+          </div>
+
+          <div
+            v-for="(cond, cIdx) in explorerWhereConditions"
+            :key="cond.id"
+            class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800"
+          >
+            <div class="sm:col-span-1 text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+              {{ cIdx === 0 ? 'WHERE' : explorerWhereLogic }}
+            </div>
+
+            <!-- Field Selector -->
+            <div class="sm:col-span-4">
+              <select
+                v-model="cond.field"
+                class="w-full min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs font-mono font-semibold text-slate-800 dark:text-slate-200"
+                @change="explorerCurrentPage = 1"
+              >
+                <option v-for="f in explorerAvailableFields" :key="f" :value="f">
+                  {{ f }}
+                </option>
+              </select>
+            </div>
+
+            <!-- Operator Selector (==, !=, LIKE, >, <, IN, IS_TRUE, etc.) -->
+            <div class="sm:col-span-3">
+              <select
+                v-model="cond.operator"
+                class="w-full min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-300"
+                @change="explorerCurrentPage = 1"
+              >
+                <option
+                  v-for="op in EXPLORER_OPERATOR_OPTIONS"
+                  :key="op.value"
+                  :value="op.value"
+                >
+                  {{ op.label }}
+                </option>
+              </select>
+            </div>
+
+            <!-- Value Input -->
+            <div class="sm:col-span-3">
+              <input
+                v-if="operatorNeedsValue(cond.operator)"
+                v-model="cond.value"
+                type="text"
+                placeholder="Nilai (misal: su_wallet_1, Pribadi, 123000)..."
+                class="w-full min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs font-mono text-slate-900 dark:text-slate-100"
+                @input="explorerCurrentPage = 1"
+              />
+              <div
+                v-else
+                class="min-h-[38px] px-3 py-1.5 rounded-lg border border-dashed border-slate-200 dark:border-slate-800 text-[11px] font-mono text-slate-400 flex items-center"
+              >
+                Tanpa parameter nilai
+              </div>
+            </div>
+
+            <!-- Remove Button -->
+            <div class="sm:col-span-1 flex justify-end">
+              <button
+                type="button"
+                class="min-h-[38px] min-w-[38px] rounded-lg border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center hover:bg-rose-100"
+                title="Hapus kondisi"
+                @click="removeExplorerWhereCondition(cond.id)"
+              >
+                <X class="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- SQL-Like Query Preview Banner -->
+        <div class="rounded-xl bg-slate-900 dark:bg-slate-950 border border-slate-800 px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div class="text-[11px] font-mono text-emerald-400 break-all">
+            <span class="text-slate-400 select-none">QUERY: </span>{{ explorerQuerySummarySql }}
+          </div>
+          <div class="text-[11px] font-mono text-slate-300 shrink-0">
+            Hasil: <strong class="text-white">{{ explorerFilteredAndSortedDocs.length.toLocaleString('id-ID') }}</strong> / {{ explorerRawDocs.length.toLocaleString('id-ID') }} dokumen
+          </div>
+        </div>
+      </div>
+
+      <!-- Results Toolbar: View Switcher (Table vs Raw JSON) & Pagination -->
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition-colors"
+            :class="
+              explorerViewMode === 'table'
+                ? 'border-emerald-600 bg-emerald-600 text-white'
+                : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300'
+            "
+            @click="explorerViewMode = 'table'"
+          >
+            <TableIcon class="w-3.5 h-3.5 shrink-0" />
+            <span>Tabel Interaktif</span>
+          </button>
+          <button
+            type="button"
+            class="min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition-colors"
+            :class="
+              explorerViewMode === 'json'
+                ? 'border-emerald-600 bg-emerald-600 text-white'
+                : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300'
+            "
+            @click="explorerViewMode = 'json'"
+          >
+            <Braces class="w-3.5 h-3.5 shrink-0" />
+            <span>Raw JSON</span>
+          </button>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div class="flex items-center justify-between sm:justify-end gap-2">
+          <span class="text-xs font-mono text-slate-500 dark:text-slate-400">
+            Hal {{ explorerCurrentPage }} dari {{ explorerTotalPages }}
+          </span>
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              :disabled="explorerCurrentPage <= 1"
+              class="min-h-[36px] min-w-[36px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-center text-slate-700 dark:text-slate-200 disabled:opacity-40"
+              @click="explorerCurrentPage = Math.max(1, explorerCurrentPage - 1)"
+            >
+              <ChevronLeft class="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              :disabled="explorerCurrentPage >= explorerTotalPages"
+              class="min-h-[36px] min-w-[36px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-center text-slate-700 dark:text-slate-200 disabled:opacity-40"
+              @click="explorerCurrentPage = Math.min(explorerTotalPages, explorerCurrentPage + 1)"
+            >
+              <ChevronRight class="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Loading State -->
+      <div
+        v-if="isLoadingExplorerDocs"
+        class="rounded-2xl border border-slate-200 dark:border-slate-800 p-10 text-center space-y-2"
+      >
+        <RefreshCw class="w-6 h-6 text-emerald-600 animate-spin mx-auto" />
+        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">
+          Membaca dokumen mentah dari koleksi <code>{{ explorerSelectedCollection }}</code>...
+        </p>
+      </div>
+
+      <!-- Empty State -->
+      <div
+        v-else-if="explorerFilteredAndSortedDocs.length === 0"
+        class="rounded-2xl border border-slate-200 dark:border-slate-800 p-8 text-center space-y-2"
+      >
+        <p class="text-sm font-semibold text-slate-700 dark:text-slate-300">
+          Tidak ada dokumen yang cocok dengan filter pencarian.
+        </p>
+        <p class="text-xs text-slate-500 dark:text-slate-400">
+          Coba ubah kata kunci pencarian <code>LIKE</code>, klausa <code>WHERE</code>, atau klik Reset Query.
+        </p>
+      </div>
+
+      <!-- Table View -->
+      <div
+        v-else-if="explorerViewMode === 'table'"
+        class="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden"
+      >
+        <div class="overflow-x-auto max-h-[540px]">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead class="bg-slate-100/90 dark:bg-slate-800/90 sticky top-0 z-10 backdrop-blur-xs">
+              <tr>
+                <th class="py-2.5 px-3 font-mono font-bold text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700 whitespace-nowrap">
+                  Aksi
+                </th>
+                <th
+                  v-for="colKey in explorerAvailableFields"
+                  :key="colKey"
+                  class="py-2.5 px-3 font-mono font-bold text-slate-700 dark:text-slate-200 border-b border-slate-200 dark:border-slate-700 whitespace-nowrap cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 select-none"
+                  @click="toggleColumnSort(colKey)"
+                >
+                  <div class="flex items-center gap-1.5">
+                    <span>{{ colKey }}</span>
+                    <ArrowUp
+                      v-if="explorerSortField === colKey && explorerSortOrder === 'asc'"
+                      class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0"
+                    />
+                    <ArrowDown
+                      v-else-if="explorerSortField === colKey && explorerSortOrder === 'desc'"
+                      class="w-3.5 h-3.5 text-amber-500 shrink-0"
+                    />
+                    <ArrowUpDown v-else class="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                  </div>
+                </th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200/70 dark:divide-slate-800 font-mono">
+              <tr
+                v-for="docRow in explorerPaginatedDocs"
+                :key="docRow.__docId"
+                class="hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20 transition-colors"
+                :class="docRow.deleted === true ? 'bg-rose-50/30 dark:bg-rose-950/15' : ''"
+              >
+                <td class="py-2 px-3 whitespace-nowrap">
+                  <button
+                    type="button"
+                    class="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-emerald-600 hover:text-white text-slate-700 dark:text-slate-200 text-[11px] font-sans font-semibold inline-flex items-center gap-1 transition-colors"
+                    @click="inspectingRawDoc = docRow"
+                  >
+                    <Eye class="w-3 h-3 shrink-0" />
+                    <span>Detail</span>
+                  </button>
+                </td>
+                <td
+                  v-for="colKey in explorerAvailableFields"
+                  :key="colKey"
+                  class="py-2 px-3 max-w-[260px] truncate whitespace-nowrap"
+                  :title="formatExplorerCellValue(docRow[colKey])"
+                >
+                  <span
+                    v-if="colKey === '__docId'"
+                    class="font-bold text-emerald-700 dark:text-emerald-400"
+                  >
+                    {{ docRow.__docId }}
+                  </span>
+                  <span
+                    v-else-if="colKey === 'deleted'"
+                    class="px-2 py-0.5 rounded-md text-[10px] font-bold"
+                    :class="
+                      docRow.deleted === true
+                        ? 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300'
+                        : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
+                    "
+                  >
+                    {{ docRow.deleted === true ? 'true (DELETED)' : 'false' }}
+                  </span>
+                  <span v-else class="text-slate-700 dark:text-slate-300">
+                    {{ formatExplorerCellValue(docRow[colKey]) }}
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Raw JSON View -->
+      <div
+        v-else
+        class="rounded-2xl border border-slate-800 bg-slate-950 p-4 overflow-x-auto max-h-[540px]"
+      >
+        <pre class="text-xs font-mono text-emerald-300 leading-relaxed">{{
+          JSON.stringify(explorerPaginatedDocs, null, 2)
+        }}</pre>
+      </div>
+
+      <!-- Modal Inspect Single Raw Document -->
+      <div
+        v-if="inspectingRawDoc"
+        class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs p-0 sm:p-4"
+        @click.self="inspectingRawDoc = null"
+      >
+        <div class="w-full max-w-2xl max-h-[88dvh] flex flex-col rounded-t-3xl sm:rounded-2xl bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 p-4 sm:p-6 shadow-2xl space-y-4">
+          <div class="flex items-start justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3">
+            <div class="min-w-0">
+              <div class="text-[11px] font-mono font-bold uppercase text-emerald-600 dark:text-emerald-400">
+                /{{ explorerSelectedCollection }}/{{ inspectingRawDoc.__docId }}
+              </div>
+              <h3 class="text-base font-bold text-slate-900 dark:text-slate-100 truncate mt-0.5">
+                Inspeksi Detail Dokumen Mentah Firestore
+              </h3>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                class="min-h-[36px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5"
+                @click="copyInspectingDocJson"
+              >
+                <Copy class="w-3.5 h-3.5" />
+                <span>{{ inspectingDocCopied ? 'Tersalin!' : 'Salin JSON' }}</span>
+              </button>
+              <button
+                type="button"
+                class="min-h-[36px] min-w-[36px] rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-center text-slate-500"
+                @click="inspectingRawDoc = null"
+              >
+                <X class="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <div class="overflow-y-auto space-y-3 pr-1">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div
+                v-for="fieldKey in Object.keys(inspectingRawDoc)"
+                :key="fieldKey"
+                class="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 p-3 space-y-1"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                    {{ fieldKey }}
+                  </span>
+                  <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                    {{ inspectingRawDoc[fieldKey] === null ? 'null' : typeof inspectingRawDoc[fieldKey] }}
+                  </span>
+                </div>
+                <div class="text-xs font-mono text-slate-900 dark:text-slate-100 break-all">
+                  {{ formatExplorerCellValue(inspectingRawDoc[fieldKey]) }}
+                </div>
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-800 bg-slate-950 p-3.5 overflow-x-auto">
+              <pre class="text-xs font-mono text-emerald-300">{{
+                JSON.stringify(inspectingRawDoc, null, 2)
+              }}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <!-- ===================================================================== -->
     <!-- TAB 1: IMPOR DATABASE (PHPMyAdmin JSON Database Migration & Designer) -->
@@ -1242,7 +2312,7 @@ async function confirmAndExecuteImport() {
                   ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-semibold'
                   : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-slate-300'
               "
-              @click="activeRawTableIdx = idx"
+              @click="selectRawTableTab(idx)"
             >
               <span>{{ tbl.tableName }}</span>
               <span class="text-[10px] opacity-80">
@@ -1280,6 +2350,36 @@ async function confirmAndExecuteImport() {
               </div>
 
               <div class="grid grid-cols-1 sm:flex sm:flex-wrap items-stretch sm:items-center gap-2 w-full sm:w-auto shrink-0">
+                <div class="relative flex-1 sm:w-52">
+                  <Search class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    v-model="rawTableSearchQuery"
+                    type="text"
+                    placeholder="Cari baris di tabel ini..."
+                    class="w-full min-h-[38px] pl-8 pr-7 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+                    @input="rawTableCurrentPage = 1"
+                  />
+                  <button
+                    v-if="rawTableSearchQuery"
+                    type="button"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    @click="rawTableSearchQuery = ''; rawTableCurrentPage = 1"
+                  >
+                    <X class="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <select
+                  v-model.number="rawTablePageSize"
+                  class="min-h-[38px] px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-semibold text-slate-700 dark:text-slate-300"
+                  @change="rawTableCurrentPage = 1"
+                >
+                  <option :value="10">10 / hal</option>
+                  <option :value="25">25 / hal</option>
+                  <option :value="50">50 / hal</option>
+                  <option :value="100">100 / hal</option>
+                </select>
+
                 <button
                   type="button"
                   class="w-full sm:w-auto min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-300 flex items-center justify-center"
@@ -1301,47 +2401,114 @@ async function confirmAndExecuteImport() {
             <div v-if="activeRawTable.rows.length === 0" class="p-6 text-center text-xs text-slate-500">
               Tabel <code>{{ activeRawTable.tableName }}</code> tidak memiliki baris data.
             </div>
-            <div v-else class="overflow-x-auto max-h-80 w-full">
-              <table class="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr class="border-b border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-950 text-slate-600 dark:text-slate-400 font-mono">
-                    <th class="py-2.5 px-3 font-semibold">#</th>
-                    <th
-                      v-for="col in activeRawTable.columns"
-                      :key="col"
-                      class="py-2.5 px-3 font-semibold whitespace-nowrap"
-                    >
-                      {{ col }}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody
-                  class="divide-y divide-slate-200/60 dark:divide-slate-800/70"
-                  :class="!activeRawTable.includeData ? 'opacity-50' : ''"
-                >
-                  <tr
-                    v-for="(row, rIdx) in activeRawTable.rows.slice(0, 100)"
-                    :key="rIdx"
-                    class="hover:bg-slate-50 dark:hover:bg-slate-800/40"
+            <div v-else class="w-full">
+              <div class="overflow-x-auto max-h-96 w-full">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead class="sticky top-0 z-10">
+                    <tr class="border-b border-slate-200 dark:border-slate-800 bg-slate-100/95 dark:bg-slate-950/95 text-slate-600 dark:text-slate-400 font-mono">
+                      <th class="py-2.5 px-3 font-semibold">#</th>
+                      <th
+                        v-for="col in activeRawTable.columns"
+                        :key="col"
+                        class="py-2.5 px-3 font-semibold whitespace-nowrap"
+                      >
+                        {{ col }}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody
+                    class="divide-y divide-slate-200/60 dark:divide-slate-800/70"
+                    :class="!activeRawTable.includeData ? 'opacity-50' : ''"
                   >
-                    <td class="py-2.5 px-3 font-mono tabular-nums text-slate-400">
-                      {{ rIdx + 1 }}
-                    </td>
-                    <td
-                      v-for="col in activeRawTable.columns"
-                      :key="col"
-                      class="py-2.5 px-3 font-mono tabular-nums text-slate-800 dark:text-slate-200 whitespace-nowrap max-w-xs truncate"
+                    <tr v-if="paginatedActiveRawTableRows.length === 0">
+                      <td :colspan="activeRawTable.columns.length + 1" class="py-6 text-center text-slate-400">
+                        Tidak ada baris yang cocok dengan pencarian "{{ rawTableSearchQuery }}".
+                      </td>
+                    </tr>
+                    <tr
+                      v-for="(row, rIdx) in paginatedActiveRawTableRows"
+                      :key="rIdx"
+                      class="hover:bg-slate-50 dark:hover:bg-slate-800/40"
                     >
-                      {{ row[col] === null || row[col] === undefined ? 'NULL' : row[col] }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <div
-                v-if="activeRawTable.rows.length > 100"
-                class="px-4 py-2 bg-slate-50 dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 text-[11px] font-mono text-slate-500 text-center"
-              >
-                Menampilkan 100 baris pertama dari total {{ activeRawTable.rows.length.toLocaleString('id-ID') }} baris untuk menjaga performa tabel tetap ringan.
+                      <td class="py-2.5 px-3 font-mono tabular-nums text-slate-400">
+                        {{ (rawTableCurrentPage - 1) * rawTablePageSize + rIdx + 1 }}
+                      </td>
+                      <td
+                        v-for="col in activeRawTable.columns"
+                        :key="col"
+                        class="py-2.5 px-3 font-mono tabular-nums text-slate-800 dark:text-slate-200 whitespace-nowrap max-w-xs truncate"
+                      >
+                        {{ row[col] === null || row[col] === undefined ? 'NULL' : row[col] }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Raw Table Pagination Footer -->
+              <div class="px-4 py-2.5 bg-slate-50 dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-slate-600 dark:text-slate-400">
+                <div class="font-mono text-[11px]">
+                  Menampilkan
+                  <strong class="text-slate-900 dark:text-white">
+                    {{ filteredActiveRawTableRows.length === 0 ? 0 : (rawTableCurrentPage - 1) * rawTablePageSize + 1 }}
+                  </strong>
+                  –
+                  <strong class="text-slate-900 dark:text-white">
+                    {{ Math.min(rawTableCurrentPage * rawTablePageSize, filteredActiveRawTableRows.length) }}
+                  </strong>
+                  dari
+                  <strong class="text-slate-900 dark:text-white">{{ filteredActiveRawTableRows.length.toLocaleString('id-ID') }}</strong>
+                  baris
+                </div>
+
+                <div class="flex items-center gap-1 flex-wrap">
+                  <button
+                    type="button"
+                    :disabled="rawTableCurrentPage <= 1"
+                    class="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-[11px] font-semibold disabled:opacity-40"
+                    @click="rawTableCurrentPage = 1"
+                  >
+                    Awal
+                  </button>
+                  <button
+                    type="button"
+                    :disabled="rawTableCurrentPage <= 1"
+                    class="p-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 disabled:opacity-40"
+                    @click="rawTableCurrentPage = Math.max(1, rawTableCurrentPage - 1)"
+                  >
+                    <ChevronLeft class="w-4 h-4" />
+                  </button>
+                  <button
+                    v-for="p in rawTableVisiblePages"
+                    :key="p"
+                    type="button"
+                    class="min-w-[28px] h-7 px-2 rounded-lg text-[11px] font-mono font-bold transition-colors"
+                    :class="
+                      rawTableCurrentPage === p
+                        ? 'bg-emerald-600 text-white'
+                        : 'border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300'
+                    "
+                    @click="rawTableCurrentPage = p"
+                  >
+                    {{ p }}
+                  </button>
+                  <button
+                    type="button"
+                    :disabled="rawTableCurrentPage >= rawTableTotalPages"
+                    class="p-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 disabled:opacity-40"
+                    @click="rawTableCurrentPage = Math.min(rawTableTotalPages, rawTableCurrentPage + 1)"
+                  >
+                    <ChevronRight class="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    :disabled="rawTableCurrentPage >= rawTableTotalPages"
+                    class="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-[11px] font-semibold disabled:opacity-40"
+                    @click="rawTableCurrentPage = rawTableTotalPages"
+                  >
+                    Akhir
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1583,65 +2750,167 @@ async function confirmAndExecuteImport() {
 
           <!-- Converted Data View A: Responsive Table per New Collection -->
           <div v-if="convertedPreviewMode === 'table'" class="space-y-3 min-w-0">
-            <div class="flex items-center gap-1.5 overflow-x-auto pb-1 w-full">
-              <button
-                v-for="tab in convertedCollectionTabs"
-                :key="tab.key"
-                type="button"
-                class="min-h-[36px] px-3 py-1.5 rounded-xl border text-xs font-mono font-medium transition-colors whitespace-nowrap shrink-0"
-                :class="
-                  activeConvertedTab === tab.key
-                    ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-semibold'
-                    : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
-                "
-                @click="activeConvertedTab = tab.key"
-              >
-                {{ tab.label }} ({{ tab.count }})
-              </button>
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div class="flex items-center gap-1.5 overflow-x-auto pb-1 w-full sm:w-auto">
+                <button
+                  v-for="tab in convertedCollectionTabs"
+                  :key="tab.key"
+                  type="button"
+                  class="min-h-[36px] px-3 py-1.5 rounded-xl border text-xs font-mono font-medium transition-colors whitespace-nowrap shrink-0"
+                  :class="
+                    activeConvertedTab === tab.key
+                      ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-semibold'
+                      : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
+                  "
+                  @click="selectConvertedTab(tab.key)"
+                >
+                  {{ tab.label }} ({{ tab.count }})
+                </button>
+              </div>
+
+              <!-- Search & Page Size for Converted Preview Table -->
+              <div class="flex flex-wrap items-center gap-2 shrink-0">
+                <div class="relative flex-1 sm:w-60 min-w-[180px]">
+                  <Search class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    v-model="convertedSearchQuery"
+                    type="text"
+                    placeholder="Cari ID, dompet, user, catatan..."
+                    class="w-full min-h-[36px] pl-8 pr-7 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+                    @input="convertedCurrentPage = 1"
+                  />
+                  <button
+                    v-if="convertedSearchQuery"
+                    type="button"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    @click="convertedSearchQuery = ''; convertedCurrentPage = 1"
+                  >
+                    <X class="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <select
+                  v-model.number="convertedPageSize"
+                  class="min-h-[36px] px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-semibold text-slate-700 dark:text-slate-300"
+                  @change="convertedCurrentPage = 1"
+                >
+                  <option :value="10">10 / hal</option>
+                  <option :value="25">25 / hal</option>
+                  <option :value="50">50 / hal</option>
+                  <option :value="100">100 / hal</option>
+                </select>
+              </div>
             </div>
 
             <div class="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900 w-full min-w-0">
               <div v-if="activeConvertedRows.length === 0" class="p-8 text-center text-xs text-slate-500">
                 Tidak ada dokumen yang disertakan pada koleksi <code>{{ activeConvertedTab }}</code> (tabel dihapus atau opsi "Sertakan Data" dinonaktifkan).
               </div>
-              <div v-else class="overflow-x-auto max-h-96 w-full">
-                <table class="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr class="border-b border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-950 text-slate-600 dark:text-slate-400 font-mono">
-                      <th class="py-2.5 px-3 font-semibold">#</th>
-                      <th
-                        v-for="col in activeConvertedColumns"
-                        :key="col"
-                        class="py-2.5 px-3 font-semibold whitespace-nowrap"
+              <div v-else class="w-full">
+                <div class="overflow-x-auto max-h-[460px] w-full">
+                  <table class="w-full text-left border-collapse text-xs">
+                    <thead class="sticky top-0 z-10">
+                      <tr class="border-b border-slate-200 dark:border-slate-800 bg-slate-100/95 dark:bg-slate-950/95 text-slate-600 dark:text-slate-400 font-mono">
+                        <th class="py-2.5 px-3 font-semibold">#</th>
+                        <th
+                          v-for="col in activeConvertedColumns"
+                          :key="col"
+                          class="py-2.5 px-3 font-semibold whitespace-nowrap"
+                        >
+                          {{ col }}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200/60 dark:divide-slate-800/70">
+                      <tr v-if="paginatedActiveConvertedRows.length === 0">
+                        <td :colspan="activeConvertedColumns.length + 1" class="py-6 text-center text-slate-400">
+                          Tidak ada dokumen yang cocok dengan kata kunci "{{ convertedSearchQuery }}".
+                        </td>
+                      </tr>
+                      <tr
+                        v-for="(row, rIdx) in paginatedActiveConvertedRows"
+                        :key="row.id || row.uid || rIdx"
+                        class="hover:bg-slate-50 dark:hover:bg-slate-800/40"
                       >
-                        {{ col }}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody class="divide-y divide-slate-200/60 dark:divide-slate-800/70">
-                    <tr
-                      v-for="(row, rIdx) in activeConvertedRows.slice(0, 100)"
-                      :key="rIdx"
-                      class="hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                        <td class="py-2.5 px-3 font-mono tabular-nums text-slate-400">
+                          {{ (convertedCurrentPage - 1) * convertedPageSize + rIdx + 1 }}
+                        </td>
+                        <td
+                          v-for="col in activeConvertedColumns"
+                          :key="col"
+                          class="py-2.5 px-3 font-mono tabular-nums text-slate-800 dark:text-slate-200 whitespace-nowrap max-w-xs truncate"
+                        >
+                          {{ row[col] === null || row[col] === undefined ? '-' : row[col] }}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <!-- Converted Preview Pagination Bar (for ALL converted tables) -->
+                <div class="px-4 py-2.5 bg-slate-50 dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-slate-600 dark:text-slate-400">
+                  <div class="font-mono text-[11px]">
+                    Menampilkan
+                    <strong class="text-slate-900 dark:text-white">
+                      {{ filteredActiveConvertedRows.length === 0 ? 0 : (convertedCurrentPage - 1) * convertedPageSize + 1 }}
+                    </strong>
+                    –
+                    <strong class="text-slate-900 dark:text-white">
+                      {{ Math.min(convertedCurrentPage * convertedPageSize, filteredActiveConvertedRows.length) }}
+                    </strong>
+                    dari
+                    <strong class="text-slate-900 dark:text-white">{{ filteredActiveConvertedRows.length.toLocaleString('id-ID') }}</strong>
+                    dokumen pada koleksi <code>{{ activeConvertedTab }}</code>
+                  </div>
+
+                  <div class="flex items-center gap-1 flex-wrap">
+                    <button
+                      type="button"
+                      :disabled="convertedCurrentPage <= 1"
+                      class="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-[11px] font-semibold disabled:opacity-40"
+                      @click="convertedCurrentPage = 1"
                     >
-                      <td class="py-2.5 px-3 font-mono tabular-nums text-slate-400">
-                        {{ rIdx + 1 }}
-                      </td>
-                      <td
-                        v-for="col in activeConvertedColumns"
-                        :key="col"
-                        class="py-2.5 px-3 font-mono tabular-nums text-slate-800 dark:text-slate-200 whitespace-nowrap max-w-xs truncate"
-                      >
-                        {{ row[col] === null || row[col] === undefined ? '-' : row[col] }}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-                <div
-                  v-if="activeConvertedRows.length > 100"
-                  class="px-4 py-2 bg-slate-50 dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 text-[11px] font-mono text-slate-500 text-center"
-                >
-                  Menampilkan 100 dokumen pertama dari total {{ activeConvertedRows.length.toLocaleString('id-ID') }} dokumen hasil konversi.
+                      Awal
+                    </button>
+                    <button
+                      type="button"
+                      :disabled="convertedCurrentPage <= 1"
+                      class="p-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 disabled:opacity-40"
+                      @click="convertedCurrentPage = Math.max(1, convertedCurrentPage - 1)"
+                    >
+                      <ChevronLeft class="w-4 h-4" />
+                    </button>
+                    <button
+                      v-for="p in convertedVisiblePages"
+                      :key="p"
+                      type="button"
+                      class="min-w-[28px] h-7 px-2 rounded-lg text-[11px] font-mono font-bold transition-colors"
+                      :class="
+                        convertedCurrentPage === p
+                          ? 'bg-emerald-600 text-white'
+                          : 'border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300'
+                      "
+                      @click="convertedCurrentPage = p"
+                    >
+                      {{ p }}
+                    </button>
+                    <button
+                      type="button"
+                      :disabled="convertedCurrentPage >= convertedTotalPages"
+                      class="p-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 disabled:opacity-40"
+                      @click="convertedCurrentPage = Math.min(convertedTotalPages, convertedCurrentPage + 1)"
+                    >
+                      <ChevronRight class="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      :disabled="convertedCurrentPage >= convertedTotalPages"
+                      class="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-[11px] font-semibold disabled:opacity-40"
+                      @click="convertedCurrentPage = convertedTotalPages"
+                    >
+                      Akhir
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
