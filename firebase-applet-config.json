@@ -1,10 +1,10 @@
 {
-  "projectId": "sisa-uang",
-  "appId": "1:238360575009:web:74f2008ea485d922f3b760",
-  "apiKey": "AIzaSyAotDh2TgcUZ2MX0MnIXk6HRTFTQ7gxGXA",
-  "authDomain": "sisa-uang.firebaseapp.com",
+  "projectId": "sisa-uang-dfb7b",
+  "appId": "1:798778039243:web:29450fae94be80d884344e",
+  "apiKey": "AIzaSyDzXNJhHEU-SrOqNdiwwCEcqV1Gn2Zfukk",
+  "authDomain": "sisa-uang-dfb7b.firebaseapp.com",
   "firestoreDatabaseId": "sisa-uang",
-  "storageBucket": "sisa-uang.firebasestorage.app",
-  "messagingSenderId": "238360575009",
-  "measurementId": "G-9W5KTQ3X5M"
+  "storageBucket": "sisa-uang-dfb7b.firebasestorage.app",
+  "messagingSenderId": "798778039243",
+  "measurementId": "G-KWS1Q8JFXX"
 }
