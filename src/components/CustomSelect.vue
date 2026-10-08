@@ -43,8 +43,52 @@ const isOpen = ref(false);
 const searchQuery = ref('');
 const highlightedIndex = ref(0);
 const containerRef = ref<HTMLElement | null>(null);
+const triggerRef = ref<HTMLElement | null>(null);
+const popoverRef = ref<HTMLElement | null>(null);
 const searchInputRef = ref<HTMLInputElement | null>(null);
 const optionsListRef = ref<HTMLElement | null>(null);
+const popoverStyle = ref<Record<string, string>>({});
+const optionsMaxHeight = ref<string>('240px');
+
+function updatePopoverPosition() {
+  if (!isOpen.value || !triggerRef.value || typeof window === 'undefined') return;
+  const rect = triggerRef.value.getBoundingClientRect();
+  const viewportHeight = window.innerHeight;
+  const viewportWidth = window.innerWidth;
+  const margin = 12;
+  const gap = 6;
+
+  const spaceBelow = viewportHeight - rect.bottom - margin;
+  const spaceAbove = rect.top - margin;
+  const searchHeaderHeight = props.searchable ? 68 : 0;
+
+  const width = Math.min(rect.width, viewportWidth - 16);
+  const left = Math.max(8, Math.min(rect.left, viewportWidth - width - 8));
+
+  if (spaceBelow >= 220 || spaceBelow >= spaceAbove) {
+    const availTotal = Math.max(160, Math.min(340, spaceBelow - gap));
+    const listMax = Math.max(110, availTotal - searchHeaderHeight);
+    optionsMaxHeight.value = `${listMax}px`;
+    popoverStyle.value = {
+      position: 'fixed',
+      top: `${rect.bottom + gap}px`,
+      left: `${left}px`,
+      width: `${width}px`,
+      zIndex: '9999',
+    };
+  } else {
+    const availTotal = Math.max(160, Math.min(340, spaceAbove - gap));
+    const listMax = Math.max(110, availTotal - searchHeaderHeight);
+    optionsMaxHeight.value = `${listMax}px`;
+    popoverStyle.value = {
+      position: 'fixed',
+      bottom: `${viewportHeight - rect.top + gap}px`,
+      left: `${left}px`,
+      width: `${width}px`,
+      zIndex: '9999',
+    };
+  }
+}
 
 const normalizedOptions = computed<SelectOptionItem[]>(() => {
   return props.options.map((opt) => {
@@ -85,8 +129,10 @@ async function openDropdown() {
   searchQuery.value = '';
   const idx = normalizedOptions.value.findIndex((o) => o.value === props.modelValue);
   highlightedIndex.value = idx >= 0 ? idx : 0;
+  updatePopoverPosition();
 
   await nextTick();
+  updatePopoverPosition();
   if (props.searchable && searchInputRef.value) {
     searchInputRef.value.focus();
   }
@@ -172,17 +218,31 @@ function scrollToHighlighted() {
 
 function handleClickOutside(e: MouseEvent) {
   if (!isOpen.value) return;
-  if (containerRef.value && !containerRef.value.contains(e.target as Node)) {
-    closeDropdown();
+  const target = e.target as Node;
+  if (containerRef.value && containerRef.value.contains(target)) return;
+  if (popoverRef.value && popoverRef.value.contains(target)) return;
+  closeDropdown();
+}
+
+function handleViewportChange(e: Event) {
+  if (!isOpen.value) return;
+  // Ignore scroll events originating inside the dropdown options list itself
+  if (e.type === 'scroll' && popoverRef.value && popoverRef.value.contains(e.target as Node)) {
+    return;
   }
+  updatePopoverPosition();
 }
 
 onMounted(() => {
   document.addEventListener('mousedown', handleClickOutside);
+  window.addEventListener('resize', handleViewportChange);
+  window.addEventListener('scroll', handleViewportChange, true);
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', handleClickOutside);
+  window.removeEventListener('resize', handleViewportChange);
+  window.removeEventListener('scroll', handleViewportChange, true);
 });
 </script>
 
@@ -194,6 +254,7 @@ onBeforeUnmount(() => {
   >
     <!-- Trigger Button -->
     <button
+      ref="triggerRef"
       type="button"
       :disabled="disabled"
       :aria-label="ariaLabel || placeholder"
@@ -202,6 +263,8 @@ onBeforeUnmount(() => {
       :class="[
         size === 'sm'
           ? 'min-h-[44px] sm:min-h-[40px] px-3.5 py-2 rounded-xl text-xs'
+          : !placeholder
+          ? 'h-[46px] min-h-[46px] px-4 py-2 rounded-xl text-xs sm:text-sm'
           : 'min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl text-sm sm:text-base',
         isOpen
           ? accentColor === 'indigo'
@@ -256,117 +319,123 @@ onBeforeUnmount(() => {
       />
     </button>
 
-    <!-- Dropdown Menu Popover -->
-    <Transition name="dropdown">
-      <div
-        v-if="isOpen"
-        class="absolute left-0 right-0 mt-1.5 z-[75] rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden"
-      >
-        <!-- Search Input Bar (Shown when searchable="true") -->
+    <!-- Teleported Dropdown Menu Popover at Top-Most Layer (z-[9999]) -->
+    <Teleport to="body">
+      <Transition name="dropdown">
         <div
-          v-if="searchable"
-          class="p-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/80 sticky top-0 z-10"
+          v-if="isOpen"
+          ref="popoverRef"
+          :style="popoverStyle"
+          class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden"
+          @keydown="handleKeydown"
         >
-          <div class="relative flex items-center">
-            <Search class="w-3.5 h-3.5 text-slate-400 absolute left-3 pointer-events-none" />
-            <input
-              ref="searchInputRef"
-              v-model="searchQuery"
-              type="text"
-              :placeholder="searchPlaceholder"
-              class="w-full min-h-[38px] pl-8 pr-8 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-              @click.stop
-            />
-            <button
-              v-if="searchQuery"
-              type="button"
-              class="absolute right-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-              @click.stop="searchQuery = ''; searchInputRef?.focus()"
-            >
-              <X class="w-3.5 h-3.5" />
-            </button>
-          </div>
-          <div class="px-1 pt-1.5 flex items-center justify-between text-[10px] text-slate-400">
-            <span>Menampilkan {{ filteredOptions.length }} dari {{ normalizedOptions.length }} pilihan</span>
-            <span v-if="searchQuery">Tekan Enter untuk memilih</span>
-          </div>
-        </div>
-
-        <!-- Options List -->
-        <div
-          ref="optionsListRef"
-          class="max-h-60 overflow-y-auto overscroll-contain p-1.5 space-y-0.5"
-        >
+          <!-- Search Input Bar (Shown when searchable="true") -->
           <div
-            v-if="filteredOptions.length === 0"
-            class="py-5 px-3 text-center space-y-2"
+            v-if="searchable"
+            class="p-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-950/90"
           >
-            <p class="text-xs text-slate-500 dark:text-slate-400">
-              Tidak ditemukan hasil untuk "<strong>{{ searchQuery }}</strong>"
-            </p>
-            <button
-              v-if="allowCustomValue && searchQuery.trim()"
-              type="button"
-              class="min-h-[34px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
-              @click.stop="selectCustomSearchValue"
-            >
-              <span>Gunakan "{{ searchQuery.trim() }}"</span>
-            </button>
+            <div class="w-full min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center gap-2.5 focus-within:border-emerald-600 transition-colors">
+              <Search class="w-4 h-4 text-slate-400 shrink-0" />
+              <input
+                ref="searchInputRef"
+                v-model="searchQuery"
+                type="text"
+                :placeholder="searchPlaceholder"
+                class="flex-1 w-full min-w-0 bg-transparent border-0 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none"
+                @click.stop
+              />
+              <button
+                v-if="searchQuery"
+                type="button"
+                class="p-0.5 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0"
+                @click.stop="searchQuery = ''; searchInputRef?.focus()"
+              >
+                <X class="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <div class="px-1 pt-1.5 flex items-center justify-between text-[10px] text-slate-400">
+              <span>Menampilkan {{ filteredOptions.length }} dari {{ normalizedOptions.length }} pilihan</span>
+              <span v-if="searchQuery">Tekan Enter untuk memilih</span>
+            </div>
           </div>
 
-          <button
-            v-for="(opt, idx) in filteredOptions"
-            :key="String(opt.value)"
-            type="button"
-            :data-opt-idx="idx"
-            class="w-full min-h-[40px] px-3 py-2 rounded-xl text-left text-xs sm:text-sm flex items-center justify-between gap-2 transition-colors"
-            :class="[
-              opt.value === modelValue
-                ? accentColor === 'indigo'
-                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-semibold'
-                  : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-semibold'
-                : idx === highlightedIndex
-                ? 'bg-slate-100 dark:bg-slate-800/80 text-slate-900 dark:text-slate-100'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50',
-            ]"
-            @mouseenter="highlightedIndex = idx"
-            @click.stop="selectOption(opt)"
+          <!-- Options List -->
+          <div
+            ref="optionsListRef"
+            :style="{ maxHeight: optionsMaxHeight }"
+            class="overflow-y-auto overscroll-contain p-1.5 space-y-0.5"
           >
-            <div class="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-              <span class="truncate">{{ opt.label }}</span>
-              <span
-                v-if="opt.sublabel"
-                class="text-xs font-money"
-                :class="
-                  opt.value === modelValue
-                    ? accentColor === 'indigo'
-                      ? 'text-indigo-600 dark:text-indigo-400'
-                      : 'text-emerald-600 dark:text-emerald-400'
-                    : 'text-slate-400 dark:text-slate-500'
-                "
+            <div
+              v-if="filteredOptions.length === 0"
+              class="py-5 px-3 text-center space-y-2"
+            >
+              <p class="text-xs text-slate-500 dark:text-slate-400">
+                Tidak ditemukan hasil untuk "<strong>{{ searchQuery }}</strong>"
+              </p>
+              <button
+                v-if="allowCustomValue && searchQuery.trim()"
+                type="button"
+                class="min-h-[34px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                @click.stop="selectCustomSearchValue"
               >
-                {{ opt.sublabel }}
-              </span>
-              <span
-                v-if="opt.badge"
-                class="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400"
-              >
-                {{ opt.badge }}
-              </span>
+                <span>Gunakan "{{ searchQuery.trim() }}"</span>
+              </button>
             </div>
 
-            <Check
-              v-if="opt.value === modelValue"
-              class="w-4 h-4 shrink-0"
-              :class="
-                accentColor === 'indigo'
-                  ? 'text-indigo-600 dark:text-indigo-400'
-                  : 'text-emerald-600 dark:text-emerald-400'
-              "
-            />
-          </button>
+            <button
+              v-for="(opt, idx) in filteredOptions"
+              :key="String(opt.value)"
+              type="button"
+              :data-opt-idx="idx"
+              class="w-full min-h-[40px] px-3 py-2 rounded-xl text-left text-xs sm:text-sm flex items-center justify-between gap-2 transition-colors"
+              :class="[
+                opt.value === modelValue
+                  ? accentColor === 'indigo'
+                    ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-semibold'
+                    : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-semibold'
+                  : idx === highlightedIndex
+                  ? 'bg-slate-100 dark:bg-slate-800/80 text-slate-900 dark:text-slate-100'
+                  : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50',
+              ]"
+              @mouseenter="highlightedIndex = idx"
+              @click.stop="selectOption(opt)"
+            >
+              <div class="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span class="truncate">{{ opt.label }}</span>
+                <span
+                  v-if="opt.sublabel"
+                  class="text-xs font-money"
+                  :class="
+                    opt.value === modelValue
+                      ? accentColor === 'indigo'
+                        ? 'text-indigo-600 dark:text-indigo-400'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-slate-400 dark:text-slate-500'
+                  "
+                >
+                  {{ opt.sublabel }}
+                </span>
+                <span
+                  v-if="opt.badge"
+                  class="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400"
+                >
+                  {{ opt.badge }}
+                </span>
+              </div>
+
+              <Check
+                v-if="opt.value === modelValue"
+                class="w-4 h-4 shrink-0"
+                :class="
+                  accentColor === 'indigo'
+                    ? 'text-indigo-600 dark:text-indigo-400'
+                    : 'text-emerald-600 dark:text-emerald-400'
+                "
+              />
+            </button>
+          </div>
         </div>
-      </div>
-    </Transition>
+      </Transition>
+    </Teleport>
   </div>
 </template>
