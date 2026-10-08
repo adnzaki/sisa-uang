@@ -19,6 +19,7 @@ import {
   KeyRound,
   Eye,
   EyeOff,
+  Sparkles,
 } from 'lucide-vue-next';
 import { useThemeStore } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
@@ -470,6 +471,15 @@ async function handleChangePassword() {
           <div class="flex flex-wrap items-center gap-2 shrink-0">
             <button
               type="button"
+              class="min-h-[38px] px-3.5 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/70 dark:bg-emerald-950/40 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              @click="notificationStore.openChangelogModal()"
+            >
+              <Sparkles class="w-3.5 h-3.5 shrink-0" />
+              <span>Catatan Rilis (Changelog)</span>
+            </button>
+
+            <button
+              type="button"
               :disabled="isCheckingUpdate || isReloadingForUpdate"
               class="min-h-[38px] px-3.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-600 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
               @click="handleManualCheckUpdate"
@@ -643,13 +653,18 @@ async function handleChangePassword() {
 
     <!-- Application Version Footer at the very bottom of Settings Page -->
     <div class="pt-2 pb-4 text-center space-y-1">
-      <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-500 dark:text-slate-400">
+      <button
+        type="button"
+        class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-slate-200/80 dark:border-slate-800 hover:border-emerald-500/50 bg-white dark:bg-slate-900 text-xs text-slate-500 dark:text-slate-400 transition-colors cursor-pointer"
+        @click="notificationStore.openChangelogModal()"
+      >
+        <Sparkles class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
         <span class="font-semibold text-slate-700 dark:text-slate-300">Sisa Uang</span>
         <span aria-hidden="true">·</span>
-        <span>Your Finance Assistant</span>
+        <span class="font-mono font-semibold text-emerald-600 dark:text-emerald-400">{{ currentAppVersion }}</span>
         <span aria-hidden="true">·</span>
-        <span class="font-mono font-semibold text-emerald-600 dark:text-emerald-400">v1.0.0-rc.3</span>
-      </div>
+        <span class="text-emerald-600 dark:text-emerald-400 font-semibold">Lihat Catatan Rilis</span>
+      </button>
     </div>
   </div>
 </template>

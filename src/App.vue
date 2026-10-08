@@ -27,6 +27,7 @@ import {
   Database,
   ChevronDown,
   User,
+  Sparkles,
 } from 'lucide-vue-next';
 import { useAuthStore } from './stores/auth';
 import { useThemeStore, ThemeMode } from './stores/theme';
@@ -38,6 +39,7 @@ import AppModal from './components/AppModal.vue';
 import PWAInstallButton from './components/PWAInstallButton.vue';
 import OfflineIndicator from './components/OfflineIndicator.vue';
 import AppUpdateBanner from './components/AppUpdateBanner.vue';
+import ReleaseNotesModal from './components/ReleaseNotesModal.vue';
 
 const { t, locale } = useI18n();
 const route = useRoute();
@@ -553,10 +555,16 @@ async function handleLogout() {
           <!-- In-App PWA Install Button -->
           <PWAInstallButton variant="sidebar" />
 
-          <!-- Application Version at very bottom of Desktop Sidebar -->
-          <div class="pt-0.5 text-center text-[11px] font-mono text-slate-400 dark:text-slate-500">
-            Versi 1.0.0-rc.3
-          </div>
+          <!-- Application Version & Release Notes Trigger at very bottom of Desktop Sidebar -->
+          <button
+            type="button"
+            class="w-full py-1.5 px-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/80 text-center text-[11px] font-mono text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center justify-center gap-1.5 transition-colors"
+            title="Lihat Informasi Rilis &amp; Changelog v1.0.0-rc.3"
+            @click="notificationStore.openChangelogModal()"
+          >
+            <Sparkles class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <span>Versi 1.0.0-rc.3 · Info Rilis</span>
+          </button>
         </div>
       </aside>
 
@@ -647,7 +655,7 @@ async function handleLogout() {
                         :class="
                           themeStore.themeMode === 'light'
                             ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                         "
                         @click="themeStore.setTheme('light')"
                       >
@@ -660,7 +668,7 @@ async function handleLogout() {
                         :class="
                           themeStore.themeMode === 'dark'
                             ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                         "
                         @click="themeStore.setTheme('dark')"
                       >
@@ -673,7 +681,7 @@ async function handleLogout() {
                         :class="
                           themeStore.themeMode === 'system'
                             ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                         "
                         @click="themeStore.setTheme('system')"
                       >
@@ -682,6 +690,21 @@ async function handleLogout() {
                       </button>
                     </div>
                   </div>
+
+                  <!-- Release Notes / What's New Button -->
+                  <button
+                    type="button"
+                    class="w-full min-h-[38px] px-3.5 py-2 rounded-xl border border-emerald-200/80 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/30 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-between gap-2 transition-colors"
+                    @click="accountMenuOpen = false; notificationStore.openChangelogModal()"
+                  >
+                    <span class="flex items-center gap-2 truncate">
+                      <Sparkles class="w-3.5 h-3.5 shrink-0" />
+                      <span>Apa yang Baru (v1.0.0-rc.3)</span>
+                    </span>
+                    <span class="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-mono font-bold shrink-0">
+                      BARU
+                    </span>
+                  </button>
 
                   <!-- Logout Button -->
                   <button
@@ -812,6 +835,21 @@ async function handleLogout() {
                       </button>
                     </div>
                   </div>
+
+                  <!-- Release Notes / What's New Button -->
+                  <button
+                    type="button"
+                    class="w-full min-h-[38px] px-3.5 py-2 rounded-xl border border-emerald-200/80 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/30 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-between gap-2 transition-colors"
+                    @click="accountMenuOpen = false; notificationStore.openChangelogModal()"
+                  >
+                    <span class="flex items-center gap-2 truncate">
+                      <Sparkles class="w-3.5 h-3.5 shrink-0" />
+                      <span>Apa yang Baru (v1.0.0-rc.3)</span>
+                    </span>
+                    <span class="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-mono font-bold shrink-0">
+                      BARU
+                    </span>
+                  </button>
 
                   <!-- Logout Button -->
                   <button
@@ -975,10 +1013,15 @@ async function handleLogout() {
           <div class="space-y-2.5 pt-4 border-t border-slate-200 dark:border-slate-800 shrink-0">
             <PWAInstallButton variant="sidebar" />
 
-            <!-- Application Version at very bottom of Mobile Sidebar Drawer -->
-            <div class="pt-0.5 text-center text-[11px] font-mono text-slate-400 dark:text-slate-500">
-              Versi 1.0.0-rc.3
-            </div>
+            <!-- Application Version & Release Notes Trigger at very bottom of Mobile Sidebar Drawer -->
+            <button
+              type="button"
+              class="w-full py-1.5 px-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/80 text-center text-[11px] font-mono text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center justify-center gap-1.5 transition-colors"
+              @click="mobileDrawerOpen = false; notificationStore.openChangelogModal()"
+            >
+              <Sparkles class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>Versi 1.0.0-rc.3 · Info Rilis</span>
+            </button>
           </div>
         </div>
       </div>
@@ -1153,6 +1196,9 @@ async function handleLogout() {
 
     <!-- Global App Update Notification & Full Reload Banner -->
     <AppUpdateBanner />
+
+    <!-- Global Official Release Notes & Changelog Modal (v1.0.0-rc.3) -->
+    <ReleaseNotesModal />
 
     <!-- Global Delete Confirmation Modal -->
     <AppModal

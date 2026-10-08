@@ -8,7 +8,7 @@ const props = withDefaults(
     open?: boolean;
     title: string;
     subtitle?: string;
-    maxWidth?: 'md' | 'lg' | 'xl' | '2xl';
+    maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
     hideFooter?: boolean;
   }>(),
   {
@@ -123,13 +123,15 @@ onBeforeUnmount(() => {
       <div
         class="modal-panel w-full h-dvh max-h-dvh sm:h-auto sm:max-h-[90dvh] flex flex-col overflow-hidden bg-white dark:bg-slate-900 sm:rounded-2xl sm:border border-slate-200 dark:border-slate-800 shadow-2xl"
         :class="[
-          maxWidth === 'md'
-            ? 'sm:max-w-md'
-            : maxWidth === 'xl'
-            ? 'sm:max-w-xl'
-            : maxWidth === '2xl'
-            ? 'sm:max-w-2xl'
-            : 'sm:max-w-lg',
+          maxWidth === 'sm'
+            ? 'sm:max-w-sm'
+            : maxWidth === 'md'
+              ? 'sm:max-w-md'
+              : maxWidth === 'xl'
+                ? 'sm:max-w-xl'
+                : maxWidth === '2xl'
+                  ? 'sm:max-w-2xl'
+                  : 'sm:max-w-lg',
         ]"
       >
         <!-- FIXED MODAL HEADER (Top) -->
