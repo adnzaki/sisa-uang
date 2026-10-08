@@ -261,7 +261,7 @@ async function cancelOtpAndLogout() {
             :class="
               activeTab === 'login'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-white/50 dark:hover:bg-slate-700/40'
             "
             @click="activeTab = 'login'"
           >
@@ -273,7 +273,7 @@ async function cancelOtpAndLogout() {
             :class="
               activeTab === 'register'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-white/50 dark:hover:bg-slate-700/40'
             "
             @click="activeTab = 'register'"
           >

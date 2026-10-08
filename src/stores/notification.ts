@@ -29,6 +29,17 @@ export const useNotificationStore = defineStore('notification', () => {
   const confirmDialog = ref<ConfirmDialogOptions | null>(null);
   let confirmResolver: ((confirmed: boolean) => void) | null = null;
 
+  // Global Official Release Notes / Changelog Modal State (v1.0.0-rc.3)
+  const changelogModalOpen = ref(false);
+
+  function openChangelogModal() {
+    changelogModalOpen.value = true;
+  }
+
+  function closeChangelogModal() {
+    changelogModalOpen.value = false;
+  }
+
   function requestConfirmation(options: ConfirmDialogOptions): Promise<boolean> {
     if (confirmResolver) {
       confirmResolver(false);
@@ -179,6 +190,9 @@ export const useNotificationStore = defineStore('notification', () => {
     confirmDialog,
     requestConfirmation,
     resolveConfirmation,
+    changelogModalOpen,
+    openChangelogModal,
+    closeChangelogModal,
     showPopup,
     notifySuccess,
     notifyError,
