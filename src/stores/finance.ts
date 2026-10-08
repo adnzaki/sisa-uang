@@ -206,10 +206,44 @@ export function formatTransactionDateBadge(
 export const useFinanceStore = defineStore('finance', () => {
   const wallets = ref<WalletItem[]>([]);
   const rawWalletOwners = ref<WalletOwnerItem[]>([]);
-  const userCategories = ref<CategoryItem[]>([]);
+  const rawUserCategories = ref<CategoryItem[]>([]);
   const defaultCategories = ref<CategoryItem[]>([]);
   const rawTransactions = ref<TransactionItem[]>([]);
   const budgets = ref<BudgetItem[]>([]);
+
+  const userCategories = computed<CategoryItem[]>(() =>
+    rawUserCategories.value
+      .filter((c) => !c.deleted)
+      .sort((a, b) => a.name.localeCompare(b.name))
+  );
+
+  // Set of default category IDs that this user has customized (edited or deleted)
+  const customizedDefaultCatIds = computed<Set<string>>(() => {
+    const uid = activeOwnerUid.value;
+    const set = new Set<string>();
+    if (!uid) return set;
+    const prefix = `${uid}_def_`;
+    for (const c of rawUserCategories.value) {
+      if (c.id.startsWith(prefix)) {
+        set.add(c.id.slice(prefix.length));
+      }
+    }
+    return set;
+  });
+
+  // Active global default categories that have NOT been overridden or deleted by the user
+  const activeDefaultCategories = computed<CategoryItem[]>(() => {
+    const overriddenIds = customizedDefaultCatIds.value;
+    const seenUserKeys = new Set<string>(
+      userCategories.value.map((c) => `${c.type}:${c.name.toLowerCase().trim()}`)
+    );
+    return defaultCategories.value.filter((c) => {
+      if (overriddenIds.has(c.id)) return false;
+      const key = `${c.type}:${c.name.toLowerCase().trim()}`;
+      if (seenUserKeys.has(key)) return false;
+      return true;
+    });
+  });
 
   /**
    * Active Wallet Owners (Kepemilikan Sumber Dana):
@@ -280,7 +314,7 @@ export const useFinanceStore = defineStore('finance', () => {
     try {
       localStorage.setItem(storageKey('wallets', uid), JSON.stringify(wallets.value));
       localStorage.setItem(storageKey('wallet_owners', uid), JSON.stringify(rawWalletOwners.value));
-      localStorage.setItem(storageKey('user_categories', uid), JSON.stringify(userCategories.value));
+      localStorage.setItem(storageKey('user_categories', uid), JSON.stringify(rawUserCategories.value));
       localStorage.setItem(storageKey('budgets', uid), JSON.stringify(budgets.value));
       // Only cache up to 300 recent transactions in localStorage to avoid quota issues
       localStorage.setItem(
@@ -383,12 +417,14 @@ export const useFinanceStore = defineStore('finance', () => {
 
   /**
    * Merged Categories: User's Custom Categories (`ownerId == uid`) + SisaUang Default Categories (`ownerId == ci4_user_46`)
+   * If a default category has been edited by the user, its customized document in `userCategories` replaces it and is labeled as Kustom (`isDefault: false`).
+   * If a default category has been deleted by the user, it is excluded via `activeDefaultCategories`.
    */
   const categories = computed<CategoryItem[]>(() => {
     const merged: CategoryItem[] = [];
     const seen = new Set<string>();
 
-    // 1. User's custom categories first
+    // 1. User's custom categories (including edited default categories, which now have isDefault: false)
     for (const c of userCategories.value) {
       const key = `${c.type}:${c.name.toLowerCase().trim()}`;
       if (!seen.has(key)) {
@@ -397,8 +433,8 @@ export const useFinanceStore = defineStore('finance', () => {
       }
     }
 
-    // 2. Global default categories from Firestore `ci4_user_46` (`default_category`)
-    for (const c of defaultCategories.value) {
+    // 2. Global default categories from Firestore `ci4_user_46` (`default_category`) not yet edited/deleted by user
+    for (const c of activeDefaultCategories.value) {
       const key = `${c.type}:${c.name.toLowerCase().trim()}`;
       if (!seen.has(key)) {
         seen.add(key);
@@ -539,7 +575,7 @@ export const useFinanceStore = defineStore('finance', () => {
     // Clear state first so dummy or previous user data never leaks
     wallets.value = [];
     rawWalletOwners.value = [];
-    userCategories.value = [];
+    rawUserCategories.value = [];
     rawTransactions.value = [];
     budgets.value = [];
 
@@ -559,7 +595,7 @@ export const useFinanceStore = defineStore('finance', () => {
           (fo) => !fo.deleted
         );
       }
-      if (savedUserCats) userCategories.value = JSON.parse(savedUserCats);
+      if (savedUserCats) rawUserCategories.value = JSON.parse(savedUserCats);
       if (savedTransactions) rawTransactions.value = JSON.parse(savedTransactions);
       if (savedBudgets) budgets.value = JSON.parse(savedBudgets);
       syncWalletTotalBalancesFromHolders();
@@ -612,18 +648,17 @@ export const useFinanceStore = defineStore('finance', () => {
         }
       );
 
-      // 3A. User's Custom Categories listener (`ownerId == uid`, filters out soft-deleted items)
+      // 3A. User's Custom Categories listener (`ownerId == uid`, keeps raw list to track soft-deleted default overrides)
       const userCatQuery = query(collection(db, 'categories'), where('ownerId', '==', uid));
       unsubUserCategories = onSnapshot(
         userCatQuery,
         (snap) => {
-          userCategories.value = snap.docs
+          rawUserCategories.value = snap.docs
             .map((d) => ({
               id: d.id,
               ...(d.data() as Omit<CategoryItem, 'id'>),
               isDefault: false,
             }))
-            .filter((c) => !c.deleted)
             .sort((a, b) => a.name.localeCompare(b.name));
           saveLocalSnapshot(uid);
         },
@@ -1093,11 +1128,19 @@ export const useFinanceStore = defineStore('finance', () => {
     );
   }
 
-  async function removeWalletOwner(holderId: string) {
+  async function removeWalletOwner(holderId: string): Promise<boolean> {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
     const target = walletOwners.value.find((fo) => fo.id === holderId);
-    if (!target) return;
+    if (!target) return false;
+
+    const confirmed = await useNotificationStore().requestConfirmation({
+      title: 'Konfirmasi Hapus Kepemilikan Dana',
+      message: `Apakah Anda yakin ingin menghapus data kepemilikan dana "${formatHolderName(target.holderName)}" dari dompet "${target.walletName}"?`,
+      detail: `Saldo alokasi sebesar Rp ${Number(target.balance || 0).toLocaleString('id-ID')} akan dikurangi dari total saldo dompet "${target.walletName}".`,
+      confirmLabel: 'Ya, Hapus Kepemilikan',
+    });
+    if (!confirmed) return false;
 
     await ensureFirestoreSessionForUser(uid);
     try {
@@ -1123,13 +1166,24 @@ export const useFinanceStore = defineStore('finance', () => {
       'Pemilik Sumber Dana Dihapus',
       `Pemilik dana "${formatHolderName(target.holderName)}" telah diarsipkan (Soft Delete) dari ${target.walletName}.`
     );
+    return true;
   }
 
-  async function removeWallet(walletId: string) {
+  async function removeWallet(walletId: string): Promise<boolean> {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
     const target = wallets.value.find((w) => w.id === walletId);
     const childHolders = walletOwners.value.filter((fo) => fo.walletId === walletId);
+
+    const confirmed = await useNotificationStore().requestConfirmation({
+      title: 'Konfirmasi Hapus Dompet',
+      message: `Apakah Anda yakin ingin menghapus sumber dana "${target?.name || walletId}"?`,
+      detail: target
+        ? `Saldo saat ini: Rp ${Number(target.balance || 0).toLocaleString('id-ID')}. Seluruh alokasi pemilik dana (${childHolders.length} item) pada dompet ini juga akan ikut diarsipkan.`
+        : 'Seluruh alokasi pemilik dana pada dompet ini juga akan ikut diarsipkan.',
+      confirmLabel: 'Ya, Hapus Dompet',
+    });
+    if (!confirmed) return false;
 
     await ensureFirestoreSessionForUser(uid);
     try {
@@ -1161,6 +1215,7 @@ export const useFinanceStore = defineStore('finance', () => {
         `Sumber dana "${target.name}" berhasil diarsipkan (Soft Delete) di Firestore.`
       );
     }
+    return true;
   }
 
   // =========================================================================
@@ -1207,11 +1262,16 @@ export const useFinanceStore = defineStore('finance', () => {
   ) {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
-    const target = userCategories.value.find((c) => c.id === catId);
+    const customTarget = userCategories.value.find((c) => c.id === catId);
+    const defaultTarget = !customTarget
+      ? defaultCategories.value.find((c) => c.id === catId)
+      : undefined;
+    const target = customTarget || defaultTarget;
+
     if (!target) {
       useNotificationStore().notifyError(
-        'Kategori Bawaan Sistem',
-        'Kategori bawaan sistem tidak dapat diubah. Silakan tambahkan kategori kustom baru.'
+        'Kategori Tidak Ditemukan',
+        'Data kategori yang ingin diubah tidak ditemukan.'
       );
       return;
     }
@@ -1224,6 +1284,34 @@ export const useFinanceStore = defineStore('finance', () => {
     );
 
     await ensureFirestoreSessionForUser(uid);
+
+    // If editing a system default category (and user is not the global default owner),
+    // save it as a user-owned custom category override so its label becomes "Kustom"
+    if (defaultTarget && uid !== DEFAULT_CATEGORY_OWNER_ID) {
+      const overrideDocId = sanitizeId(`${uid}_def_${catId}`);
+      try {
+        await setDoc(doc(db, 'categories', overrideDocId), {
+          ownerId: uid,
+          name: safeName,
+          type: payload.type,
+          color: safeColor,
+          deleted: false,
+          deletedAt: null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        useNotificationStore().notifyError('Gagal Memperbarui Kategori', err);
+        handleFirestoreError(err, OperationType.CREATE, `categories/${overrideDocId}`);
+      }
+
+      useNotificationStore().notifySuccess(
+        'Kategori Diubah Menjadi Kustom',
+        `Kategori bawaan "${target.name}" berhasil diperbarui menjadi "${safeName}" dengan label Kustom.`
+      );
+      return;
+    }
+
     try {
       await updateDoc(doc(db, 'categories', catId), {
         name: safeName,
@@ -1242,19 +1330,63 @@ export const useFinanceStore = defineStore('finance', () => {
     );
   }
 
-  async function removeCategory(catId: string) {
+  async function removeCategory(catId: string): Promise<boolean> {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
-    const target = userCategories.value.find((c) => c.id === catId);
+    const customTarget = userCategories.value.find((c) => c.id === catId);
+    const defaultTarget = !customTarget
+      ? defaultCategories.value.find((c) => c.id === catId)
+      : undefined;
+    const target = customTarget || defaultTarget;
+
     if (!target) {
       useNotificationStore().notifyError(
-        'Kategori Bawaan Sistem',
-        'Kategori bawaan (default_category) tidak dapat dihapus. Anda dapat menghapus kategori kustom milik Anda sendiri.'
+        'Kategori Tidak Ditemukan',
+        'Data kategori yang ingin dihapus tidak ditemukan.'
       );
-      return;
+      return false;
     }
 
+    const isDefaultCat = Boolean(defaultTarget);
+    const confirmed = await useNotificationStore().requestConfirmation({
+      title: isDefaultCat ? 'Konfirmasi Hapus Kategori Bawaan' : 'Konfirmasi Hapus Kategori',
+      message: `Apakah Anda yakin ingin menghapus kategori ${isDefaultCat ? 'bawaan' : 'kustom'} "${target.name}"?`,
+      detail: `Tipe kategori: ${target.type === 'income' ? 'Pemasukan' : 'Pengeluaran'}. Kategori ini akan dihapus/diarsipkan dari daftar pilihan aktif Anda.`,
+      confirmLabel: 'Ya, Hapus Kategori',
+    });
+    if (!confirmed) return false;
+
     await ensureFirestoreSessionForUser(uid);
+
+    if (defaultTarget && uid !== DEFAULT_CATEGORY_OWNER_ID) {
+      const overrideDocId = sanitizeId(`${uid}_def_${catId}`);
+      try {
+        await setDoc(doc(db, 'categories', overrideDocId), {
+          ownerId: uid,
+          name: sanitizeString(target.name, MAX_CATEGORY_LENGTH, 'Kategori'),
+          type: target.type,
+          color: sanitizeString(
+            target.color || (target.type === 'income' ? 'emerald' : 'rose'),
+            20,
+            'emerald'
+          ),
+          deleted: true,
+          deletedAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        useNotificationStore().notifyError('Gagal Menghapus Kategori Bawaan', err);
+        handleFirestoreError(err, OperationType.CREATE, `categories/${overrideDocId}`);
+      }
+
+      useNotificationStore().notifySuccess(
+        'Kategori Bawaan Dihapus',
+        `Kategori bawaan "${target.name}" berhasil dihapus dari daftar aktif Anda.`
+      );
+      return true;
+    }
+
     try {
       await updateDoc(doc(db, 'categories', catId), {
         deleted: true,
@@ -1270,6 +1402,7 @@ export const useFinanceStore = defineStore('finance', () => {
       'Kategori Dihapus',
       `Kategori "${target.name}" berhasil diarsipkan (Soft Delete) dari daftar aktif.`
     );
+    return true;
   }
 
   // =========================================================================
@@ -1642,11 +1775,26 @@ export const useFinanceStore = defineStore('finance', () => {
     );
   }
 
-  async function removeTransaction(txId: string) {
+  async function removeTransaction(txId: string): Promise<boolean> {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
     const tx = transactions.value.find((t) => t.id === txId);
-    if (!tx) return;
+    if (!tx) return false;
+
+    const typeLabel =
+      tx.type === 'income'
+        ? 'Pemasukan'
+        : tx.type === 'expense'
+          ? 'Pengeluaran'
+          : 'Transfer';
+
+    const confirmed = await useNotificationStore().requestConfirmation({
+      title: 'Konfirmasi Hapus Transaksi',
+      message: `Apakah Anda yakin ingin menghapus transaksi ${typeLabel} "${tx.note || tx.category}"?`,
+      detail: `Nominal: Rp ${Number(tx.amount || 0).toLocaleString('id-ID')} · Tanggal: ${tx.date} · Dompet: ${tx.walletName}. Saldo dompet dan pemilik dana akan dikembalikan secara otomatis.`,
+      confirmLabel: 'Ya, Hapus Transaksi',
+    });
+    if (!confirmed) return false;
 
     const sourceHolder = tx.fundOwnerId
       ? walletOwners.value.find((h) => h.id === tx.fundOwnerId)
@@ -1739,6 +1887,7 @@ export const useFinanceStore = defineStore('finance', () => {
       'Transaksi Dihapus',
       `Transaksi ${tx.category} (Rp ${tx.amount.toLocaleString('id-ID')}) telah diarsipkan (Soft Delete) dan saldo dompet telah dikembalikan.`
     );
+    return true;
   }
 
   // =========================================================================
@@ -1805,10 +1954,20 @@ export const useFinanceStore = defineStore('finance', () => {
     );
   }
 
-  async function removeBudget(budgetId: string) {
+  async function removeBudget(budgetId: string): Promise<boolean> {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
     const target = budgets.value.find((b) => b.id === budgetId);
+
+    const confirmed = await useNotificationStore().requestConfirmation({
+      title: 'Konfirmasi Hapus Anggaran',
+      message: `Apakah Anda yakin ingin menghapus batas anggaran untuk kategori "${target?.category || budgetId}"?`,
+      detail: target
+        ? `Batas anggaran: Rp ${Number(target.limitAmount || 0).toLocaleString('id-ID')}. Data anggaran kategori ini akan diarsipkan.`
+        : 'Data anggaran kategori ini akan diarsipkan.',
+      confirmLabel: 'Ya, Hapus Anggaran',
+    });
+    if (!confirmed) return false;
 
     await ensureFirestoreSessionForUser(uid);
     try {
@@ -1828,13 +1987,14 @@ export const useFinanceStore = defineStore('finance', () => {
         `Anggaran kategori "${target.category}" berhasil diarsipkan (Soft Delete).`
       );
     }
+    return true;
   }
 
   return {
     wallets,
     walletOwners,
     userCategories,
-    defaultCategories,
+    defaultCategories: activeDefaultCategories,
     categories,
     expenseCategoryNames,
     incomeCategoryNames,

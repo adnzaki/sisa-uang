@@ -98,7 +98,6 @@ async function handleAddCategory() {
 }
 
 function openEditCategoryModal(cat: CategoryItem) {
-  if (cat.isDefault) return;
   editingCategory.value = cat;
   editCatName.value = cat.name;
   editCatType.value = cat.type;
@@ -116,8 +115,10 @@ async function handleSaveEditCategory() {
 async function handleDeleteEditingCategory() {
   if (!editingCategory.value) return;
   const id = editingCategory.value.id;
-  editingCategory.value = null;
-  await financeStore.removeCategory(id);
+  const deleted = await financeStore.removeCategory(id);
+  if (deleted) {
+    editingCategory.value = null;
+  }
 }
 </script>
 
@@ -273,14 +274,9 @@ async function handleDeleteEditingCategory() {
           <div
             v-for="cat in expenseCategories"
             :key="cat.id"
-            :role="cat.isDefault ? undefined : 'button'"
-            :tabindex="cat.isDefault ? undefined : 0"
-            class="min-h-[48px] px-3.5 py-2.5 rounded-xl border flex items-center justify-between text-xs sm:text-sm gap-2 transition-all"
-            :class="
-              cat.isDefault
-                ? 'border-slate-100 dark:border-slate-800/70 bg-slate-50/50 dark:bg-slate-950/30'
-                : 'border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-950/80 hover:border-emerald-500/50 active:scale-[0.99] cursor-pointer'
-            "
+            role="button"
+            tabindex="0"
+            class="min-h-[48px] px-3.5 py-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-950/80 hover:border-emerald-500/50 active:scale-[0.99] cursor-pointer flex items-center justify-between text-xs sm:text-sm gap-2 transition-all"
             @click="openEditCategoryModal(cat)"
             @keydown.enter="openEditCategoryModal(cat)"
           >
@@ -303,10 +299,9 @@ async function handleDeleteEditingCategory() {
             </div>
 
             <button
-              v-if="!cat.isDefault"
               type="button"
               class="w-10 h-10 min-w-[40px] min-h-[40px] rounded-xl border border-rose-200/70 dark:border-rose-900/50 bg-rose-50/70 dark:bg-rose-950/30 hover:bg-rose-100 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0 transition-colors"
-              title="Hapus kategori kustom"
+              :title="cat.isDefault ? 'Hapus kategori bawaan' : 'Hapus kategori kustom'"
               @click.stop="financeStore.removeCategory(cat.id)"
             >
               <Trash2 class="w-4 h-4" />
@@ -350,14 +345,9 @@ async function handleDeleteEditingCategory() {
           <div
             v-for="cat in incomeCategories"
             :key="cat.id"
-            :role="cat.isDefault ? undefined : 'button'"
-            :tabindex="cat.isDefault ? undefined : 0"
-            class="min-h-[48px] px-3.5 py-2.5 rounded-xl border flex items-center justify-between text-xs sm:text-sm gap-2 transition-all"
-            :class="
-              cat.isDefault
-                ? 'border-slate-100 dark:border-slate-800/70 bg-slate-50/50 dark:bg-slate-950/30'
-                : 'border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-950/80 hover:border-emerald-500/50 active:scale-[0.99] cursor-pointer'
-            "
+            role="button"
+            tabindex="0"
+            class="min-h-[48px] px-3.5 py-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-950/80 hover:border-emerald-500/50 active:scale-[0.99] cursor-pointer flex items-center justify-between text-xs sm:text-sm gap-2 transition-all"
             @click="openEditCategoryModal(cat)"
             @keydown.enter="openEditCategoryModal(cat)"
           >
@@ -380,10 +370,9 @@ async function handleDeleteEditingCategory() {
             </div>
 
             <button
-              v-if="!cat.isDefault"
               type="button"
               class="w-10 h-10 min-w-[40px] min-h-[40px] rounded-xl border border-rose-200/70 dark:border-rose-900/50 bg-rose-50/70 dark:bg-rose-950/30 hover:bg-rose-100 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0 transition-colors"
-              title="Hapus kategori kustom"
+              :title="cat.isDefault ? 'Hapus kategori bawaan' : 'Hapus kategori kustom'"
               @click.stop="financeStore.removeCategory(cat.id)"
             >
               <Trash2 class="w-4 h-4" />
@@ -433,11 +422,11 @@ async function handleDeleteEditingCategory() {
     </AppModal>
 
     <!-- =================================================================== -->
-    <!-- MODAL 2: Detail & Ubah Kategori Kustom (AppModal)                   -->
+    <!-- MODAL 2: Detail & Ubah Kategori (AppModal)                          -->
     <!-- =================================================================== -->
     <AppModal
       v-model="isEditCategoryOpen"
-      title="Ubah Kategori Kustom"
+      :title="editingCategory?.isDefault ? 'Ubah Kategori Bawaan' : 'Ubah Kategori Kustom'"
     >
       <form
         v-if="editingCategory"
@@ -445,6 +434,13 @@ async function handleDeleteEditingCategory() {
         class="space-y-3.5"
         @submit.prevent="handleSaveEditCategory"
       >
+        <div
+          v-if="editingCategory.isDefault"
+          class="px-3.5 py-2.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-900/50 text-xs text-emerald-800 dark:text-emerald-300"
+        >
+          Menyimpan perubahan pada kategori bawaan ini akan mengubah labelnya menjadi <strong>Kustom</strong>.
+        </div>
+
         <input
           v-model="editCatName"
           type="text"

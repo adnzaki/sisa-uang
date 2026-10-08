@@ -50,20 +50,72 @@ const optionsListRef = ref<HTMLElement | null>(null);
 const popoverStyle = ref<Record<string, string>>({});
 const optionsMaxHeight = ref<string>('240px');
 
+let maxObservedHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
+
 function updatePopoverPosition() {
   if (!isOpen.value || !triggerRef.value || typeof window === 'undefined') return;
+
+  const vv = window.visualViewport;
+  const vvTop = vv ? vv.offsetTop : 0;
+  const vvHeight = vv ? vv.height : window.innerHeight;
+  const viewportWidth = vv ? vv.width : window.innerWidth;
+
+  if (window.innerHeight > maxObservedHeight) {
+    maxObservedHeight = window.innerHeight;
+  }
+  if (vvHeight > maxObservedHeight) {
+    maxObservedHeight = vvHeight;
+  }
+
   const rect = triggerRef.value.getBoundingClientRect();
-  const viewportHeight = window.innerHeight;
-  const viewportWidth = window.innerWidth;
   const margin = 12;
   const gap = 6;
-
-  const spaceBelow = viewportHeight - rect.bottom - margin;
-  const spaceAbove = rect.top - margin;
-  const searchHeaderHeight = props.searchable ? 68 : 0;
+  const searchHeaderHeight = props.searchable ? 76 : 0;
 
   const width = Math.min(rect.width, viewportWidth - 16);
   const left = Math.max(8, Math.min(rect.left, viewportWidth - width - 8));
+
+  const isMobile =
+    window.innerWidth < 640 ||
+    (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches);
+
+  // On mobile with searchable=true, the virtual keyboard covers the bottom ~45-50% of the screen.
+  // Always anchor by `top` in the upper keyboard-safe region so filtering down to 1 item
+  // shrinks the bottom upward toward the search bar instead of dropping the list behind the keyboard.
+  if (isMobile && props.searchable) {
+    const baselineHeight = Math.max(maxObservedHeight, window.innerHeight, 640);
+    const keyboardSafeHeight = Math.min(vvHeight, Math.round(baselineHeight * 0.52));
+    const safeBottom = vvTop + Math.max(250, keyboardSafeHeight) - margin;
+    const topMin = vvTop + 16;
+
+    const maxAvailableHeight = Math.max(180, safeBottom - topMin);
+    const listMax = Math.max(100, Math.min(210, maxAvailableHeight - searchHeaderHeight));
+    const totalTargetHeight = searchHeaderHeight + listMax;
+
+    let topPos: number;
+    if (rect.bottom + gap >= topMin && rect.bottom + gap + totalTargetHeight <= safeBottom) {
+      topPos = rect.bottom + gap;
+    } else {
+      topPos = Math.max(topMin + 40, safeBottom - totalTargetHeight);
+      if (topPos + totalTargetHeight > safeBottom) {
+        topPos = Math.max(topMin, safeBottom - totalTargetHeight);
+      }
+    }
+
+    optionsMaxHeight.value = `${listMax}px`;
+    popoverStyle.value = {
+      position: 'fixed',
+      top: `${Math.round(topPos)}px`,
+      left: `${Math.round(left)}px`,
+      width: `${Math.round(width)}px`,
+      zIndex: '9999',
+    };
+    return;
+  }
+
+  const effectiveBottom = vvTop + vvHeight;
+  const spaceBelow = effectiveBottom - rect.bottom - margin;
+  const spaceAbove = rect.top - vvTop - margin;
 
   if (spaceBelow >= 220 || spaceBelow >= spaceAbove) {
     const availTotal = Math.max(160, Math.min(340, spaceBelow - gap));
@@ -71,9 +123,26 @@ function updatePopoverPosition() {
     optionsMaxHeight.value = `${listMax}px`;
     popoverStyle.value = {
       position: 'fixed',
-      top: `${rect.bottom + gap}px`,
-      left: `${left}px`,
-      width: `${width}px`,
+      top: `${Math.round(rect.bottom + gap)}px`,
+      left: `${Math.round(left)}px`,
+      width: `${Math.round(width)}px`,
+      zIndex: '9999',
+    };
+  } else if (props.searchable) {
+    const availTotal = Math.max(160, Math.min(340, spaceAbove - gap));
+    const listMax = Math.max(110, availTotal - searchHeaderHeight);
+    const estimatedListHeight = Math.min(
+      listMax,
+      Math.max(1, normalizedOptions.value.length) * 42 + 12
+    );
+    const totalHeight = searchHeaderHeight + estimatedListHeight;
+    const topPos = Math.max(vvTop + margin, rect.top - gap - totalHeight);
+    optionsMaxHeight.value = `${listMax}px`;
+    popoverStyle.value = {
+      position: 'fixed',
+      top: `${Math.round(topPos)}px`,
+      left: `${Math.round(left)}px`,
+      width: `${Math.round(width)}px`,
       zIndex: '9999',
     };
   } else {
@@ -82,9 +151,9 @@ function updatePopoverPosition() {
     optionsMaxHeight.value = `${listMax}px`;
     popoverStyle.value = {
       position: 'fixed',
-      bottom: `${viewportHeight - rect.top + gap}px`,
-      left: `${left}px`,
-      width: `${width}px`,
+      bottom: `${Math.round(window.innerHeight - rect.top + gap)}px`,
+      left: `${Math.round(left)}px`,
+      width: `${Math.round(width)}px`,
       zIndex: '9999',
     };
   }
@@ -125,6 +194,9 @@ watch(filteredOptions, () => {
 
 async function openDropdown() {
   if (props.disabled) return;
+  if (!props.searchable && typeof document !== 'undefined') {
+    (document.activeElement as HTMLElement | null)?.blur?.();
+  }
   isOpen.value = true;
   searchQuery.value = '';
   const idx = normalizedOptions.value.findIndex((o) => o.value === props.modelValue);
@@ -134,11 +206,18 @@ async function openDropdown() {
   await nextTick();
   updatePopoverPosition();
   if (props.searchable && searchInputRef.value) {
-    searchInputRef.value.focus();
+    try {
+      searchInputRef.value.focus({ preventScroll: true });
+    } catch {
+      searchInputRef.value.focus();
+    }
   }
 }
 
 function closeDropdown() {
+  if (props.searchable && searchInputRef.value) {
+    searchInputRef.value.blur();
+  }
   isOpen.value = false;
   searchQuery.value = '';
 }
@@ -234,15 +313,24 @@ function handleViewportChange(e: Event) {
 }
 
 onMounted(() => {
+  maxObservedHeight = Math.max(window.innerHeight, window.visualViewport?.height || 0);
   document.addEventListener('mousedown', handleClickOutside);
   window.addEventListener('resize', handleViewportChange);
   window.addEventListener('scroll', handleViewportChange, true);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', handleViewportChange);
+    window.visualViewport.addEventListener('scroll', handleViewportChange);
+  }
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', handleClickOutside);
   window.removeEventListener('resize', handleViewportChange);
   window.removeEventListener('scroll', handleViewportChange, true);
+  if (window.visualViewport) {
+    window.visualViewport.removeEventListener('resize', handleViewportChange);
+    window.visualViewport.removeEventListener('scroll', handleViewportChange);
+  }
 });
 </script>
 
@@ -348,6 +436,7 @@ onBeforeUnmount(() => {
                 v-if="searchQuery"
                 type="button"
                 class="p-0.5 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0"
+                @mousedown.prevent
                 @click.stop="searchQuery = ''; searchInputRef?.focus()"
               >
                 <X class="w-3.5 h-3.5" />
@@ -376,6 +465,7 @@ onBeforeUnmount(() => {
                 v-if="allowCustomValue && searchQuery.trim()"
                 type="button"
                 class="min-h-[34px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                @mousedown.prevent
                 @click.stop="selectCustomSearchValue"
               >
                 <span>Gunakan "{{ searchQuery.trim() }}"</span>
@@ -397,6 +487,7 @@ onBeforeUnmount(() => {
                   ? 'bg-slate-100 dark:bg-slate-800/80 text-slate-900 dark:text-slate-100'
                   : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50',
               ]"
+              @mousedown.prevent
               @mouseenter="highlightedIndex = idx"
               @click.stop="selectOption(opt)"
             >

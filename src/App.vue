@@ -34,6 +34,7 @@ import { useFinanceStore } from './stores/finance';
 import { useAdminStore } from './stores/admin';
 import { useNotificationStore } from './stores/notification';
 import QuickTransactionModal from './components/QuickTransactionModal.vue';
+import AppModal from './components/AppModal.vue';
 import PWAInstallButton from './components/PWAInstallButton.vue';
 import OfflineIndicator from './components/OfflineIndicator.vue';
 
@@ -1115,5 +1116,69 @@ async function handleLogout() {
 
     <!-- Global PWA Offline Mode Indicator -->
     <OfflineIndicator />
+
+    <!-- Global Delete Confirmation Modal -->
+    <AppModal
+      :open="!!notificationStore.confirmDialog"
+      :title="notificationStore.confirmDialog?.title || 'Konfirmasi Hapus Data'"
+      subtitle="Pastikan Anda yakin sebelum menghapus data ini."
+      max-width="sm"
+      @close="notificationStore.resolveConfirmation(false)"
+    >
+      <div v-if="notificationStore.confirmDialog" class="space-y-4">
+        <div
+          class="rounded-2xl border p-3.5 sm:p-4 flex items-start gap-3"
+          :class="
+            notificationStore.confirmDialog.variant === 'warning'
+              ? 'border-amber-200 dark:border-amber-900/60 bg-amber-50/70 dark:bg-amber-950/30 text-amber-800 dark:text-amber-200'
+              : 'border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/30 text-rose-800 dark:text-rose-200'
+          "
+        >
+          <div
+            class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5"
+            :class="
+              notificationStore.confirmDialog.variant === 'warning'
+                ? 'bg-amber-100 dark:bg-amber-900/50 text-amber-600 dark:text-amber-400'
+                : 'bg-rose-100 dark:bg-rose-900/50 text-rose-600 dark:text-rose-400'
+            "
+          >
+            <AlertTriangle class="w-5 h-5" />
+          </div>
+          <div class="min-w-0 flex-1 space-y-1.5">
+            <p class="text-xs sm:text-sm font-semibold leading-relaxed">
+              {{ notificationStore.confirmDialog.message }}
+            </p>
+            <p
+              v-if="notificationStore.confirmDialog.detail"
+              class="text-[11px] sm:text-xs opacity-90 leading-relaxed font-mono break-words"
+            >
+              {{ notificationStore.confirmDialog.detail }}
+            </p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2.5 pt-1">
+          <button
+            type="button"
+            class="min-h-[46px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            @click="notificationStore.resolveConfirmation(false)"
+          >
+            {{ notificationStore.confirmDialog.cancelLabel || 'Batal' }}
+          </button>
+          <button
+            type="button"
+            class="min-h-[46px] px-4 py-2.5 rounded-xl text-white text-xs sm:text-sm font-bold shadow-xs transition-colors flex items-center justify-center gap-1.5"
+            :class="
+              notificationStore.confirmDialog.variant === 'warning'
+                ? 'bg-amber-600 hover:bg-amber-700'
+                : 'bg-rose-600 hover:bg-rose-700'
+            "
+            @click="notificationStore.resolveConfirmation(true)"
+          >
+            <span>{{ notificationStore.confirmDialog.confirmLabel || 'Ya, Hapus' }}</span>
+          </button>
+        </div>
+      </div>
+    </AppModal>
   </div>
 </template>
