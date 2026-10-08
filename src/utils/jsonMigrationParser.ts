@@ -35,13 +35,17 @@ export interface SchemaFieldDesign {
   required: boolean;
   description: string;
   sourceLegacyColumn?: string;
+  isSoftDeleteField?: boolean;
 }
 
 export interface SchemaCollectionDesign {
   collectionName: TargetCollectionCategory;
   legacySourceTables: string[];
-  detectedSoftDeleteColumns: string[];
-  softDeletedRowsCount: number;
+  detectedSoftDeleteColumns?: string[];
+  detectedLegacySoftDeleteFields?: string[];
+  softDeleteSupported?: boolean;
+  softDeletedRowsCount?: number;
+  softDeletedDocsCount?: number;
   purpose: string;
   dataIncluded: boolean;
   estimatedDocumentCount: number;
@@ -172,6 +176,7 @@ export interface WriteQuotaEstimation {
     legacyRowsCount: number;
     includedLegacyRowsCount: number;
     newDocsWritesCount: number;
+    softDeletedDocsCount?: number;
     note: string;
   }[];
 }
@@ -190,6 +195,11 @@ export interface JsonMigrationAnalysis {
   rawTables: ParsedPhpMyAdminTable[];
   writeEstimation: WriteQuotaEstimation;
   newSchemaDesigns: SchemaCollectionDesign[];
+  softDeleteStats?: {
+    tablesWithSoftDelete: number;
+    totalSoftDeletedRowsDetected: number;
+    detectedColumnNames: string[];
+  };
   convertedCollections: ConvertedFirestoreCollections;
 }
 

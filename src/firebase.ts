@@ -20,7 +20,7 @@ export function sanitizeId(raw: string): string {
   return cleaned.length > 0 ? cleaned : `id_${Date.now()}`;
 }
 
-export function sanitizeString(raw: string, maxLen: number, fallback = ''): string {
+export function sanitizeString(raw: string | null | undefined, maxLen: number, fallback = ''): string {
   const trimmed = String(raw ?? '').trim();
   const val = trimmed.length > 0 ? trimmed : fallback;
   return val.slice(0, maxLen);
