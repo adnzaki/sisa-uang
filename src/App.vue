@@ -614,7 +614,7 @@ async function handleLogout() {
           </RouterLink>
 
           <div class="flex items-center gap-2.5">
-            <PWAInstallButton variant="topbar" />
+            <!-- <PWAInstallButton variant="topbar" /> -->
 
             <!-- "+ Catat Transaksi" ONLY for Regular Users (hidden on /transactions page) -->
             <button
