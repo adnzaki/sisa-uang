@@ -389,7 +389,7 @@ async function cancelOtpAndLogout() {
     <footer class="w-full max-w-5xl mx-auto text-center py-3 text-xs text-slate-400 dark:text-slate-500">
       <span>Sisa Uang</span>
       <span class="mx-1.5" aria-hidden="true">·</span>
-      <span>Manajemen Keuangan Personal Modern</span>
+      <span>Your Finance Assistant</span>
     </footer>
   </div>
 </template>

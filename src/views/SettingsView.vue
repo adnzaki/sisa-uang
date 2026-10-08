@@ -646,7 +646,9 @@ async function handleChangePassword() {
       <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-500 dark:text-slate-400">
         <span class="font-semibold text-slate-700 dark:text-slate-300">Sisa Uang</span>
         <span aria-hidden="true">·</span>
-        <span class="font-mono font-semibold text-emerald-600 dark:text-emerald-400">{{ currentAppVersion }}</span>
+        <span>Your Finance Assistant</span>
+        <span aria-hidden="true">·</span>
+        <span class="font-mono font-semibold text-emerald-600 dark:text-emerald-400">v1.0.0-rc.3</span>
       </div>
     </div>
   </div>

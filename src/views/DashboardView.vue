@@ -68,8 +68,6 @@ function getDateBadge(dateStr: string) {
           Halo, {{ authStore.user?.displayName || authStore.user?.username }}
         </h1>
         <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-          <span>{{ t('app.tagline') }}</span>
-          <span aria-hidden="true">·</span>
           <span class="font-mono text-emerald-600 dark:text-emerald-400">
             @{{ authStore.user?.username }}
           </span>
