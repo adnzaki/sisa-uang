@@ -4,7 +4,7 @@ const messages = {
   id: {
     app: {
       name: 'Sisa Uang',
-      tagline: 'Kendali Penuh Keuangan Personal',
+      tagline: 'Your Finance Assistant',
       sisaUangLabel: 'Sisa Uang Bulan Ini',
       safeDailySpend: 'Batas Aman Harian',
       daysRemaining: 'hari tersisa bulan ini',
@@ -138,7 +138,7 @@ const messages = {
   en: {
     app: {
       name: 'Sisa Uang',
-      tagline: 'Personal Finance & Remaining Budget Control',
+      tagline: 'Your Finance Assistant',
       sisaUangLabel: 'Remaining Money This Month',
       safeDailySpend: 'Safe Daily Spend',
       daysRemaining: 'days left this month',

@@ -20,7 +20,7 @@ export default defineConfig(() => {
         ],
         manifest: {
           id: '/',
-          name: 'Sisa Uang — Kendali Penuh Keuangan Personal',
+          name: 'Sisa Uang',
           short_name: 'Sisa Uang',
           description:
             'Aplikasi pengelola keuangan personal modern berbasis mobile-first dengan sinkronisasi real-time Firestore.',

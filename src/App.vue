@@ -893,6 +893,39 @@ async function handleLogout() {
                 </button>
               </div>
 
+              <!-- Sisa Uang Compact Anchor Card (ONLY for Regular Users, shown in Mobile Sidebar too) -->
+              <div
+                v-if="!authStore.isSuperAdmin"
+                class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 p-3.5 space-y-1.5"
+              >
+                <div class="text-xs text-slate-500 dark:text-slate-400">
+                  {{ t('app.sisaUangLabel') }}
+                </div>
+                <div class="text-base font-money font-semibold text-emerald-600 dark:text-emerald-400">
+                  {{ themeStore.formatMoney(financeStore.sisaUangBulanIni) }}
+                </div>
+                <div class="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                  <span>{{ t('app.safeDailySpend') }}</span>
+                  <span aria-hidden="true">·</span>
+                  <span class="font-money font-medium text-slate-700 dark:text-slate-300">
+                    {{ themeStore.formatMoney(financeStore.safeDailySpend) }}/hr
+                  </span>
+                </div>
+              </div>
+
+              <!-- Super Admin Identity Card (ONLY for Super Admin) -->
+              <div
+                v-else
+                class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/50 bg-emerald-50/50 dark:bg-emerald-950/30 p-3.5 space-y-1"
+              >
+                <div class="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                  Super Administrator
+                </div>
+                <div class="text-[11px] text-slate-600 dark:text-slate-400">
+                  Pengawasan pengguna & keamanan sistem real-time
+                </div>
+              </div>
+
             <!-- Mobile Drawer Navigation: Regular User -->
             <nav v-if="!authStore.isSuperAdmin" class="space-y-1">
               <RouterLink
