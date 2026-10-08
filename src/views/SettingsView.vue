@@ -15,14 +15,45 @@ import {
   Trash2,
   User as UserIcon,
   Save,
+  RefreshCw,
+  KeyRound,
+  Eye,
+  EyeOff,
 } from 'lucide-vue-next';
 import { useThemeStore } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
+import { useNotificationStore } from '../stores/notification';
+import { usePWA } from '../composables/usePWA';
 import PWAInstallButton from '../components/PWAInstallButton.vue';
 
 const { t, locale } = useI18n();
 const themeStore = useThemeStore();
 const authStore = useAuthStore();
+const notificationStore = useNotificationStore();
+const {
+  needRefresh,
+  isReloadingForUpdate,
+  currentAppVersion,
+  checkForAppUpdates,
+  performFullAppReload,
+} = usePWA();
+
+const isCheckingUpdate = ref(false);
+
+async function handleManualCheckUpdate() {
+  isCheckingUpdate.value = true;
+  try {
+    const hasUpdate = await checkForAppUpdates();
+    if (!hasUpdate) {
+      notificationStore.notifySuccess(
+        'Aplikasi Sudah Versi Terbaru',
+        `Anda sedang menggunakan Sisa Uang versi terbaru (${currentAppVersion.value}). Jika tampilan belum berubah, gunakan tombol "Bersihkan Cache & Reload Penuh".`
+      );
+    }
+  } finally {
+    isCheckingUpdate.value = false;
+  }
+}
 
 // =========================================================================
 // User Profile Settings (DisplayName & Username)
@@ -37,6 +68,58 @@ async function handleSaveProfile() {
   if (authStore.user) {
     profileDisplayName.value = authStore.user.displayName;
     profileUsername.value = authStore.user.username;
+  }
+}
+
+// =========================================================================
+// Change Password State & Handler
+// =========================================================================
+const currentPassword = ref('');
+const newPassword = ref('');
+const confirmNewPassword = ref('');
+const showCurrentPassword = ref(false);
+const showNewPassword = ref(false);
+const showConfirmPassword = ref(false);
+const isChangingPassword = ref(false);
+
+async function handleChangePassword() {
+  if (newPassword.value.length < 6) {
+    notificationStore.notifyError(
+      'Validasi Kata Sandi Gagal',
+      'Kata sandi baru wajib terdiri dari minimal 6 karakter.'
+    );
+    return;
+  }
+
+  if (newPassword.value !== confirmNewPassword.value) {
+    notificationStore.notifyError(
+      'Konfirmasi Kata Sandi Tidak Cocok',
+      'Kata sandi baru dan konfirmasi kata sandi baru tidak sama.'
+    );
+    return;
+  }
+
+  if (currentPassword.value && currentPassword.value === newPassword.value) {
+    notificationStore.notifyError(
+      'Kata Sandi Sama',
+      'Kata sandi baru harus berbeda dari kata sandi saat ini.'
+    );
+    return;
+  }
+
+  isChangingPassword.value = true;
+  try {
+    const ok = await authStore.changeUserPassword(currentPassword.value, newPassword.value);
+    if (ok) {
+      currentPassword.value = '';
+      newPassword.value = '';
+      confirmNewPassword.value = '';
+      showCurrentPassword.value = false;
+      showNewPassword.value = false;
+      showConfirmPassword.value = false;
+    }
+  } finally {
+    isChangingPassword.value = false;
   }
 }
 </script>
@@ -365,9 +448,46 @@ async function handleSaveProfile() {
           <span>Skema Database</span>
           <span class="font-mono text-slate-900 dark:text-slate-100">sisa-uang (Cloud Firestore)</span>
         </div>
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 py-1.5">
-          <span>Versi Aplikasi</span>
-          <span class="font-mono font-semibold text-emerald-600 dark:text-emerald-400">1.0.0-rc.3</span>
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 py-2 border-t border-slate-100 dark:border-slate-800">
+          <div class="space-y-0.5">
+            <div class="font-medium text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <span>Versi &amp; Pembaruan Aplikasi</span>
+              <span class="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                {{ currentAppVersion }}
+              </span>
+              <span
+                v-if="needRefresh"
+                class="px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold"
+              >
+                Update Tersedia
+              </span>
+            </div>
+            <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              Jika sudah reload namun tampilan aplikasi belum terupdate, gunakan tombol <strong>Bersihkan Cache &amp; Reload Penuh</strong> untuk memuat ulang seluruh aset terbaru dari server.
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              :disabled="isCheckingUpdate || isReloadingForUpdate"
+              class="min-h-[38px] px-3.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-600 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              @click="handleManualCheckUpdate"
+            >
+              <RefreshCw class="w-3.5 h-3.5 shrink-0" :class="isCheckingUpdate ? 'animate-spin' : ''" />
+              <span>Cek Update</span>
+            </button>
+
+            <button
+              type="button"
+              :disabled="isReloadingForUpdate"
+              class="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-2xs"
+              @click="performFullAppReload(true)"
+            >
+              <RefreshCw class="w-3.5 h-3.5 shrink-0" :class="isReloadingForUpdate ? 'animate-spin' : ''" />
+              <span>Bersihkan Cache &amp; Reload Penuh</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -403,12 +523,130 @@ async function handleSaveProfile() {
       </div>
     </section>
 
+    <!-- Security & Change Password Section -->
+    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
+      <div class="flex items-start sm:items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 gap-3">
+        <div class="flex items-start sm:items-center gap-2 min-w-0">
+          <KeyRound class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5 sm:mt-0" />
+          <div class="min-w-0">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Keamanan &amp; Ubah Kata Sandi
+            </h2>
+            <p class="text-xs text-slate-500 dark:text-slate-400 break-words">
+              Perbarui kata sandi akun Anda secara berkala untuk menjaga keamanan data keuangan Anda.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <form class="space-y-3.5" @submit.prevent="handleChangePassword">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+          <!-- Current Password -->
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300">
+              Kata Sandi Saat Ini
+            </label>
+            <div class="relative">
+              <input
+                v-model="currentPassword"
+                :type="showCurrentPassword ? 'text' : 'password'"
+                :required="authStore.user?.authProvider !== 'google'"
+                autocomplete="current-password"
+                placeholder="Masukkan kata sandi lama"
+                class="w-full min-h-[48px] pl-4 pr-11 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+              />
+              <button
+                type="button"
+                tabindex="-1"
+                class="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+                :aria-label="showCurrentPassword ? 'Sembunyikan kata sandi' : 'Lihat kata sandi'"
+                @click="showCurrentPassword = !showCurrentPassword"
+              >
+                <EyeOff v-if="showCurrentPassword" class="w-4 h-4" />
+                <Eye v-else class="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <!-- New Password -->
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300">
+              Kata Sandi Baru
+            </label>
+            <div class="relative">
+              <input
+                v-model="newPassword"
+                :type="showNewPassword ? 'text' : 'password'"
+                required
+                minlength="6"
+                autocomplete="new-password"
+                placeholder="Minimal 6 karakter"
+                class="w-full min-h-[48px] pl-4 pr-11 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+              />
+              <button
+                type="button"
+                tabindex="-1"
+                class="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+                :aria-label="showNewPassword ? 'Sembunyikan kata sandi baru' : 'Lihat kata sandi baru'"
+                @click="showNewPassword = !showNewPassword"
+              >
+                <EyeOff v-if="showNewPassword" class="w-4 h-4" />
+                <Eye v-else class="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <!-- Confirm New Password -->
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300">
+              Konfirmasi Kata Sandi Baru
+            </label>
+            <div class="relative">
+              <input
+                v-model="confirmNewPassword"
+                :type="showConfirmPassword ? 'text' : 'password'"
+                required
+                minlength="6"
+                autocomplete="new-password"
+                placeholder="Ulangi kata sandi baru"
+                class="w-full min-h-[48px] pl-4 pr-11 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+              />
+              <button
+                type="button"
+                tabindex="-1"
+                class="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+                :aria-label="showConfirmPassword ? 'Sembunyikan konfirmasi kata sandi' : 'Lihat konfirmasi kata sandi'"
+                @click="showConfirmPassword = !showConfirmPassword"
+              >
+                <EyeOff v-if="showConfirmPassword" class="w-4 h-4" />
+                <Eye v-else class="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-1">
+          <p class="text-[11px] text-slate-500 dark:text-slate-400">
+            Kata sandi baru akan langsung tersinkronisasi dengan sistem autentikasi dan database Cloud Firestore.
+          </p>
+          <button
+            type="submit"
+            :disabled="authStore.isLoading || isChangingPassword"
+            class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shrink-0"
+          >
+            <KeyRound class="w-4 h-4 shrink-0" />
+            <span>{{ isChangingPassword ? 'Memperbarui Kata Sandi...' : 'Simpan Kata Sandi Baru' }}</span>
+          </button>
+        </div>
+      </form>
+    </section>
+
     <!-- Application Version Footer at the very bottom of Settings Page -->
     <div class="pt-2 pb-4 text-center space-y-1">
       <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-500 dark:text-slate-400">
         <span class="font-semibold text-slate-700 dark:text-slate-300">Sisa Uang</span>
         <span aria-hidden="true">·</span>
-        <span class="font-mono font-semibold text-emerald-600 dark:text-emerald-400">v1.0.0-rc.3</span>
+        <span class="font-mono font-semibold text-emerald-600 dark:text-emerald-400">{{ currentAppVersion }}</span>
       </div>
     </div>
   </div>

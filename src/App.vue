@@ -37,6 +37,7 @@ import QuickTransactionModal from './components/QuickTransactionModal.vue';
 import AppModal from './components/AppModal.vue';
 import PWAInstallButton from './components/PWAInstallButton.vue';
 import OfflineIndicator from './components/OfflineIndicator.vue';
+import AppUpdateBanner from './components/AppUpdateBanner.vue';
 
 const { t, locale } = useI18n();
 const route = useRoute();
@@ -1116,6 +1117,9 @@ async function handleLogout() {
 
     <!-- Global PWA Offline Mode Indicator -->
     <OfflineIndicator />
+
+    <!-- Global App Update Notification & Full Reload Banner -->
+    <AppUpdateBanner />
 
     <!-- Global Delete Confirmation Modal -->
     <AppModal

@@ -10,7 +10,7 @@ export default defineConfig(() => {
       vue(),
       tailwindcss(),
       VitePWA({
-        registerType: 'autoUpdate',
+        registerType: 'prompt',
         includeAssets: [
           'icon.svg',
           'apple-touch-icon.png',
@@ -77,6 +77,7 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          cleanupOutdatedCaches: true,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           navigateFallback: 'index.html',
           navigateFallbackDenylist: [/^\/api\//],
