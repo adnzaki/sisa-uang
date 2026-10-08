@@ -12,9 +12,7 @@ import {
   Sun,
   Moon,
   Monitor,
-  Info,
-  KeyRound,
-  CheckCircle2,
+  Wallet,
 } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useThemeStore, ThemeMode } from '../stores/theme';
@@ -32,7 +30,6 @@ const username = ref('');
 const password = ref('');
 const displayName = ref('');
 const otpCode = ref('');
-const showFirebaseGuide = ref(false);
 
 const isOtpStep = computed(
   () =>
@@ -58,25 +55,6 @@ function cycleTheme() {
 
 function toggleLanguage() {
   themeStore.setLocale(locale.value === 'id' ? 'en' : 'id');
-}
-
-function fillSuperAdminEmail() {
-  activeTab.value = 'login';
-  email.value = 'vuedevo@gmail.com';
-  authStore.clearError();
-}
-
-function fillRegularDemoUser() {
-  activeTab.value = 'login';
-  email.value = 'adnanzaki';
-  password.value = 'SisaUang123!';
-  authStore.clearError();
-}
-
-function applySimulatedOtpCode() {
-  if (authStore.otpDispatchInfo?.simulatedInboxCode) {
-    otpCode.value = authStore.otpDispatchInfo.simulatedInboxCode;
-  }
 }
 
 async function handleEmailSubmit() {
@@ -151,42 +129,56 @@ async function cancelOtpAndLogout() {
 </script>
 
 <template>
-  <div class="min-h-screen flex flex-col justify-between bg-slate-50 dark:bg-slate-950 p-4 sm:p-8">
+  <div class="min-h-screen flex flex-col justify-between bg-slate-50 dark:bg-slate-950 px-2 sm:px-6 py-4 sm:py-8">
     <!-- Top Minimal Bar -->
-    <header class="w-full max-w-5xl mx-auto flex items-center justify-between py-2">
-      <div class="flex items-center gap-2.5">
-        <span class="text-2xl font-display italic tracking-tight text-slate-900 dark:text-slate-100">
-          Sisa Uang
-        </span>
+    <header class="w-full max-w-5xl mx-auto flex items-center justify-between gap-2 px-1 sm:px-0 py-2">
+      <div class="flex items-center shrink-0">
+        <div
+          v-if="themeStore.appLogoUrl"
+          class="h-10 w-10 rounded-xl overflow-hidden flex items-center justify-center shrink-0"
+        >
+          <img
+            :src="themeStore.appLogoUrl"
+            alt="Logo Sisa Uang"
+            class="h-9 w-9 object-contain"
+          />
+        </div>
+        <div
+          v-else
+          class="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs"
+          aria-label="Logo Sisa Uang"
+        >
+          <Wallet class="w-5 h-5" />
+        </div>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
         <PWAInstallButton variant="topbar" />
         <button
           type="button"
-          class="min-h-[40px] px-3 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-mono font-medium text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-900 transition-colors"
+          class="min-h-[40px] px-2.5 sm:px-3 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-mono font-medium text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-900 transition-colors shrink-0"
           @click="toggleLanguage"
         >
           {{ locale.toUpperCase() }}
         </button>
         <button
           type="button"
-          class="min-h-[40px] px-3 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-900 flex items-center gap-1.5 transition-colors"
+          class="min-h-[40px] px-2.5 sm:px-3 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-900 flex items-center gap-1.5 transition-colors shrink-0 whitespace-nowrap"
           @click="cycleTheme"
         >
-          <Sun v-if="themeStore.themeMode === 'light'" class="w-4 h-4" />
-          <Moon v-else-if="themeStore.themeMode === 'dark'" class="w-4 h-4" />
-          <Monitor v-else class="w-4 h-4" />
+          <Sun v-if="themeStore.themeMode === 'light'" class="w-4 h-4 shrink-0" />
+          <Moon v-else-if="themeStore.themeMode === 'dark'" class="w-4 h-4 shrink-0" />
+          <Monitor v-else class="w-4 h-4 shrink-0" />
           <span>{{ t(`theme.${themeStore.themeMode}`) }}</span>
         </button>
       </div>
     </header>
 
     <!-- Main Auth Card Container -->
-    <div class="w-full max-w-md mx-auto my-6">
+    <div class="w-full max-w-xl mx-auto my-4 sm:my-6">
       <!-- STEP 2: Exclusive Super Admin Email Verification Code (OTP) Screen -->
       <div
         v-if="isOtpStep"
-        class="rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 sm:p-8 shadow-xs space-y-6"
+        class="rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-8 shadow-xs space-y-6"
       >
         <div class="space-y-2">
           <div class="w-11 h-11 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
@@ -201,35 +193,6 @@ async function cancelOtpAndLogout() {
               {{ authStore.user?.email || 'vuedevo@gmail.com' }}
             </strong>
           </p>
-        </div>
-
-        <!-- Simulated Email Inbox Preview Banner for Testing -->
-        <div
-          v-if="authStore.otpDispatchInfo?.simulatedInboxCode"
-          class="rounded-2xl border border-emerald-200 dark:border-emerald-900/70 bg-emerald-50/70 dark:bg-emerald-950/40 p-4 space-y-2.5"
-        >
-          <div class="flex items-center justify-between text-xs text-emerald-800 dark:text-emerald-300">
-            <span class="font-semibold flex items-center gap-1.5">
-              <Mail class="w-3.5 h-3.5" />
-              {{ t('auth.simulatedEmailHeader') }}
-            </span>
-          </div>
-          <p class="text-xs text-slate-600 dark:text-slate-300">
-            Kode verifikasi sekali pakai (OTP) untuk <strong>vuedevo@gmail.com</strong>:
-          </p>
-          <div class="flex items-center justify-between gap-3 pt-1">
-            <span class="text-2xl font-mono font-bold tracking-widest tabular-nums text-emerald-700 dark:text-emerald-400">
-              {{ authStore.otpDispatchInfo.simulatedInboxCode }}
-            </span>
-            <button
-              type="button"
-              class="min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
-              @click="applySimulatedOtpCode"
-            >
-              <CheckCircle2 class="w-3.5 h-3.5" />
-              <span>{{ t('auth.useCodeBtn') }}</span>
-            </button>
-          </div>
         </div>
 
         <form class="space-y-4" @submit.prevent="handleVerifyOtp">
@@ -279,7 +242,7 @@ async function cancelOtpAndLogout() {
       <!-- STEP 1: Standard Login / Manual Registration / Google OAuth Card -->
       <div
         v-else
-        class="rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 sm:p-8 shadow-xs space-y-6"
+        class="rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-8 shadow-xs space-y-6"
       >
         <div class="space-y-1.5">
           <h1 class="text-2xl sm:text-3xl font-display italic text-slate-900 dark:text-slate-100">
@@ -419,53 +382,6 @@ async function cancelOtpAndLogout() {
             <ArrowRight class="w-4 h-4" />
           </button>
         </form>
-
-        <!-- Quick Credential Helpers for Testing Super Admin & Regular User -->
-        <div class="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-2.5">
-          <div class="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
-            <span>Pintasan Pengujian Akun:</span>
-            <button
-              type="button"
-              class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 hover:underline"
-              @click="showFirebaseGuide = !showFirebaseGuide"
-            >
-              <Info class="w-3.5 h-3.5" />
-              <span>Info Firebase Console</span>
-            </button>
-          </div>
-          <div class="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              class="min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 hover:border-emerald-500 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap"
-              @click="fillSuperAdminEmail"
-            >
-              <KeyRound class="w-3.5 h-3.5 text-emerald-600" />
-              <span>Super Admin</span>
-            </button>
-            <button
-              type="button"
-              class="min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 hover:border-emerald-500 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap"
-              @click="fillRegularDemoUser"
-            >
-              <UserIcon class="w-3.5 h-3.5 text-slate-500" />
-              <span>Pengguna Biasa</span>
-            </button>
-          </div>
-
-          <div
-            v-if="showFirebaseGuide"
-            class="rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 p-3 text-[11px] text-slate-600 dark:text-slate-400 space-y-1.5 leading-relaxed"
-          >
-            <p class="font-semibold text-slate-800 dark:text-slate-200">
-              Catatan Penyedia Autentikasi Firebase:
-            </p>
-            <p>
-              Login Google sudah aktif secara otomatis. Untuk mengaktifkan provider Email/Password langsung di konsol Firebase Anda, buka
-              <strong>Firebase Console &rarr; Authentication &rarr; Sign-in method &rarr; Email/Password &rarr; Enable</strong>.
-              Aplikasi ini juga dilengkapi autentikasi hibrida sehingga Anda dapat langsung menguji akun Super Admin (<strong>vuedevo@gmail.com</strong> beserta verifikasi OTP 6-digit) maupun pendaftaran manual sekarang juga.
-            </p>
-          </div>
-        </div>
       </div>
     </div>
 

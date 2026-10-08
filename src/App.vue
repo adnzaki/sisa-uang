@@ -25,6 +25,8 @@ import {
   AlertCircle,
   Globe,
   Database,
+  ChevronDown,
+  User,
 } from 'lucide-vue-next';
 import { useAuthStore } from './stores/auth';
 import { useThemeStore, ThemeMode } from './stores/theme';
@@ -45,8 +47,28 @@ const adminStore = useAdminStore();
 const notificationStore = useNotificationStore();
 
 const mobileDrawerOpen = ref(false);
+const accountMenuOpen = ref(false);
+const desktopAccountMenuRef = ref<HTMLElement | null>(null);
+const mobileAccountMenuRef = ref<HTMLElement | null>(null);
 const deniedBannerVisible = ref(false);
 const mainScrollContainer = ref<HTMLElement | null>(null);
+
+const userInitials = computed(() => {
+  const name = (authStore.user?.displayName || authStore.user?.email || 'U').trim();
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+});
+
+function handleAccountMenuClickOutside(e: MouseEvent) {
+  if (!accountMenuOpen.value) return;
+  const target = e.target as Node;
+  if (desktopAccountMenuRef.value && desktopAccountMenuRef.value.contains(target)) return;
+  if (mobileAccountMenuRef.value && mobileAccountMenuRef.value.contains(target)) return;
+  accountMenuOpen.value = false;
+}
 
 // Support mobile hardware back button to close the mobile slide-out drawer
 const drawerHistoryKey = 'su_mobile_drawer';
@@ -96,10 +118,12 @@ onMounted(() => {
   themeStore.initThemeListener();
   authStore.initAuth();
   window.addEventListener('popstate', handleDrawerPopState);
+  document.addEventListener('mousedown', handleAccountMenuClickOutside);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('popstate', handleDrawerPopState);
+  document.removeEventListener('mousedown', handleAccountMenuClickOutside);
 });
 
 watch(
@@ -136,6 +160,7 @@ watch(
   () => route.fullPath,
   () => {
     mobileDrawerOpen.value = false;
+    accountMenuOpen.value = false;
     if (mainScrollContainer.value) {
       mainScrollContainer.value.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
     }
@@ -216,6 +241,7 @@ function toggleLocale() {
 
 async function handleLogout() {
   mobileDrawerOpen.value = false;
+  accountMenuOpen.value = false;
   await authStore.logout();
   router.push('/auth');
 }
@@ -520,81 +546,13 @@ async function handleLogout() {
           </nav>
         </div>
 
-        <!-- Sidebar Bottom Controls: Always visible Theme Options, User Info & Explicit Logout Button -->
-        <div class="space-y-3 pt-3 border-t border-slate-200/80 dark:border-slate-800 shrink-0">
+        <!-- Sidebar Bottom Controls: Install Button & Application Version -->
+        <div class="space-y-2.5 pt-3 border-t border-slate-200/80 dark:border-slate-800 shrink-0">
           <!-- In-App PWA Install Button -->
           <PWAInstallButton variant="sidebar" />
 
-          <!-- Theme Options Label + 3-Way Segmented Control -->
-          <div class="space-y-1.5">
-            <div class="text-[11px] font-medium text-slate-500 dark:text-slate-400 px-1 flex items-center justify-between">
-              <span>{{ t('theme.label') }}</span>
-            </div>
-            <div class="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
-              <button
-                type="button"
-                class="min-h-[34px] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
-                :class="
-                  themeStore.themeMode === 'light'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                "
-                @click="themeStore.setTheme('light')"
-              >
-                <Sun class="w-3.5 h-3.5" />
-                <span>{{ t('theme.light') }}</span>
-              </button>
-              <button
-                type="button"
-                class="min-h-[34px] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
-                :class="
-                  themeStore.themeMode === 'dark'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                "
-                @click="themeStore.setTheme('dark')"
-              >
-                <Moon class="w-3.5 h-3.5" />
-                <span>{{ t('theme.dark') }}</span>
-              </button>
-              <button
-                type="button"
-                class="min-h-[34px] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
-                :class="
-                  themeStore.themeMode === 'system'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                "
-                @click="themeStore.setTheme('system')"
-              >
-                <Monitor class="w-3.5 h-3.5" />
-                <span>{{ t('theme.system') }}</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- User Profile Summary -->
-          <div class="px-1">
-            <div class="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
-              {{ authStore.user?.displayName }}
-            </div>
-            <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate font-mono">
-              {{ authStore.user?.email }}
-            </div>
-          </div>
-
-          <!-- Full-Width Explicit Logout Button -->
-          <button
-            type="button"
-            class="w-full min-h-[40px] px-3.5 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-950/80 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
-            @click="handleLogout"
-          >
-            <LogOut class="w-4 h-4 shrink-0" />
-            <span>{{ t('nav.logout') }}</span>
-          </button>
-
           <!-- Application Version at very bottom of Desktop Sidebar -->
-          <div class="pt-1 text-center text-[11px] font-mono text-slate-400 dark:text-slate-500">
+          <div class="pt-0.5 text-center text-[11px] font-mono text-slate-400 dark:text-slate-500">
             Versi 1.0.0-rc.3
           </div>
         </div>
@@ -626,6 +584,115 @@ async function handleLogout() {
               <Plus class="w-4 h-4" />
               <span>{{ t('dashboard.addTransaction') }}</span>
             </button>
+
+            <!-- Unified User Account Menu at Rightmost Corner of Desktop Topbar -->
+            <div ref="desktopAccountMenuRef" class="relative">
+              <button
+                type="button"
+                class="min-h-[40px] pl-2 pr-3 py-1.5 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/70 hover:border-emerald-600/60 dark:hover:border-emerald-500/50 flex items-center gap-2.5 transition-colors"
+                :aria-expanded="accountMenuOpen"
+                aria-label="Menu Akun Pengguna"
+                @click="accountMenuOpen = !accountMenuOpen"
+              >
+                <div class="w-7 h-7 rounded-lg bg-emerald-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0">
+                  {{ userInitials }}
+                </div>
+                <span class="max-w-[140px] text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">
+                  {{ authStore.user?.displayName || 'Akun Saya' }}
+                </span>
+                <ChevronDown
+                  class="w-3.5 h-3.5 text-slate-400 transition-transform duration-150 shrink-0"
+                  :class="accountMenuOpen ? 'rotate-180 text-emerald-600 dark:text-emerald-400' : ''"
+                />
+              </button>
+
+              <!-- Account Dropdown Popover -->
+              <Transition name="dropdown">
+                <div
+                  v-if="accountMenuOpen"
+                  class="
+                    absolute right-0 mt-2 w-72 rounded-2xl border border-slate-200 dark:border-slate-800
+                    bg-white dark:bg-slate-900 shadow-2xl p-3.5 space-y-3.5 z-50
+                  "
+                >
+                  <!-- User Info -->
+                  <div class="flex items-center gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+                    <div class="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/70 text-emerald-600 dark:text-emerald-400 font-bold text-xs flex items-center justify-center shrink-0 border border-emerald-200/60 dark:border-emerald-900/50">
+                      {{ userInitials }}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                        {{ authStore.user?.displayName }}
+                      </div>
+                      <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate font-mono">
+                        {{ authStore.user?.email }}
+                      </div>
+                      <div class="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                        {{ authStore.isSuperAdmin ? 'Super Administrator' : 'Pengguna Personal' }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Theme Options 3-Way Segmented Control -->
+                  <div class="space-y-1.5">
+                    <div class="text-[11px] font-medium text-slate-500 dark:text-slate-400 px-0.5">
+                      {{ t('theme.label') }}
+                    </div>
+                    <div class="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
+                      <button
+                        type="button"
+                        class="min-h-[34px] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
+                        :class="
+                          themeStore.themeMode === 'light'
+                            ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                        "
+                        @click="themeStore.setTheme('light')"
+                      >
+                        <Sun class="w-3.5 h-3.5" />
+                        <span>{{ t('theme.light') }}</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="min-h-[34px] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
+                        :class="
+                          themeStore.themeMode === 'dark'
+                            ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                        "
+                        @click="themeStore.setTheme('dark')"
+                      >
+                        <Moon class="w-3.5 h-3.5" />
+                        <span>{{ t('theme.dark') }}</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="min-h-[34px] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
+                        :class="
+                          themeStore.themeMode === 'system'
+                            ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                        "
+                        @click="themeStore.setTheme('system')"
+                      >
+                        <Monitor class="w-3.5 h-3.5" />
+                        <span>{{ t('theme.system') }}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Logout Button -->
+                  <button
+                    type="button"
+                    class="w-full min-h-[40px] px-3.5 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-950/80 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
+                    @click="handleLogout"
+                  >
+                    <LogOut class="w-4 h-4 shrink-0" />
+                    <span>{{ t('nav.logout') }}</span>
+                  </button>
+                </div>
+              </Transition>
+            </div>
           </div>
         </header>
 
@@ -648,16 +715,114 @@ async function handleLogout() {
           <div class="flex items-center gap-1.5 shrink-0">
             <!-- <PWAInstallButton variant="topbar" /> -->
 
-            <button
-              type="button"
-              class="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              :title="t('theme.label')"
-              @click="cycleTheme"
-            >
-              <Sun v-if="themeStore.themeMode === 'light'" class="w-4 h-4" />
-              <Moon v-else-if="themeStore.themeMode === 'dark'" class="w-4 h-4" />
-              <Monitor v-else class="w-4 h-4" />
-            </button>
+            <!-- Unified User Account Menu at Rightmost Corner of Mobile Topbar -->
+            <div ref="mobileAccountMenuRef" class="relative">
+              <button
+                type="button"
+                class="min-h-[40px] pl-2 pr-2.5 py-1 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/70 hover:border-emerald-600/60 flex items-center gap-1.5 transition-colors"
+                :aria-expanded="accountMenuOpen"
+                aria-label="Menu Akun Pengguna"
+                @click="accountMenuOpen = !accountMenuOpen"
+              >
+                <div class="w-7 h-7 rounded-lg bg-emerald-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0">
+                  {{ userInitials }}
+                </div>
+                <span class="max-w-[100px] text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">
+                  {{ authStore.user?.displayName || 'Akun' }}
+                </span>
+                <ChevronDown
+                  class="w-3.5 h-3.5 text-slate-400 transition-transform duration-150 shrink-0"
+                  :class="accountMenuOpen ? 'rotate-180 text-emerald-600 dark:text-emerald-400' : ''"
+                />
+              </button>
+
+              <!-- Mobile Account Dropdown Popover -->
+              <Transition name="dropdown">
+                <div
+                  v-if="accountMenuOpen"
+                  class="
+                    absolute right-0 mt-2 w-72 max-w-[calc(100vw-28px)] rounded-2xl border border-slate-200 dark:border-slate-800
+                    bg-white dark:bg-slate-900 shadow-2xl p-3.5 space-y-3.5 z-50
+                  "
+                >
+                  <!-- User Info -->
+                  <div class="flex items-center gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+                    <div class="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/70 text-emerald-600 dark:text-emerald-400 font-bold text-xs flex items-center justify-center shrink-0 border border-emerald-200/60 dark:border-emerald-900/50">
+                      {{ userInitials }}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                        {{ authStore.user?.displayName }}
+                      </div>
+                      <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate font-mono">
+                        {{ authStore.user?.email }}
+                      </div>
+                      <div class="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                        {{ authStore.isSuperAdmin ? 'Super Administrator' : 'Pengguna Personal' }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Theme Options 3-Way Segmented Control -->
+                  <div class="space-y-1.5">
+                    <div class="text-[11px] font-medium text-slate-500 dark:text-slate-400 px-0.5">
+                      {{ t('theme.label') }}
+                    </div>
+                    <div class="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
+                      <button
+                        type="button"
+                        class="min-h-[36px] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
+                        :class="
+                          themeStore.themeMode === 'light'
+                            ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                            : 'text-slate-600 dark:text-slate-400'
+                        "
+                        @click="themeStore.setTheme('light')"
+                      >
+                        <Sun class="w-3.5 h-3.5" />
+                        <span>{{ t('theme.light') }}</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="min-h-[36px] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
+                        :class="
+                          themeStore.themeMode === 'dark'
+                            ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                            : 'text-slate-600 dark:text-slate-400'
+                        "
+                        @click="themeStore.setTheme('dark')"
+                      >
+                        <Moon class="w-3.5 h-3.5" />
+                        <span>{{ t('theme.dark') }}</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="min-h-[36px] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
+                        :class="
+                          themeStore.themeMode === 'system'
+                            ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                            : 'text-slate-600 dark:text-slate-400'
+                        "
+                        @click="themeStore.setTheme('system')"
+                      >
+                        <Monitor class="w-3.5 h-3.5" />
+                        <span>{{ t('theme.system') }}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Logout Button -->
+                  <button
+                    type="button"
+                    class="w-full min-h-[40px] px-3.5 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-950/80 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
+                    @click="handleLogout"
+                  >
+                    <LogOut class="w-4 h-4 shrink-0" />
+                    <span>{{ t('nav.logout') }}</span>
+                  </button>
+                </div>
+              </Transition>
+            </div>
           </div>
         </header>
 
@@ -726,19 +891,6 @@ async function handleLogout() {
                 </button>
               </div>
 
-            <!-- Mobile Drawer User Info -->
-            <div class="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800">
-              <div class="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
-                {{ authStore.user?.displayName }}
-              </div>
-              <div class="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5 font-mono">
-                {{ authStore.user?.email }}
-              </div>
-              <div class="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1.5 font-medium">
-                {{ authStore.isSuperAdmin ? 'Role: Super Administrator' : 'Role: Pengguna Personal' }}
-              </div>
-            </div>
-
             <!-- Mobile Drawer Navigation: Regular User -->
             <nav v-if="!authStore.isSuperAdmin" class="space-y-1">
               <RouterLink
@@ -784,76 +936,12 @@ async function handleLogout() {
             </nav>
           </div>
 
-          <!-- Mobile Sidebar Footer Controls: Theme, Language & Logout -->
-          <div class="space-y-3 pt-4 border-t border-slate-200 dark:border-slate-800 shrink-0">
-            <div class="text-[11px] font-medium text-slate-500 dark:text-slate-400 px-1">
-              {{ t('theme.label') }}
-            </div>
-            <div class="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
-              <button
-                type="button"
-                class="min-h-[36px] rounded-lg text-xs font-medium flex items-center justify-center gap-1"
-                :class="
-                  themeStore.themeMode === 'light'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400'
-                "
-                @click="themeStore.setTheme('light')"
-              >
-                <Sun class="w-3.5 h-3.5" />
-                <span>{{ t('theme.light') }}</span>
-              </button>
-              <button
-                type="button"
-                class="min-h-[36px] rounded-lg text-xs font-medium flex items-center justify-center gap-1"
-                :class="
-                  themeStore.themeMode === 'dark'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400'
-                "
-                @click="themeStore.setTheme('dark')"
-              >
-                <Moon class="w-3.5 h-3.5" />
-                <span>{{ t('theme.dark') }}</span>
-              </button>
-              <button
-                type="button"
-                class="min-h-[36px] rounded-lg text-xs font-medium flex items-center justify-center gap-1"
-                :class="
-                  themeStore.themeMode === 'system'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400'
-                "
-                @click="themeStore.setTheme('system')"
-              >
-                <Monitor class="w-3.5 h-3.5" />
-                <span>{{ t('theme.system') }}</span>
-              </button>
-            </div>
-
-            <div class="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                class="min-h-[42px] flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300"
-                @click="toggleLocale"
-              >
-                <Globe class="w-4 h-4" />
-                <span>Bahasa: {{ locale.toUpperCase() }}</span>
-              </button>
-              <button
-                type="button"
-                class="min-h-[42px] px-3 flex items-center justify-center gap-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 text-xs font-semibold"
-                @click="handleLogout"
-              >
-                <LogOut class="w-4 h-4" />
-                <span>{{ t('nav.logout') }}</span>
-              </button>
-            </div>
-
+          <!-- Mobile Sidebar Footer Controls: Install Button & Version -->
+          <div class="space-y-2.5 pt-4 border-t border-slate-200 dark:border-slate-800 shrink-0">
             <PWAInstallButton variant="sidebar" />
 
             <!-- Application Version at very bottom of Mobile Sidebar Drawer -->
-            <div class="pt-1 text-center text-[11px] font-mono text-slate-400 dark:text-slate-500">
+            <div class="pt-0.5 text-center text-[11px] font-mono text-slate-400 dark:text-slate-500">
               Versi 1.0.0-rc.3
             </div>
           </div>
