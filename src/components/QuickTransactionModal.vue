@@ -34,6 +34,61 @@ const isInitializing = ref(false);
 
 const isEditMode = computed(() => Boolean(financeStore.editingTransaction));
 
+function formatNominalDisplay(val: number | string | ''): string {
+  const digits = String(val ?? '')
+    .replace(/\D/g, '')
+    .replace(/^0+/, '');
+  if (!digits) return '';
+  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+const amountDisplay = computed(() => formatNominalDisplay(amount.value));
+const adminFeeDisplay = computed(() => formatNominalDisplay(adminFee.value));
+
+function applyFormattedNominalInput(
+  event: Event,
+  targetRef: { value: number | '' }
+) {
+  const input = event.target as HTMLInputElement;
+  const rawValue = input.value;
+  const selectionStart = input.selectionStart ?? rawValue.length;
+  const digitsBeforeCursor = rawValue
+    .slice(0, selectionStart)
+    .replace(/\D/g, '')
+    .replace(/^0+/, '').length;
+
+  const cleanDigits = rawValue.replace(/\D/g, '').replace(/^0+/, '');
+  targetRef.value = cleanDigits ? Number(cleanDigits) : '';
+
+  const formatted = formatNominalDisplay(cleanDigits);
+  input.value = formatted;
+
+  if (document.activeElement === input) {
+    let newCursorPos = 0;
+    if (digitsBeforeCursor > 0) {
+      let seenDigits = 0;
+      for (let i = 0; i < formatted.length; i++) {
+        if (/\d/.test(formatted[i])) {
+          seenDigits++;
+          if (seenDigits === digitsBeforeCursor) {
+            newCursorPos = i + 1;
+            break;
+          }
+        }
+      }
+    }
+    input.setSelectionRange(newCursorPos, newCursorPos);
+  }
+}
+
+function handleAmountInput(event: Event) {
+  applyFormattedNominalInput(event, amount);
+}
+
+function handleAdminFeeInput(event: Event) {
+  applyFormattedNominalInput(event, adminFee);
+}
+
 const categories = computed(() => {
   const base =
     txType.value === 'expense'
@@ -341,15 +396,16 @@ async function handleSubmit() {
         class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
       />
 
-      <!-- 6. Nominal Transaksi -->
+      <!-- 6. Nominal Transaksi (Real-time Thousand Separator) -->
       <input
-        v-model.number="amount"
-        type="number"
-        min="1"
-        step="any"
+        :value="amountDisplay"
+        type="text"
+        inputmode="numeric"
+        autocomplete="off"
         placeholder="Nominal (Rp)"
         required
         class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+        @input="handleAmountInput"
       />
 
       <!-- 7A. Kategori (Untuk Income / Expense) -->
@@ -368,12 +424,13 @@ async function handleSubmit() {
       <Transition name="fade-slide">
         <div v-if="txType === 'transfer'" class="space-y-3.5">
           <input
-            v-model.number="adminFee"
-            type="number"
-            min="0"
-            step="any"
+            :value="adminFeeDisplay"
+            type="text"
+            inputmode="numeric"
+            autocomplete="off"
             placeholder="Biaya Admin (Rp · Opsional)"
             class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-indigo-600"
+            @input="handleAdminFeeInput"
           />
 
           <CustomSelect
