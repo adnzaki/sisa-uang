@@ -592,6 +592,11 @@ async function handleLogout() {
             <LogOut class="w-4 h-4 shrink-0" />
             <span>{{ t('nav.logout') }}</span>
           </button>
+
+          <!-- Application Version at very bottom of Desktop Sidebar -->
+          <div class="pt-1 text-center text-[11px] font-mono text-slate-400 dark:text-slate-500">
+            Versi 1.0.0-rc.3
+          </div>
         </div>
       </aside>
 
@@ -846,6 +851,11 @@ async function handleLogout() {
             </div>
 
             <PWAInstallButton variant="sidebar" />
+
+            <!-- Application Version at very bottom of Mobile Sidebar Drawer -->
+            <div class="pt-1 text-center text-[11px] font-mono text-slate-400 dark:text-slate-500">
+              Versi 1.0.0-rc.3
+            </div>
           </div>
         </div>
       </div>
