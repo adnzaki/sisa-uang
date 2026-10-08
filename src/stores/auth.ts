@@ -7,6 +7,9 @@ import {
   createUserWithEmailAndPassword,
   signInAnonymously,
   updateProfile,
+  updatePassword,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
   signOut as firebaseSignOut,
 } from 'firebase/auth';
 import {
@@ -838,6 +841,121 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  // 3B. Change User Password after login
+  async function changeUserPassword(currentPassword: string, newPassword: string): Promise<boolean> {
+    if (!user.value) return false;
+    const notify = useNotificationStore();
+
+    if (!newPassword || newPassword.length < 6) {
+      notify.notifyError('Validasi Kata Sandi Gagal', 'Kata sandi baru harus terdiri dari minimal 6 karakter.');
+      return false;
+    }
+
+    isLoading.value = true;
+    error.value = null;
+
+    try {
+      // 1. Check Firestore user document for existing passwordHash (especially for migrated CI4 Shield users or after server restart)
+      let storedPasswordHash: string | undefined;
+      try {
+        const snap = await getDoc(doc(db, 'users', user.value.uid));
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data?.passwordHash) {
+            storedPasswordHash = String(data.passwordHash);
+          }
+        }
+      } catch {
+        // Ignore if Firestore doc cannot be read
+      }
+
+      // 2. Verify currentPassword and update hash on backend server registry
+      const { data } = await apiClient.patch(`/users/${encodeURIComponent(user.value.uid)}/password`, {
+        email: user.value.email,
+        currentPassword,
+        newPassword,
+        storedPasswordHash,
+      });
+
+      const newPasswordHash: string | undefined = data?.passwordHash;
+
+      // 3. Update Firebase Auth password if the active Firebase session belongs to this user
+      const fbUser = auth.currentUser;
+      if (
+        fbUser &&
+        !fbUser.isAnonymous &&
+        fbUser.email &&
+        fbUser.email.toLowerCase() === user.value.email.toLowerCase()
+      ) {
+        try {
+          if (currentPassword) {
+            const cred = EmailAuthProvider.credential(fbUser.email, currentPassword);
+            await reauthenticateWithCredential(fbUser, cred);
+          }
+        } catch {
+          // Ignore re-auth error if user logged in via Google or hybrid session
+        }
+
+        try {
+          await updatePassword(fbUser, newPassword);
+        } catch {
+          // Ignore if Firebase Auth session is managed via hybrid backend/Firestore
+        }
+      }
+
+      // 4. Persist updated passwordHash to Cloud Firestore /users/{uid}
+      if (newPasswordHash && auth.currentUser) {
+        try {
+          await updateDoc(doc(db, 'users', user.value.uid), {
+            passwordHash: newPasswordHash,
+            authProvider: 'password',
+            updatedAt: serverTimestamp(),
+          });
+        } catch {
+          try {
+            await setDoc(
+              doc(db, 'users', user.value.uid),
+              {
+                passwordHash: newPasswordHash,
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+          } catch {
+            // Ignore if remote Firestore rules restrict passwordHash field
+          }
+        }
+      }
+
+      user.value = {
+        ...user.value,
+        authProvider: 'password',
+      };
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+
+      await recordAuditLog(
+        'password_changed',
+        `Pengguna ${user.value.displayName} (@${user.value.username}) berhasil mengubah kata sandi akun.`,
+        'info'
+      );
+
+      notify.notifySuccess(
+        'Kata Sandi Berhasil Diubah',
+        'Kata sandi akun Anda telah berhasil diperbarui dan siap digunakan untuk sesi masuk berikutnya.'
+      );
+      return true;
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.error ||
+        (err instanceof Error ? err.message : 'Gagal mengubah kata sandi. Pastikan kata sandi saat ini benar.');
+      error.value = msg;
+      notify.notifyError('Gagal Mengubah Kata Sandi', err, msg);
+      return false;
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
   // 4. Login / Register with Google Account (Firebase Popup)
   async function loginWithGoogle(): Promise<{ requiresOtp: boolean }> {
     isLoading.value = true;
@@ -997,6 +1115,7 @@ export const useAuthStore = defineStore('auth', () => {
     loginWithEmail,
     registerWithEmail,
     updateUserProfile,
+    changeUserPassword,
     loginWithGoogle,
     requestSuperAdminOtp,
     verifySuperAdminOtp,

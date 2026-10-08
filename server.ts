@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import nodemailer from 'nodemailer';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -16,7 +17,7 @@ const SUPER_ADMIN_EMAIL = 'vuedevo@gmail.com';
 const SUPER_ADMIN_USERNAME = 'vuedevo';
 const WORKSPACE_ADMIN_EMAIL = 'adnanzaki65@admin.sd.belajar.id';
 // Salted SHA-256 hash of 'sisa-uang-v1:' + super admin password
-const SUPER_ADMIN_HASH = '2759b5f6c9e3ae92ca8cd9129ab6d6336d569e8e4f84c0996839347b84c1b7e8';
+let superAdminPasswordHash = '2759b5f6c9e3ae92ca8cd9129ab6d6336d569e8e4f84c0996839347b84c1b7e8';
 
 function hashPassword(password: string): string {
   return crypto.createHash('sha256').update(`sisa-uang-v1:${password}`).digest('hex');
@@ -104,7 +105,7 @@ const usersStore = new Map<string, ServerUserRecord>([
       status: 'active',
       authProvider: 'password',
       currency: 'IDR',
-      passwordHash: SUPER_ADMIN_HASH,
+      passwordHash: superAdminPasswordHash,
       createdAt: new Date(Date.now() - 86400000 * 14).toISOString(),
       updatedAt: nowIso(),
     },
@@ -346,7 +347,7 @@ async function startServer() {
     const incomingHash = hashPassword(password);
 
     if (identifierRaw === SUPER_ADMIN_EMAIL || identifierRaw === SUPER_ADMIN_USERNAME) {
-      if (incomingHash !== SUPER_ADMIN_HASH) {
+      if (incomingHash !== superAdminPasswordHash) {
         const fails = (failedLoginTracker.get(SUPER_ADMIN_EMAIL) || 0) + 1;
         failedLoginTracker.set(SUPER_ADMIN_EMAIL, fails);
 
@@ -529,7 +530,7 @@ async function startServer() {
       status: 'active',
       authProvider: 'password',
       currency: 'IDR',
-      passwordHash: isSuperAdmin ? SUPER_ADMIN_HASH : hashPassword(password),
+      passwordHash: isSuperAdmin ? superAdminPasswordHash : hashPassword(password),
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
@@ -805,6 +806,80 @@ async function startServer() {
     });
   });
 
+  // Change User Password (verifies currentPassword if passwordHash is present, and returns new SHA-256 passwordHash for Firestore sync)
+  app.patch('/api/users/:uid/password', (req: Request, res: Response) => {
+    const uid = String(req.params.uid || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const currentPassword = String(req.body?.currentPassword || '');
+    const newPassword = String(req.body?.newPassword || '');
+    const storedHashFromClient = req.body?.storedPasswordHash
+      ? String(req.body.storedPasswordHash)
+      : undefined;
+
+    if (!newPassword || newPassword.length < 6) {
+      res.status(400).json({ error: 'Kata sandi baru wajib diisi minimal 6 karakter.' });
+      return;
+    }
+
+    let target = usersStore.get(uid);
+    if (!target && email) {
+      for (const u of usersStore.values()) {
+        if (u.email.toLowerCase() === email) {
+          target = u;
+          break;
+        }
+      }
+    }
+
+    const effectiveStoredHash = target?.passwordHash || storedHashFromClient;
+
+    if (effectiveStoredHash) {
+      if (!currentPassword) {
+        res.status(400).json({ error: 'Kata sandi saat ini wajib diisi untuk verifikasi keamanan.' });
+        return;
+      }
+      const isValidCurrent = verifyPasswordAgainstStoredHash(currentPassword, effectiveStoredHash);
+      if (!isValidCurrent) {
+        appendLog(
+          uid || 'unknown',
+          target?.email || email || 'unknown',
+          'password_change_failed',
+          'Percobaan ubah kata sandi gagal karena kata sandi saat ini tidak sesuai.',
+          'warning'
+        );
+        res.status(401).json({ error: 'Kata sandi saat ini tidak sesuai.' });
+        return;
+      }
+    }
+
+    const newHash = hashPassword(newPassword);
+
+    if (target) {
+      target.passwordHash = newHash;
+      target.authProvider = 'password';
+      target.updatedAt = nowIso();
+      if (target.email.toLowerCase() === SUPER_ADMIN_EMAIL || uid === 'admin_vuedevo_01') {
+        superAdminPasswordHash = newHash;
+      }
+    } else if (email === SUPER_ADMIN_EMAIL || uid === 'admin_vuedevo_01') {
+      superAdminPasswordHash = newHash;
+    }
+
+    appendLog(
+      uid || target?.uid || 'user',
+      target?.email || email || 'user@sisa-uang.id',
+      'password_changed',
+      `Pengguna berhasil memperbarui kata sandi akun.`,
+      'info'
+    );
+
+    res.json({
+      success: true,
+      passwordHash: newHash,
+      updatedAt: nowIso(),
+    });
+  });
+
   // Check current user status (used for real-time blocking enforcement)
   app.get('/api/users/:uid/status', (req: Request, res: Response) => {
     const uid = String(req.params.uid || '');
@@ -1033,7 +1108,7 @@ async function startServer() {
         authProvider: u.authProvider === 'google' ? 'google' : 'password',
         currency: u.currency === 'USD' ? 'USD' : 'IDR',
         passwordHash: isSuper
-          ? SUPER_ADMIN_HASH
+          ? superAdminPasswordHash
           : u.passwordHash
           ? String(u.passwordHash)
           : existing?.passwordHash || hashPassword('ShieldUser2026!'),
@@ -1077,6 +1152,60 @@ async function startServer() {
       logs: activityLogs,
       summaryLog,
     });
+  });
+
+  // =========================================================================
+  // App Version & Live Update Detection Endpoint
+  // =========================================================================
+  function computeCurrentBuildFingerprint(): { version: string; buildHash: string } {
+    let version = '1.0.0-rc.4';
+    const hash = crypto.createHash('sha1');
+    try {
+      const pkgRaw = fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8');
+      const pkg = JSON.parse(pkgRaw);
+      if (pkg?.version) version = String(pkg.version);
+      hash.update(pkgRaw);
+    } catch {
+      // Ignore
+    }
+
+    const scanDir = (dirPath: string) => {
+      try {
+        if (!fs.existsSync(dirPath)) return;
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        for (const entry of entries) {
+          const full = path.join(dirPath, entry.name);
+          if (entry.isDirectory()) {
+            scanDir(full);
+          } else if (entry.isFile() && /\.(vue|ts|css|html|json)$/.test(entry.name)) {
+            const stat = fs.statSync(full);
+            hash.update(`${entry.name}:${Math.floor(stat.mtimeMs)}:${stat.size};`);
+          }
+        }
+      } catch {
+        // Ignore
+      }
+    };
+
+    scanDir(path.join(__dirname, 'src'));
+    try {
+      const indexStat = fs.statSync(path.join(__dirname, 'index.html'));
+      hash.update(`index.html:${Math.floor(indexStat.mtimeMs)};`);
+    } catch {
+      // Ignore
+    }
+
+    return {
+      version,
+      buildHash: hash.digest('hex').slice(0, 12),
+    };
+  }
+
+  app.get('/api/app-version', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.json(computeCurrentBuildFingerprint());
   });
 
   // =========================================================================
