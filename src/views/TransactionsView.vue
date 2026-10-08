@@ -5,6 +5,10 @@ import {
   Search,
   Plus,
   Trash2,
+  SlidersHorizontal,
+  RotateCcw,
+  Check,
+  X,
 } from 'lucide-vue-next';
 import {
   useFinanceStore,
@@ -12,13 +16,16 @@ import {
   formatTransactionDateBadge,
 } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
+import AppModal from '../components/AppModal.vue';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 
 const { t, locale } = useI18n();
 const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
 
+const showFilterModal = ref(false);
 const typeFilter = ref<'all' | 'income' | 'expense' | 'transfer'>('all');
+const selectedCategoryFilter = ref<string>('all');
 const searchQuery = ref('');
 const selectedWalletId = ref<string>('all');
 const selectedHolderFilter = ref<string>('all');
@@ -32,11 +39,49 @@ const periodFilterOptions = computed<SelectOptionItem[]>(() => [
 ]);
 
 const typeFilterOptions = computed<SelectOptionItem[]>(() => [
-  { value: 'all', label: 'Semua Jenis' },
+  { value: 'all', label: 'Semua Jenis Transaksi' },
   { value: 'expense', label: t('transactions.expense') },
   { value: 'income', label: t('transactions.income') },
   { value: 'transfer', label: t('transactions.transfer') },
 ]);
+
+const categoryFilterOptions = computed<SelectOptionItem[]>(() => {
+  const seen = new Set<string>();
+  const items: SelectOptionItem[] = [{ value: 'all', label: 'Semua Kategori' }];
+
+  for (const cat of financeStore.categories) {
+    if (typeFilter.value === 'expense' && cat.type !== 'expense') continue;
+    if (typeFilter.value === 'income' && cat.type !== 'income') continue;
+    if (!seen.has(cat.name)) {
+      seen.add(cat.name);
+      items.push({
+        value: cat.name,
+        label: cat.name,
+        badge: cat.type === 'income' ? 'Pemasukan' : 'Pengeluaran',
+      });
+    }
+  }
+
+  for (const tx of financeStore.transactions) {
+    if (!tx.category) continue;
+    if (typeFilter.value !== 'all' && tx.type !== typeFilter.value) continue;
+    if (!seen.has(tx.category)) {
+      seen.add(tx.category);
+      items.push({
+        value: tx.category,
+        label: tx.category,
+        badge:
+          tx.type === 'income'
+            ? 'Pemasukan'
+            : tx.type === 'transfer'
+            ? 'Transfer'
+            : 'Pengeluaran',
+      });
+    }
+  }
+
+  return items;
+});
 
 const walletFilterOptions = computed<SelectOptionItem[]>(() => [
   { value: 'all', label: 'Semua Sumber Dana' },
@@ -46,9 +91,59 @@ const walletFilterOptions = computed<SelectOptionItem[]>(() => [
   })),
 ]);
 
+const uniqueHolderNames = computed(() => {
+  const set = new Set<string>();
+  for (const o of financeStore.ownershipSummary) {
+    set.add(o.displayHolderName);
+  }
+  for (const tx of financeStore.transactions) {
+    if (tx.fundOwnerName) set.add(tx.fundOwnerName);
+  }
+  return Array.from(set);
+});
+
+const holderFilterOptions = computed<SelectOptionItem[]>(() => [
+  { value: 'all', label: 'Semua Kepemilikan' },
+  ...uniqueHolderNames.value.map((name) => ({
+    value: name,
+    label: name,
+  })),
+]);
+
+const activeFilterCount = computed(() => {
+  let count = 0;
+  if (typeFilter.value !== 'all') count++;
+  if (selectedCategoryFilter.value !== 'all') count++;
+  if (selectedWalletId.value !== 'all') count++;
+  if (selectedHolderFilter.value !== 'all') count++;
+  return count;
+});
+
+const activePeriodLabel = computed(() => {
+  if (financeStore.selectedPeriod === 'all') return 'Semua Periode';
+  return formatPeriodLabel(
+    financeStore.selectedPeriod,
+    locale.value === 'id' ? 'id-ID' : 'en-US'
+  );
+});
+
+function resetFilters() {
+  financeStore.selectedPeriod = financeStore.currentMonthKey;
+  typeFilter.value = 'all';
+  selectedCategoryFilter.value = 'all';
+  selectedWalletId.value = 'all';
+  selectedHolderFilter.value = 'all';
+}
+
 const filteredTransactions = computed(() => {
   return financeStore.periodTransactions.filter((tx) => {
     if (typeFilter.value !== 'all' && tx.type !== typeFilter.value) {
+      return false;
+    }
+    if (
+      selectedCategoryFilter.value !== 'all' &&
+      tx.category !== selectedCategoryFilter.value
+    ) {
       return false;
     }
     if (
@@ -80,55 +175,16 @@ const filteredTransactions = computed(() => {
   });
 });
 
-const uniqueHolderNames = computed(() => {
-  const set = new Set<string>();
-  for (const o of financeStore.ownershipSummary) {
-    set.add(o.displayHolderName);
-  }
-  for (const tx of financeStore.transactions) {
-    if (tx.fundOwnerName) set.add(tx.fundOwnerName);
-  }
-  return Array.from(set);
-});
-
-const holderFilterOptions = computed<SelectOptionItem[]>(() => [
-  { value: 'all', label: 'Semua Kepemilikan' },
-  ...uniqueHolderNames.value.map((name) => ({
-    value: name,
-    label: name,
-  })),
-]);
-
-const filteredTotalIncome = computed(() =>
-  filteredTransactions.value
-    .filter((tx) => tx.type === 'income')
-    .reduce((acc, tx) => acc + Number(tx.amount || 0), 0)
-);
-
-const filteredTotalExpense = computed(() =>
-  filteredTransactions.value.reduce((acc, tx) => {
-    if (tx.type === 'expense') return acc + Number(tx.amount || 0);
-    if (tx.type === 'transfer' && Number(tx.adminFee || 0) > 0) {
-      return acc + Number(tx.adminFee || 0);
-    }
-    return acc;
-  }, 0)
-);
-
-const filteredNetDifference = computed(
-  () => filteredTotalIncome.value - filteredTotalExpense.value
-);
-
 function getDateBadge(dateStr: string) {
   return formatTransactionDateBadge(dateStr, locale.value === 'id' ? 'id-ID' : 'en-US');
 }
 </script>
 
 <template>
-  <div class="space-y-4 sm:space-y-6 max-w-full overflow-x-hidden">
+  <div class="w-full max-w-full space-y-4 sm:space-y-6 overflow-x-hidden">
     <!-- Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-      <div class="min-w-0">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 w-full">
+      <div class="min-w-0 flex-1">
         <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
           {{ t('transactions.title') }}
         </h1>
@@ -139,7 +195,7 @@ function getDateBadge(dateStr: string) {
 
       <button
         type="button"
-        class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs"
+        class="w-full sm:w-auto h-[46px] min-h-[46px] px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs"
         @click="financeStore.openAddTransactionModal()"
       >
         <Plus class="w-4 h-4 shrink-0" />
@@ -147,55 +203,53 @@ function getDateBadge(dateStr: string) {
       </button>
     </div>
 
-    <!-- 3 Summary Cards (Matching Published Mobile Reference) -->
-    
+    <!-- Search & Single Filter Button Bar -->
+    <div class="w-full rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-4 space-y-3">
+      <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full">
+        <!-- Search Input -->
+        <div class="flex-1 w-full min-w-0 h-[46px] min-h-[46px] px-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 flex items-center gap-3 focus-within:border-emerald-600 transition-colors">
+          <Search class="w-4 h-4 text-slate-400 shrink-0" />
+          <input
+            v-model="searchQuery"
+            type="text"
+            :placeholder="t('transactions.searchPlaceholder')"
+            class="flex-1 w-full min-w-0 bg-transparent border-0 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none"
+          />
+          <button
+            v-if="searchQuery"
+            type="button"
+            class="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0 transition-colors"
+            title="Bersihkan pencarian"
+            @click="searchQuery = ''"
+          >
+            <X class="w-4 h-4" />
+          </button>
+        </div>
 
-    <!-- Search & Filter Box -->
-    <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-4 space-y-3">
-      <!-- Search Input -->
-      <div class="w-full h-[46px] min-h-[46px] px-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 flex items-center gap-3 focus-within:border-emerald-600 transition-colors">
-        <Search class="w-4 h-4 text-slate-400 shrink-0" />
-        <input
-          v-model="searchQuery"
-          type="text"
-          :placeholder="t('transactions.searchPlaceholder')"
-          class="flex-1 w-full min-w-0 bg-transparent border-0 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none"
-        />
-      </div>
-
-      <!-- 2x2 Filter Grid on Mobile, 4 Columns on Desktop (Using CustomSelect) -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-        <CustomSelect
-          v-model="financeStore.selectedPeriod"
-          :options="periodFilterOptions"
-          size="sm"
-          aria-label="Pilih Periode Bulan"
-        />
-
-        <CustomSelect
-          v-model="typeFilter"
-          :options="typeFilterOptions"
-          size="sm"
-          aria-label="Filter Jenis Transaksi"
-        />
-
-        <CustomSelect
-          v-model="selectedWalletId"
-          :options="walletFilterOptions"
-          size="sm"
-          searchable
-          search-placeholder="Cari sumber dana..."
-          aria-label="Filter Sumber Dana"
-        />
-
-        <CustomSelect
-          v-model="selectedHolderFilter"
-          :options="holderFilterOptions"
-          size="sm"
-          searchable
-          search-placeholder="Cari kepemilikan..."
-          aria-label="Filter Kepemilikan"
-        />
+        <!-- Unified Filter Modal Trigger Button (Harmonized across mobile & desktop) -->
+        <button
+          type="button"
+          class="w-full sm:w-auto h-[46px] min-h-[46px] px-4 rounded-xl border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 whitespace-nowrap"
+          :class="
+            activeFilterCount > 0
+              ? 'border-emerald-600/80 bg-emerald-50/80 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100/70'
+              : 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 hover:border-emerald-600 text-slate-700 dark:text-slate-200'
+          "
+          @click="showFilterModal = true"
+        >
+          <SlidersHorizontal class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span>Filter Transaksi</span>
+          <span
+            class="px-2 py-0.5 rounded-md text-[11px] font-bold"
+            :class="
+              activeFilterCount > 0
+                ? 'bg-emerald-600 text-white'
+                : 'bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+            "
+          >
+            {{ activeFilterCount > 0 ? `${activePeriodLabel} +${activeFilterCount}` : activePeriodLabel }}
+          </span>
+        </button>
       </div>
     </div>
 
@@ -209,12 +263,18 @@ function getDateBadge(dateStr: string) {
       </p>
       <div class="flex flex-wrap items-center justify-center gap-2">
         <button
-          v-if="financeStore.selectedPeriod !== 'all' && financeStore.transactions.length > 0"
+          v-if="activeFilterCount > 0 || financeStore.selectedPeriod !== 'all'"
           type="button"
-          class="min-h-[42px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200"
-          @click="financeStore.selectedPeriod = 'all'"
+          class="min-h-[42px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-emerald-600 transition-colors"
+          @click="
+            financeStore.selectedPeriod = 'all';
+            typeFilter = 'all';
+            selectedCategoryFilter = 'all';
+            selectedWalletId = 'all';
+            selectedHolderFilter = 'all';
+          "
         >
-          Tampilkan Semua Periode ({{ financeStore.transactions.length }})
+          Reset Semua Filter ({{ financeStore.transactions.length }})
         </button>
         <button
           type="button"
@@ -323,5 +383,79 @@ function getDateBadge(dateStr: string) {
         </button>
       </div>
     </div>
+
+    <!-- =================================================================== -->
+    <!-- MODAL: Filter Riwayat Transaksi (Bulan, Jenis, Kategori, Sumber, Kepemilikan) -->
+    <!-- =================================================================== -->
+    <AppModal
+      v-model="showFilterModal"
+      title="Filter Riwayat Transaksi"
+    >
+      <div class="space-y-3.5">
+        <CustomSelect
+          v-model="financeStore.selectedPeriod"
+          :options="periodFilterOptions"
+          placeholder="Periode Bulan"
+          aria-label="Pilih Periode Bulan"
+        />
+
+        <CustomSelect
+          v-model="typeFilter"
+          :options="typeFilterOptions"
+          placeholder="Jenis Transaksi"
+          aria-label="Filter Jenis Transaksi"
+          @change="selectedCategoryFilter = 'all'"
+        />
+
+        <CustomSelect
+          v-model="selectedCategoryFilter"
+          :options="categoryFilterOptions"
+          searchable
+          search-placeholder="Ketik untuk mencari kategori..."
+          placeholder="Kategori Transaksi"
+          aria-label="Filter Kategori Transaksi"
+        />
+
+        <CustomSelect
+          v-model="selectedWalletId"
+          :options="walletFilterOptions"
+          searchable
+          search-placeholder="Ketik untuk mencari sumber dana..."
+          placeholder="Sumber Dana"
+          aria-label="Filter Sumber Dana"
+        />
+
+        <CustomSelect
+          v-model="selectedHolderFilter"
+          :options="holderFilterOptions"
+          searchable
+          search-placeholder="Ketik untuk mencari kepemilikan..."
+          placeholder="Kepemilikan Dana"
+          aria-label="Filter Kepemilikan Dana"
+        />
+      </div>
+
+      <template #footer>
+        <div class="flex items-center justify-between gap-2.5 w-full">
+          <button
+            type="button"
+            class="min-h-[46px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0"
+            @click="resetFilters"
+          >
+            <RotateCcw class="w-4 h-4 shrink-0" />
+            <span>Reset</span>
+          </button>
+
+          <button
+            type="button"
+            class="flex-1 sm:flex-initial min-h-[46px] px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+            @click="showFilterModal = false"
+          >
+            <Check class="w-4 h-4 shrink-0" />
+            <span>Terapkan ({{ filteredTransactions.length }})</span>
+          </button>
+        </div>
+      </template>
+    </AppModal>
   </div>
 </template>
