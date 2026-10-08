@@ -31,7 +31,6 @@ const selectedWalletId = ref<string>('all');
 const selectedHolderFilter = ref<string>('all');
 
 const periodFilterOptions = computed<SelectOptionItem[]>(() => [
-  { value: 'all', label: 'Semua Periode' },
   ...financeStore.availablePeriods.map((p) => ({
     value: p,
     label: formatPeriodLabel(p, locale.value === 'id' ? 'id-ID' : 'en-US'),
