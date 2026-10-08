@@ -1,8 +1,11 @@
+import dotenv from 'dotenv';
+dotenv.config({ override: true });
 import express, { Request, Response, NextFunction } from 'express';
 import http from 'http';
 import { createServer as createViteServer } from 'vite';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
+import nodemailer from 'nodemailer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -169,6 +172,80 @@ function sanitizeUser(u: ServerUserRecord): Omit<ServerUserRecord, 'passwordHash
   return rest;
 }
 
+function createSmtpTransporter() {
+  const host = (process.env.SMTP_HOST || 'smtp.gmail.com').trim();
+  const port = Number(process.env.SMTP_PORT || 465);
+  const user = (process.env.SMTP_USER || '').trim().replace(/^['"]|['"]$/g, '');
+  // Strip surrounding quotes and whitespace (Gmail App Passwords are 16 chars, often copied as "xxxx xxxx xxxx xxxx")
+  const rawPass = (process.env.SMTP_PASS || '').trim().replace(/^['"]|['"]$/g, '');
+  const pass = host.includes('gmail.com') ? rawPass.replace(/\s+/g, '') : rawPass;
+
+  if (!user || !pass) {
+    throw new Error(
+      'Konfigurasi SMTP (SMTP_USER / SMTP_PASS) belum diatur pada environment server.'
+    );
+  }
+
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: {
+      user,
+      pass,
+    },
+  });
+}
+
+function formatSmtpErrorMessage(err: any, recipientEmail: string): string {
+  const rawMsg = String(err?.message || err || '');
+  if (rawMsg.includes('535') || rawMsg.includes('Username and Password not accepted') || rawMsg.includes('BadCredentials')) {
+    return `Autentikasi SMTP Gmail ditolak (535-5.7.8). Google mewajibkan 16 karakter "App Password" (Sandi Aplikasi) pada variabel environment SMTP_PASS, bukan kata sandi akun Gmail biasa. Buat Sandi Aplikasi di myaccount.google.com/apppasswords lalu perbarui nilai SMTP_PASS.`;
+  }
+  return `Gagal mengirim email OTP ke ${recipientEmail}: ${rawMsg || 'Periksa konfigurasi SMTP_HOST, SMTP_PORT, SMTP_USER, dan SMTP_PASS.'}`;
+}
+
+async function sendSuperAdminOtpEmail(recipientEmail: string, otpCode: string): Promise<void> {
+  const transporter = createSmtpTransporter();
+  const fromAddress = `"Sisa Uang Security" <${(process.env.SMTP_USER || '').trim().replace(/^['"]|['"]$/g, '')}>`;
+
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px; background-color: #f8fafc; border-radius: 16px; border: 1px solid #e2e8f0;">
+      <div style="background-color: #ffffff; border-radius: 14px; padding: 28px; border: 1px solid #e2e8f0;">
+        <div style="display: inline-block; padding: 6px 12px; background-color: #ecfdf5; color: #059669; font-size: 12px; font-weight: 700; border-radius: 9999px; letter-spacing: 0.04em; text-transform: uppercase;">
+          Sisa Uang · Keamanan 2FA Super Admin
+        </div>
+        <h2 style="margin: 16px 0 8px; color: #0f172a; font-size: 20px; font-weight: 700;">
+          Kode Verifikasi Masuk (OTP)
+        </h2>
+        <p style="margin: 0 0 20px; color: #475569; font-size: 14px; line-height: 1.6;">
+          Berikut adalah 6 digit kode verifikasi sekali pakai (OTP) untuk menyelesaikan autentikasi Super Administrator (<strong>${recipientEmail}</strong>):
+        </p>
+        <div style="background-color: #f1f5f9; border: 1px dashed #cbd5e1; border-radius: 12px; padding: 18px; text-align: center; margin-bottom: 20px;">
+          <span style="font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 32px; font-weight: 800; letter-spacing: 0.3em; color: #059669;">
+            ${otpCode}
+          </span>
+        </div>
+        <p style="margin: 0 0 8px; color: #64748b; font-size: 12px; line-height: 1.5;">
+          Kode ini berlaku selama <strong>10 menit</strong>. Jangan bagikan kode ini kepada siapa pun.
+        </p>
+        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
+        <p style="margin: 0; color: #94a3b8; font-size: 11px;">
+          Sisa Uang — Your Finance Assistant · v1.0.0-rc.3
+        </p>
+      </div>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from: fromAddress,
+    to: recipientEmail,
+    subject: `[Sisa Uang] Kode OTP Super Admin: ${otpCode}`,
+    text: `Kode verifikasi Super Admin Sisa Uang Anda adalah: ${otpCode}. Berlaku selama 10 menit.`,
+    html: htmlContent,
+  });
+}
+
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
@@ -245,7 +322,7 @@ async function startServer() {
   });
 
   // Authenticate with Email or Username & Password (supports Super Admin vuedevo@gmail.com / vuedevo + regular & CI4 Shield users)
-  app.post('/api/auth/login', (req: Request, res: Response) => {
+  app.post('/api/auth/login', async (req: Request, res: Response) => {
     const identifierRaw = String(req.body?.identifier || req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
 
@@ -309,11 +386,28 @@ async function startServer() {
         attempts: 0,
       });
 
+      try {
+        await sendSuperAdminOtpEmail(adminUser.email, otpCode);
+      } catch (mailErr: any) {
+        const friendlyErr = formatSmtpErrorMessage(mailErr, adminUser.email);
+        appendLog(
+          adminUser.uid,
+          adminUser.email,
+          'smtp_otp_error',
+          friendlyErr,
+          'warning'
+        );
+        res.status(400).json({
+          error: friendlyErr,
+        });
+        return;
+      }
+
       appendLog(
         adminUser.uid,
         adminUser.email,
         'admin_otp_dispatched',
-        `Kode verifikasi 2FA dikirim ke email khusus Super Admin (${adminUser.email}).`,
+        `Kode verifikasi 2FA dikirim via email SMTP ke Super Admin (${adminUser.email}).`,
         'info'
       );
 
@@ -323,8 +417,7 @@ async function startServer() {
         otpDispatch: {
           email: adminUser.email,
           expiresAt,
-          simulatedInboxCode: otpCode,
-          message: `Kode verifikasi 6 digit telah dikirim ke ${adminUser.email}.`,
+          message: `Kode verifikasi 6 digit telah dikirim ke email ${adminUser.email}.`,
         },
       });
       return;
@@ -402,7 +495,7 @@ async function startServer() {
   });
 
   // Manual User Registration
-  app.post('/api/auth/register', (req: Request, res: Response) => {
+  app.post('/api/auth/register', async (req: Request, res: Response) => {
     const emailRaw = String(req.body?.email || '').trim().toLowerCase();
     const rawUsername = String(req.body?.username || '').trim().toLowerCase().replace(/\s+/g, '_');
     const password = String(req.body?.password || '');
@@ -460,14 +553,30 @@ async function startServer() {
         attempts: 0,
       });
 
+      try {
+        await sendSuperAdminOtpEmail(newUser.email, otpCode);
+      } catch (mailErr: any) {
+        const friendlyErr = formatSmtpErrorMessage(mailErr, newUser.email);
+        appendLog(
+          newUser.uid,
+          newUser.email,
+          'smtp_otp_error',
+          friendlyErr,
+          'warning'
+        );
+        res.status(400).json({
+          error: friendlyErr,
+        });
+        return;
+      }
+
       res.json({
         user: sanitizeUser(newUser),
         requiresOtp: true,
         otpDispatch: {
           email: newUser.email,
           expiresAt,
-          simulatedInboxCode: otpCode,
-          message: `Kode verifikasi 6 digit telah dikirim ke ${newUser.email}.`,
+          message: `Kode verifikasi 6 digit telah dikirim ke email ${newUser.email}.`,
         },
       });
       return;
@@ -480,7 +589,7 @@ async function startServer() {
   });
 
   // Request or Resend OTP specifically for Super Admin (vuedevo@gmail.com)
-  app.post('/api/auth/request-otp', (req: Request, res: Response) => {
+  app.post('/api/auth/request-otp', async (req: Request, res: Response) => {
     const emailRaw = String(req.body?.email || '').trim().toLowerCase();
     if (emailRaw !== SUPER_ADMIN_EMAIL && emailRaw !== WORKSPACE_ADMIN_EMAIL) {
       res.status(403).json({
@@ -498,11 +607,28 @@ async function startServer() {
       attempts: 0,
     });
 
+    try {
+      await sendSuperAdminOtpEmail(emailRaw, otpCode);
+    } catch (mailErr: any) {
+      const friendlyErr = formatSmtpErrorMessage(mailErr, emailRaw);
+      appendLog(
+        'admin_vuedevo_01',
+        emailRaw,
+        'smtp_otp_error',
+        friendlyErr,
+        'warning'
+      );
+      res.status(400).json({
+        error: friendlyErr,
+      });
+      return;
+    }
+
     appendLog(
       'admin_vuedevo_01',
       emailRaw,
       'admin_otp_requested',
-      `Permintaan pengiriman ulang kode OTP 6-digit untuk ${emailRaw}.`,
+      `Pengiriman kode OTP 6-digit via email SMTP ke ${emailRaw}.`,
       'info'
     );
 
@@ -510,8 +636,7 @@ async function startServer() {
       sent: true,
       email: emailRaw,
       expiresAt,
-      simulatedInboxCode: otpCode,
-      message: `Kode verifikasi baru telah dikirim ke ${emailRaw}.`,
+      message: `Kode verifikasi baru telah dikirim ke email ${emailRaw}.`,
     });
   });
 

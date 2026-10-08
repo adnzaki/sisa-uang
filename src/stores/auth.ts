@@ -53,7 +53,6 @@ export interface AppUser {
 export interface OtpDispatchInfo {
   email: string;
   expiresAt: number;
-  simulatedInboxCode?: string;
   message: string;
 }
 
@@ -902,7 +901,6 @@ export const useAuthStore = defineStore('auth', () => {
       otpDispatchInfo.value = {
         email: data.email,
         expiresAt: data.expiresAt,
-        simulatedInboxCode: data.simulatedInboxCode,
         message: data.message,
       };
       useNotificationStore().notifySuccess(
