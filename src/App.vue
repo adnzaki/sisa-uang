@@ -616,9 +616,9 @@ async function handleLogout() {
           <div class="flex items-center gap-2.5">
             <PWAInstallButton variant="topbar" />
 
-            <!-- "+ Catat Transaksi" ONLY for Regular Users -->
+            <!-- "+ Catat Transaksi" ONLY for Regular Users (hidden on /transactions page) -->
             <button
-              v-if="!authStore.isSuperAdmin"
+              v-if="!authStore.isSuperAdmin && route.path !== '/transactions'"
               type="button"
               class="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors whitespace-nowrap flex items-center gap-1.5"
               @click="financeStore.openAddTransactionModal()"
@@ -666,7 +666,7 @@ async function handleLogout() {
           ref="mainScrollContainer"
           class="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden pb-24 md:pb-8"
         >
-          <div class="w-full max-w-6xl mx-auto px-3.5 sm:px-6 md:px-8 py-4 sm:py-7">
+          <div class="w-full px-3.5 sm:px-6 md:px-8 py-4 sm:py-7">
             <RouterView v-slot="{ Component }">
               <Transition name="page" mode="out-in">
                 <component :is="Component" />

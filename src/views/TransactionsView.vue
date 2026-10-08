@@ -153,13 +153,13 @@ function getDateBadge(dateStr: string) {
     <!-- Search & Filter Box -->
     <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-4 space-y-3">
       <!-- Search Input -->
-      <div class="relative">
-        <Search class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+      <div class="w-full h-[46px] min-h-[46px] px-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 flex items-center gap-3 focus-within:border-emerald-600 transition-colors">
+        <Search class="w-4 h-4 text-slate-400 shrink-0" />
         <input
           v-model="searchQuery"
           type="text"
           :placeholder="t('transactions.searchPlaceholder')"
-          class="w-full min-h-[44px] pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+          class="flex-1 w-full min-w-0 bg-transparent border-0 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none"
         />
       </div>
 

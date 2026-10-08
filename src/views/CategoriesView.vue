@@ -122,10 +122,10 @@ async function handleDeleteEditingCategory() {
 </script>
 
 <template>
-  <div class="space-y-5 sm:space-y-6 max-w-full overflow-x-hidden">
+  <div class="w-full max-w-full space-y-5 sm:space-y-6 overflow-x-hidden">
     <!-- Page Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-      <div class="min-w-0">
+    <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 w-full">
+      <div class="min-w-0 flex-1">
         <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
           {{ t('categories.title') }}
         </h1>
@@ -134,10 +134,10 @@ async function handleDeleteEditingCategory() {
         </p>
       </div>
 
-      <div class="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2 w-full sm:w-auto">
+      <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full lg:w-auto shrink-0">
         <RouterLink
           to="/budgets"
-          class="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-emerald-600 flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
+          class="h-[46px] min-h-[46px] px-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 hover:border-emerald-600 flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0"
         >
           <PieChart class="w-4 h-4 text-emerald-600 shrink-0" />
           <span>Ke Menu Anggaran</span>
@@ -145,7 +145,7 @@ async function handleDeleteEditingCategory() {
 
         <button
           type="button"
-          class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shadow-xs"
+          class="h-[46px] min-h-[46px] px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap shadow-xs shrink-0"
           @click="openAddModal('expense')"
         >
           <Plus class="w-4 h-4 shrink-0" />
@@ -154,8 +154,8 @@ async function handleDeleteEditingCategory() {
       </div>
     </div>
 
-    <!-- Summary Cards + Inline Quick Add Form -->
-    <section class="rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4">
+    <!-- Summary Card + Inline Quick Add Form -->
+    <section class="w-full rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
         <div class="flex items-center gap-2.5 min-w-0">
           <div class="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
@@ -172,34 +172,29 @@ async function handleDeleteEditingCategory() {
         </div>
       </div>
 
-      <form class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end" @submit.prevent="handleAddCategory">
-        <div class="sm:col-span-6">
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Nama Kategori Kustom Baru
-          </label>
+      <form class="grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch w-full" @submit.prevent="handleAddCategory">
+        <div class="md:col-span-6 w-full min-w-0">
           <input
             v-model="newCatName"
             type="text"
             required
             maxlength="50"
-            placeholder="Contoh: Belanja Dapur, Sedekah, Royalti..."
-            class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+            placeholder="Nama kategori kustom baru (Contoh: Belanja Dapur, Sedekah, Royalti...)"
+            class="w-full h-[46px] min-h-[46px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600 transition-colors"
           />
         </div>
-        <div class="sm:col-span-3">
-          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-            Jenis Kategori
-          </label>
+        <div class="md:col-span-3 w-full min-w-0">
           <CustomSelect
             v-model="newCatType"
             :options="categoryTypeOptions"
-            placeholder="Pilih jenis"
+            placeholder=""
+            aria-label="Jenis Kategori"
           />
         </div>
-        <div class="sm:col-span-3">
+        <div class="md:col-span-3 w-full min-w-0">
           <button
             type="submit"
-            class="w-full min-h-[44px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-2xs"
+            class="w-full h-[46px] min-h-[46px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shadow-2xs whitespace-nowrap"
           >
             <Plus class="w-4 h-4 shrink-0" />
             <span>Tambah Kategori</span>
@@ -209,36 +204,40 @@ async function handleDeleteEditingCategory() {
     </section>
 
     <!-- Search & Filter Bar -->
-    <div class="grid grid-cols-1 sm:grid-cols-12 gap-3">
-      <div class="sm:col-span-8 relative">
-        <Search class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-        <input
-          v-model="searchQuery"
-          type="text"
-          placeholder="Cari nama kategori pengeluaran atau pemasukan..."
-          class="w-full min-h-[44px] pl-10 pr-9 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
-        />
-        <button
-          v-if="searchQuery"
-          type="button"
-          class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-          @click="searchQuery = ''"
-        >
-          <X class="w-4 h-4" />
-        </button>
+    <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch w-full">
+      <div class="md:col-span-8 w-full min-w-0">
+        <div class="w-full h-[46px] min-h-[46px] px-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center gap-3 focus-within:border-emerald-600 transition-colors">
+          <Search class="w-4 h-4 text-slate-400 shrink-0" />
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="Cari nama kategori pengeluaran atau pemasukan..."
+            class="flex-1 w-full min-w-0 bg-transparent border-0 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none"
+          />
+          <button
+            v-if="searchQuery"
+            type="button"
+            class="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0 transition-colors"
+            title="Bersihkan pencarian"
+            @click="searchQuery = ''"
+          >
+            <X class="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
-      <div class="sm:col-span-4">
+      <div class="md:col-span-4 w-full min-w-0">
         <CustomSelect
           v-model="filterSource"
           :options="sourceFilterOptions"
-          placeholder="Filter sumber kategori"
+          placeholder=""
+          aria-label="Filter Sumber Kategori"
         />
       </div>
     </div>
 
     <!-- Category Lists Grid (Fixed Header Outside Scroll Container so Title Never Collides with Items) -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5 w-full">
       <!-- 1. Expense Categories Card -->
       <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col overflow-hidden shadow-2xs">
         <!-- Fixed Non-Scrolling Card Header -->
@@ -414,7 +413,8 @@ async function handleDeleteEditingCategory() {
         <CustomSelect
           v-model="newCatType"
           :options="categoryTypeOptions"
-          placeholder="Jenis Kategori"
+          placeholder=""
+          aria-label="Jenis Kategori"
         />
       </form>
 
@@ -457,7 +457,8 @@ async function handleDeleteEditingCategory() {
         <CustomSelect
           v-model="editCatType"
           :options="categoryTypeOptions"
-          placeholder="Jenis Kategori"
+          placeholder=""
+          aria-label="Jenis Kategori"
         />
       </form>
 
