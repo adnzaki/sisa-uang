@@ -29,7 +29,7 @@ const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
 const authStore = useAuthStore();
 
-const recentTransactions = computed(() => financeStore.periodTransactions.slice(0, 8));
+const recentTransactions = computed(() => financeStore.periodTransactions.slice(0, 5));
 
 const periodOptions = computed<SelectOptionItem[]>(() => [
   {
