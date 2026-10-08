@@ -646,7 +646,7 @@ async function handleLogout() {
           <div class="flex-1"></div>
 
           <div class="flex items-center gap-1.5 shrink-0">
-            <PWAInstallButton variant="topbar" />
+            <!-- <PWAInstallButton variant="topbar" /> -->
 
             <button
               type="button"
