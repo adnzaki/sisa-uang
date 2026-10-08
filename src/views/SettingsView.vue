@@ -361,9 +361,13 @@ async function handleSaveProfile() {
             {{ authStore.isSuperAdmin ? 'Administrator (Super Admin)' : 'Pengguna Standar' }}
           </span>
         </div>
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 py-1.5">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 py-1.5 border-b border-slate-100 dark:border-slate-800">
           <span>Skema Database</span>
           <span class="font-mono text-slate-900 dark:text-slate-100">sisa-uang (Cloud Firestore)</span>
+        </div>
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 py-1.5">
+          <span>Versi Aplikasi</span>
+          <span class="font-mono font-semibold text-emerald-600 dark:text-emerald-400">1.0.0-rc.3</span>
         </div>
       </div>
 
@@ -398,5 +402,14 @@ async function handleSaveProfile() {
         </div>
       </div>
     </section>
+
+    <!-- Application Version Footer at the very bottom of Settings Page -->
+    <div class="pt-2 pb-4 text-center space-y-1">
+      <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-500 dark:text-slate-400">
+        <span class="font-semibold text-slate-700 dark:text-slate-300">Sisa Uang</span>
+        <span aria-hidden="true">·</span>
+        <span class="font-mono font-semibold text-emerald-600 dark:text-emerald-400">v1.0.0-rc.3</span>
+      </div>
+    </div>
   </div>
 </template>
