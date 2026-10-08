@@ -12,9 +12,49 @@ export interface PopupBannerItem {
   createdAt: number;
 }
 
+export interface ConfirmDialogOptions {
+  title: string;
+  message: string;
+  detail?: string | null;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  variant?: 'danger' | 'warning';
+}
+
 export const useNotificationStore = defineStore('notification', () => {
   const banners = ref<PopupBannerItem[]>([]);
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  // Global Confirmation Modal State
+  const confirmDialog = ref<ConfirmDialogOptions | null>(null);
+  let confirmResolver: ((confirmed: boolean) => void) | null = null;
+
+  function requestConfirmation(options: ConfirmDialogOptions): Promise<boolean> {
+    if (confirmResolver) {
+      confirmResolver(false);
+      confirmResolver = null;
+    }
+    confirmDialog.value = {
+      title: options.title,
+      message: options.message,
+      detail: options.detail || null,
+      confirmLabel: options.confirmLabel || 'Ya, Hapus',
+      cancelLabel: options.cancelLabel || 'Batal',
+      variant: options.variant || 'danger',
+    };
+    return new Promise<boolean>((resolve) => {
+      confirmResolver = resolve;
+    });
+  }
+
+  function resolveConfirmation(confirmed: boolean) {
+    const resolver = confirmResolver;
+    confirmResolver = null;
+    confirmDialog.value = null;
+    if (resolver) {
+      resolver(confirmed);
+    }
+  }
 
   function dismissBanner(id: string) {
     const timer = timers.get(id);
@@ -136,6 +176,9 @@ export const useNotificationStore = defineStore('notification', () => {
 
   return {
     banners,
+    confirmDialog,
+    requestConfirmation,
+    resolveConfirmation,
     showPopup,
     notifySuccess,
     notifyError,

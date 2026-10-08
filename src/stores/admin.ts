@@ -357,8 +357,17 @@ export const useAdminStore = defineStore('admin', () => {
     }
   }
 
-  async function removeUserAccount(targetUser: AdminUserItem) {
+  async function removeUserAccount(targetUser: AdminUserItem): Promise<boolean> {
     const notify = useNotificationStore();
+
+    const confirmed = await notify.requestConfirmation({
+      title: 'Konfirmasi Hapus Akun Pengguna',
+      message: `Apakah Anda yakin ingin menghapus akun pengguna "${targetUser.displayName}" (${targetUser.email}) dari sistem?`,
+      detail: `UID: ${targetUser.uid}. Seluruh akses akun ini akan dihapus dari sistem Sisa Uang.`,
+      confirmLabel: 'Ya, Hapus Pengguna',
+    });
+    if (!confirmed) return false;
+
     try {
       const { data } = await apiClient.delete(
         `/admin/users/${encodeURIComponent(targetUser.uid)}`
@@ -381,6 +390,7 @@ export const useAdminStore = defineStore('admin', () => {
         'Akun Pengguna Dihapus',
         `Akun ${targetUser.displayName} (${targetUser.email}) telah dihapus dari sistem.`
       );
+      return true;
     } catch (err) {
       notify.notifyError('Gagal Menghapus Pengguna', err);
       throw err;

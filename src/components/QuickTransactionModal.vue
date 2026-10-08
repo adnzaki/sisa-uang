@@ -197,9 +197,7 @@ watch(walletId, (newWalletId) => {
     return;
   }
   const holders = financeStore.getHoldersByWalletId(newWalletId);
-  if (!holders.some((h) => h.id === fundOwnerId.value)) {
-    fundOwnerId.value = holders.length === 1 ? holders[0].id : '';
-  }
+  fundOwnerId.value = holders[0]?.id || '';
 });
 
 watch(toWalletId, (newToWalletId) => {
@@ -209,9 +207,7 @@ watch(toWalletId, (newToWalletId) => {
     return;
   }
   const holders = financeStore.getHoldersByWalletId(newToWalletId);
-  if (!holders.some((h) => h.id === toFundOwnerId.value)) {
-    toFundOwnerId.value = holders.length === 1 ? holders[0].id : '';
-  }
+  toFundOwnerId.value = holders[0]?.id || '';
 });
 
 watch(txType, () => {
@@ -234,8 +230,10 @@ async function handleDeleteCurrent() {
   if (!financeStore.editingTransaction) return;
   isSubmitting.value = true;
   try {
-    await financeStore.removeTransaction(financeStore.editingTransaction.id);
-    closeModal();
+    const deleted = await financeStore.removeTransaction(financeStore.editingTransaction.id);
+    if (deleted) {
+      closeModal();
+    }
   } catch (err: any) {
     errorMsg.value = err instanceof Error ? err.message : 'Gagal menghapus transaksi.';
   } finally {

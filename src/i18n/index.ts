@@ -106,7 +106,7 @@ const messages = {
     },
     categories: {
       title: 'Manajemen Kategori',
-      subtitle: 'Kelola kategori pengeluaran dan pemasukan kustom maupun bawaan sistem. Ketuk kategori kustom untuk mengubahnya.',
+      subtitle: 'Kelola kategori pengeluaran dan pemasukan kustom maupun bawaan sistem. Ketuk kategori mana saja untuk mengubah atau menghapusnya.',
     },
     budgets: {
       title: 'Perencanaan Anggaran',
@@ -240,7 +240,7 @@ const messages = {
     },
     categories: {
       title: 'Category Management',
-      subtitle: 'Manage custom and system default income/expense categories. Tap any custom category to edit.',
+      subtitle: 'Manage custom and system default income/expense categories. Tap any category to edit or delete.',
     },
     budgets: {
       title: 'Budget Planner',
