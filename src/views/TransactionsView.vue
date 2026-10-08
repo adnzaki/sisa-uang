@@ -148,41 +148,7 @@ function getDateBadge(dateStr: string) {
     </div>
 
     <!-- 3 Summary Cards (Matching Published Mobile Reference) -->
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-4">
-      <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-          TOTAL PEMASUKAN
-        </div>
-        <div class="text-xl sm:text-2xl font-money font-bold text-emerald-600 dark:text-emerald-400 mt-1 truncate">
-          {{ themeStore.formatMoney(filteredTotalIncome) }}
-        </div>
-      </div>
-
-      <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-          TOTAL PENGELUARAN
-        </div>
-        <div class="text-xl sm:text-2xl font-money font-bold text-rose-600 dark:text-rose-400 mt-1 truncate">
-          {{ themeStore.formatMoney(filteredTotalExpense) }}
-        </div>
-      </div>
-
-      <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-          SELISIH BERSIH
-        </div>
-        <div
-          class="text-xl sm:text-2xl font-money font-bold mt-1 truncate"
-          :class="
-            filteredNetDifference >= 0
-              ? 'text-emerald-600 dark:text-emerald-400'
-              : 'text-slate-900 dark:text-slate-100'
-          "
-        >
-          {{ filteredNetDifference >= 0 ? '+' : '-' }}{{ themeStore.formatMoney(Math.abs(filteredNetDifference)) }}
-        </div>
-      </div>
-    </div>
+    
 
     <!-- Search & Filter Box -->
     <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-4 space-y-3">
