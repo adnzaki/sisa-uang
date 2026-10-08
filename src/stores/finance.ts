@@ -1370,7 +1370,6 @@ export const useFinanceStore = defineStore('finance', () => {
         type: payload.type,
         category: safeCategory,
         amount: numericAmount,
-        adminFee: numericAdminFee,
         note: safeNote,
         date: safeDate,
         deleted: false,
@@ -1386,6 +1385,28 @@ export const useFinanceStore = defineStore('finance', () => {
       }
 
       await setDoc(doc(db, 'transactions', id), firestoreTxData);
+
+      // If transfer includes an admin fee, record a separate Bea Admin expense transaction so it complies with live Firestore schema rules
+      if (payload.type === 'transfer' && numericAdminFee > 0) {
+        const feeTxId = sanitizeId(`su_tx_fee_${Date.now()}`);
+        const feeNote = sanitizeString(`Admin ${safeNote}`, MAX_NOTE_LENGTH, 'Biaya Admin Transfer');
+        await setDoc(doc(db, 'transactions', feeTxId), {
+          ownerId: uid,
+          walletId: wallet.id,
+          walletName: wallet.name,
+          fundOwnerId: sourceHolder?.id || 'default',
+          fundOwnerName: sourceHolder?.holderName || 'Pribadi',
+          type: 'expense',
+          category: 'Biaya Admin',
+          amount: numericAdminFee,
+          note: feeNote,
+          date: safeDate,
+          deleted: false,
+          deletedAt: null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
 
       if (sourceHolder) {
         await updateDoc(doc(db, 'wallet_owners', sourceHolder.id), {
@@ -1563,7 +1584,6 @@ export const useFinanceStore = defineStore('finance', () => {
         type: payload.type,
         category: safeCategory,
         amount: numericAmount,
-        adminFee: numericAdminFee,
         note: safeNote,
         date: safeDate,
         updatedAt: serverTimestamp(),
@@ -1746,20 +1766,32 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await setDoc(doc(db, 'budgets', targetId), {
-        ownerId: uid,
-        category: safeCategory,
-        limitAmount: numericLimit,
-        spentAmount: existing?.spentAmount || 0,
-        period,
-        deleted: false,
-        deletedAt: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      if (existing) {
+        await updateDoc(doc(db, 'budgets', targetId), {
+          category: safeCategory,
+          limitAmount: numericLimit,
+          spentAmount: existing.spentAmount || 0,
+          period,
+          deleted: false,
+          deletedAt: null,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(doc(db, 'budgets', targetId), {
+          ownerId: uid,
+          category: safeCategory,
+          limitAmount: numericLimit,
+          spentAmount: 0,
+          period,
+          deleted: false,
+          deletedAt: null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menyimpan Anggaran', err);
-      handleFirestoreError(err, OperationType.WRITE, `budgets/${targetId}`);
+      handleFirestoreError(err, existing ? OperationType.UPDATE : OperationType.CREATE, `budgets/${targetId}`);
     }
 
     await authStore.recordAuditLog(
