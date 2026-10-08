@@ -425,10 +425,10 @@ async function handleLogout() {
                 </div>
                 <div class="min-w-0 flex-1">
                   <div class="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-300 truncate">
-                    Logo Aplikasi
+                    Sisa Uang
                   </div>
                   <div class="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                    Ruang Logo Brand
+                    Your Finance Assistant
                   </div>
                 </div>
               </div>
@@ -709,10 +709,10 @@ async function handleLogout() {
                     </div>
                     <div class="min-w-0 flex-1">
                       <div class="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-300 truncate">
-                        Logo Aplikasi
+                        Sisa Uang
                       </div>
                       <div class="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                        Ruang Logo Brand
+                        Your Finance Assistant
                       </div>
                     </div>
                   </div>
