@@ -590,11 +590,11 @@ async function handleLogout() {
           <button
             type="button"
             class="w-full py-1.5 px-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/80 text-center text-[11px] font-mono text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center justify-center gap-1.5 transition-colors"
-            title="Lihat Informasi Rilis &amp; Changelog v1.0.0-rc.3"
+            title="Lihat Informasi Rilis &amp; Changelog v1.0.0-rc.4"
             @click="notificationStore.openChangelogModal()"
           >
             <Sparkles class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-            <span>Versi 1.0.0-rc.3 · Info Rilis</span>
+            <span>Versi 1.0.0-rc.4 · Info Rilis</span>
           </button>
         </div>
       </aside>
@@ -728,7 +728,7 @@ async function handleLogout() {
                   >
                     <span class="flex items-center gap-2 truncate">
                       <Sparkles class="w-3.5 h-3.5 shrink-0" />
-                      <span>Apa yang Baru (v1.0.0-rc.3)</span>
+                      <span>Apa yang Baru (v1.0.0-rc.4)</span>
                     </span>
                     <span class="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-mono font-bold shrink-0">
                       BARU
@@ -882,7 +882,7 @@ async function handleLogout() {
                   >
                     <span class="flex items-center gap-2 truncate">
                       <Sparkles class="w-3.5 h-3.5 shrink-0" />
-                      <span>Apa yang Baru (v1.0.0-rc.3)</span>
+                      <span>Apa yang Baru (v1.0.0-rc.4)</span>
                     </span>
                     <span class="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-mono font-bold shrink-0">
                       BARU
@@ -1067,7 +1067,7 @@ async function handleLogout() {
               @click="mobileDrawerOpen = false; notificationStore.openChangelogModal()"
             >
               <Sparkles class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span>Versi 1.0.0-rc.3 · Info Rilis</span>
+              <span>Versi 1.0.0-rc.4 · Info Rilis</span>
             </button>
           </div>
         </div>
@@ -1244,7 +1244,7 @@ async function handleLogout() {
     <!-- Global App Update Notification & Full Reload Banner -->
     <AppUpdateBanner />
 
-    <!-- Global Official Release Notes & Changelog Modal (v1.0.0-rc.3) -->
+    <!-- Global Official Release Notes & Changelog Modal (v1.0.0-rc.4) -->
     <ReleaseNotesModal />
 
     <!-- Global Delete Confirmation Modal -->
