@@ -348,6 +348,14 @@ async function handleLogout() {
             >
               {{ banner.detail }}
             </p>
+            <div
+              v-if="banner.errorCode"
+              class="pt-0.5 flex items-center justify-between gap-2 select-all"
+            >
+              <span class="text-[9px] font-mono tracking-wider text-rose-300/35">
+                code: {{ banner.errorCode }}
+              </span>
+            </div>
             <div v-if="banner.actionRoute && banner.actionLabel" class="pt-1.5">
               <RouterLink
                 :to="banner.actionRoute"

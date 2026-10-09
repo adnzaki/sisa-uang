@@ -18,10 +18,8 @@ import {
   getDocs,
   setDoc,
   updateDoc,
-  onSnapshot,
   serverTimestamp,
   collection,
-  addDoc,
   query,
   where,
 } from 'firebase/firestore';
@@ -31,6 +29,7 @@ import {
   googleProvider,
   OperationType,
   handleFirestoreError,
+  isFirestoreQuotaError,
   sanitizeId,
   sanitizeString,
   MAX_DISPLAY_NAME_LENGTH,
@@ -115,7 +114,7 @@ export const useAuthStore = defineStore('auth', () => {
     );
     const safeDetail = sanitizeString(detail, MAX_LOG_DETAIL_LENGTH, action);
 
-    // Send to backend API via Axios
+    // Send to backend API via Axios (0 Firestore reads/writes)
     try {
       await apiClient.post('/activity', {
         actorUid,
@@ -128,28 +127,9 @@ export const useAuthStore = defineStore('auth', () => {
     } catch {
       // Ignore transient network errors
     }
-
-    // If signed in with Firebase Auth, also persist to Firestore /activity_logs
-    if (auth.currentUser && auth.currentUser.uid === actorUid) {
-      const path = 'activity_logs';
-      try {
-        await addDoc(collection(db, path), {
-          actorUid,
-          actorEmail,
-          action: sanitizeString(action, 60, 'user_action'),
-          detail: safeDetail,
-          severity,
-          createdAt: serverTimestamp(),
-        });
-      } catch (err) {
-        if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
-          handleFirestoreError(err, OperationType.CREATE, path);
-        }
-      }
-    }
   }
 
-  function startUserStatusMonitor(targetUser: AppUser) {
+  function startUserStatusMonitor(_targetUser: AppUser) {
     if (userStatusUnsubscribe) {
       userStatusUnsubscribe();
       userStatusUnsubscribe = null;
@@ -159,7 +139,7 @@ export const useAuthStore = defineStore('auth', () => {
       statusPollTimer = null;
     }
 
-    // 1. Poll server status via Axios for instant real-time block enforcement
+    // Poll lightweight local Express server status via Axios every 15s (0 Firestore reads!)
     statusPollTimer = setInterval(async () => {
       if (!user.value) return;
       try {
@@ -178,36 +158,7 @@ export const useAuthStore = defineStore('auth', () => {
       } catch {
         // Ignore poll error
       }
-    }, 5000);
-
-    // 2. Attach Firestore onSnapshot listener if signed in
-    if (auth.currentUser) {
-      const userDocPath = `users/${targetUser.uid}`;
-      userStatusUnsubscribe = onSnapshot(
-        doc(db, 'users', targetUser.uid),
-        (snapshot) => {
-          if (snapshot.exists() && user.value) {
-            const d = snapshot.data();
-            if (d.status === 'blocked' || d.status === 'active') {
-              user.value.status = d.status;
-            }
-            if (d.role === 'admin' || d.role === 'user') {
-              user.value.role = d.role;
-            }
-            if (d.displayName) {
-              user.value.displayName = d.displayName;
-            }
-            if (d.username) {
-              user.value.username = d.username;
-            }
-            localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
-          }
-        },
-        () => {
-          // Ignore snapshot listener permission error if remote Console rules haven't been updated yet
-        }
-      );
-    }
+    }, 15000);
   }
 
   async function ensureFirestoreUserDocument(
@@ -379,11 +330,8 @@ export const useAuthStore = defineStore('auth', () => {
 
     onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser && !fbUser.isAnonymous) {
-        // Do NOT overwrite an active migrated user session (e.g. ci4_user_1) when the bridge account (vuedevo@gmail.com) is used for Firestore rules
-        if (
-          user.value &&
-          user.value.email.toLowerCase() !== (fbUser.email || '').toLowerCase()
-        ) {
+        // If user is already restored from localStorage session, do NOT re-query Firestore on every page load!
+        if (user.value) {
           isReady.value = true;
           return;
         }
@@ -405,7 +353,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   /**
    * Look up a user document directly in Cloud Firestore ("sisa-uang") by email OR username.
-   * This allows users imported from PHPMyAdmin / CodeIgniter 4 Shield to log in even after server restarts.
+   * Uses targeted indexed queries only (never scans the entire collection).
    */
   async function findMigratedUserInFirestore(identifier: string): Promise<{
     uid: string;
@@ -435,22 +383,24 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       const usersCol = collection(db, 'users');
-      // 1. Query by email
-      const byEmailSnap = await getDocs(query(usersCol, where('email', '==', clean)));
-      if (!byEmailSnap.empty) {
-        const d = byEmailSnap.docs[0];
-        const data = d.data();
-        return {
-          uid: d.id,
-          username: String(data.username || clean.split('@')[0]),
-          email: String(data.email || clean),
-          displayName: String(data.displayName || data.username || clean.split('@')[0]),
-          passwordHash: data.passwordHash ? String(data.passwordHash) : undefined,
-          role: data.role === 'admin' ? 'admin' : 'user',
-          status: data.status === 'blocked' ? 'blocked' : 'active',
-          authProvider: data.authProvider === 'google' ? 'google' : 'password',
-          currency: data.currency === 'USD' ? 'USD' : 'IDR',
-        };
+      // 1. Query by email (if identifier contains @, check email first)
+      if (clean.includes('@')) {
+        const byEmailSnap = await getDocs(query(usersCol, where('email', '==', clean)));
+        if (!byEmailSnap.empty) {
+          const d = byEmailSnap.docs[0];
+          const data = d.data();
+          return {
+            uid: d.id,
+            username: String(data.username || clean.split('@')[0]),
+            email: String(data.email || clean),
+            displayName: String(data.displayName || data.username || clean.split('@')[0]),
+            passwordHash: data.passwordHash ? String(data.passwordHash) : undefined,
+            role: data.role === 'admin' ? 'admin' : 'user',
+            status: data.status === 'blocked' ? 'blocked' : 'active',
+            authProvider: data.authProvider === 'google' ? 'google' : 'password',
+            currency: data.currency === 'USD' ? 'USD' : 'IDR',
+          };
+        }
       }
 
       // 2. Query by username
@@ -471,18 +421,17 @@ export const useAuthStore = defineStore('auth', () => {
         };
       }
 
-      // 3. Fallback full scan of /users if case-sensitivity differed
-      const allUsersSnap = await getDocs(usersCol);
-      for (const docSnap of allUsersSnap.docs) {
-        const data = docSnap.data();
-        const docEmail = String(data.email || '').toLowerCase();
-        const docUsername = String(data.username || '').toLowerCase();
-        if (docEmail === clean || docUsername === clean) {
+      // 3. If not @ and not found by username, check email exact match once
+      if (!clean.includes('@')) {
+        const byEmailSnap = await getDocs(query(usersCol, where('email', '==', clean)));
+        if (!byEmailSnap.empty) {
+          const d = byEmailSnap.docs[0];
+          const data = d.data();
           return {
-            uid: docSnap.id,
-            username: String(data.username || docEmail.split('@')[0] || docSnap.id),
-            email: String(data.email || `${docUsername}@sisa-uang.id`),
-            displayName: String(data.displayName || data.username || docSnap.id),
+            uid: d.id,
+            username: String(data.username || clean),
+            email: String(data.email || clean),
+            displayName: String(data.displayName || data.username || clean),
             passwordHash: data.passwordHash ? String(data.passwordHash) : undefined,
             role: data.role === 'admin' ? 'admin' : 'user',
             status: data.status === 'blocked' ? 'blocked' : 'active',
@@ -491,8 +440,11 @@ export const useAuthStore = defineStore('auth', () => {
           };
         }
       }
-    } catch {
-      // Ignore if Firestore query fails
+    } catch (fsErr: any) {
+      if (isFirestoreQuotaError(fsErr)) {
+        useNotificationStore().notifyQuotaExceeded();
+        throw new Error('Terjadi kesalahan sistem, mohon maaf atas ketidaknyamannya (db-unhandled)');
+      }
     }
 
     return null;
@@ -663,6 +615,13 @@ export const useAuthStore = defineStore('auth', () => {
         }
       }
 
+      if (isFirestoreQuotaError(err)) {
+        const quotaMsg = 'Terjadi kesalahan sistem, mohon maaf atas ketidaknyamannya';
+        error.value = quotaMsg;
+        useNotificationStore().notifyQuotaExceeded();
+        throw new Error(quotaMsg);
+      }
+
       const msg =
         err?.response?.data?.error ||
         (err instanceof Error ? err.message : 'Gagal masuk. Periksa email/username dan kata sandi Anda.');
@@ -756,6 +715,12 @@ export const useAuthStore = defineStore('auth', () => {
       );
       return { requiresOtp: false };
     } catch (err: any) {
+      if (isFirestoreQuotaError(err)) {
+        const quotaMsg = 'Terjadi kesalahan sistem, mohon maaf atas ketidaknyamannya';
+        error.value = quotaMsg;
+        useNotificationStore().notifyQuotaExceeded();
+        throw new Error(quotaMsg);
+      }
       const msg =
         err?.response?.data?.error ||
         (err instanceof Error ? err.message : 'Gagal mendaftarkan akun baru.');

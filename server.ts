@@ -92,6 +92,8 @@ interface OtpChallenge {
 
 const nowIso = () => new Date().toISOString();
 
+const USERS_CACHE_FILE = path.join(__dirname, '.sisa_uang_users_cache.json');
+
 // In-memory state synchronized with client & Firestore (no dummy users)
 const usersStore = new Map<string, ServerUserRecord>([
   [
@@ -111,6 +113,35 @@ const usersStore = new Map<string, ServerUserRecord>([
     },
   ],
 ]);
+
+function loadPersistedUsersCache() {
+  try {
+    if (fs.existsSync(USERS_CACHE_FILE)) {
+      const raw = fs.readFileSync(USERS_CACHE_FILE, 'utf8');
+      const list = JSON.parse(raw) as ServerUserRecord[];
+      if (Array.isArray(list)) {
+        for (const u of list) {
+          if (u && u.uid && u.email) {
+            usersStore.set(u.uid, u);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore cache read error
+  }
+}
+
+function savePersistedUsersCache() {
+  try {
+    const list = Array.from(usersStore.values());
+    fs.writeFileSync(USERS_CACHE_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch {
+    // Ignore cache write error
+  }
+}
+
+loadPersistedUsersCache();
 
 const activityLogs: ServerActivityLog[] = [];
 
@@ -744,6 +775,7 @@ async function startServer() {
       if (isSuperAdmin) {
         existing.role = 'admin';
       }
+      savePersistedUsersCache();
       res.json({ user: sanitizeUser(existing) });
       return;
     }
@@ -762,6 +794,7 @@ async function startServer() {
       updatedAt: nowIso(),
     };
     usersStore.set(uid, record);
+    savePersistedUsersCache();
 
     appendLog(
       uid,
@@ -1119,6 +1152,7 @@ async function startServer() {
       usersStore.set(record.uid, record);
       importedUsersCount++;
     }
+    savePersistedUsersCache();
 
     let importedLogsCount = 0;
     for (const lg of incomingLogs) {

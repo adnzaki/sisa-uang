@@ -5,10 +5,10 @@ import {
   doc,
   getDoc,
   getDocs,
+  getCountFromServer,
   setDoc,
   updateDoc,
   deleteDoc,
-  onSnapshot,
   serverTimestamp,
   writeBatch,
 } from 'firebase/firestore';
@@ -24,6 +24,7 @@ import {
   sisaUangAuth,
   OperationType,
   handleFirestoreError,
+  isFirestoreQuotaError,
   sanitizeId,
   sanitizeString,
   MAX_DISPLAY_NAME_LENGTH,
@@ -85,8 +86,11 @@ export const useAdminStore = defineStore('admin', () => {
   const seenAlertIds = new Set<string>();
 
   let pollInterval: ReturnType<typeof setInterval> | null = null;
-  let unsubFirestoreUsers: (() => void) | null = null;
-  let unsubFirestoreLogs: (() => void) | null = null;
+  let adminDocVerifiedInSession = false;
+  let cachedCollectionStats:
+    | { collectionName: string; label: string; description: string; docCount: number }[]
+    | null = null;
+  const cachedRawCollectionDocs = new Map<string, Record<string, any>[]>();
 
   const openAlertsCount = computed(
     () => alerts.value.filter((a) => a.status === 'open').length
@@ -108,7 +112,7 @@ export const useAdminStore = defineStore('admin', () => {
 
   /**
    * Ensure Firebase Auth has an active session for Super Admin on both primary and sisa-uang instances,
-   * and register the active UID in `/admins/{uid}` so `isAdmin()` in `firestore.rules` always evaluates to true.
+   * and register the active UID in `/admins/{uid}` once per session so `isAdmin()` in `firestore.rules` always evaluates to true.
    */
   async function ensureSuperAdminFirebaseSession(): Promise<void> {
     const authTargets = sisaUangAuth !== auth ? [auth, sisaUangAuth] : [auth];
@@ -150,8 +154,9 @@ export const useAdminStore = defineStore('admin', () => {
         }
       }
 
-      // Ensure `/admins/{uid}` document exists so `isAdmin()` in `firestore.rules` is guaranteed true
-      if (targetAuth.currentUser) {
+      // Ensure `/admins/{uid}` document exists once per session
+      if (targetAuth.currentUser && !adminDocVerifiedInSession) {
+        adminDocVerifiedInSession = true;
         const safeAdminUid = sanitizeId(targetAuth.currentUser.uid);
         const adminDocRef = doc(db, 'admins', safeAdminUid);
         try {
@@ -163,15 +168,9 @@ export const useAdminStore = defineStore('admin', () => {
               createdAt: serverTimestamp(),
             });
           }
-        } catch {
-          try {
-            await setDoc(adminDocRef, {
-              uid: safeAdminUid,
-              email: 'vuedevo@gmail.com',
-              createdAt: serverTimestamp(),
-            });
-          } catch {
-            // Ignore if already exists or bootstrap email is already sufficient
+        } catch (err) {
+          if (isFirestoreQuotaError(err)) {
+            useNotificationStore().notifyQuotaExceeded();
           }
         }
       }
@@ -188,8 +187,12 @@ export const useAdminStore = defineStore('admin', () => {
       const incomingLogs: AdminActivityLogItem[] = data.logs || [];
       const incomingAlerts: AdminSecurityAlertItem[] = data.alerts || [];
 
-      users.value = incomingUsers;
-      logs.value = incomingLogs;
+      if (incomingUsers.length > 0 || users.value.length === 0) {
+        users.value = incomingUsers;
+      }
+      if (incomingLogs.length > 0 || logs.value.length === 0) {
+        logs.value = incomingLogs;
+      }
 
       // Check if any new open alert arrived for instant notification
       for (const al of incomingAlerts) {
@@ -215,23 +218,26 @@ export const useAdminStore = defineStore('admin', () => {
   }
 
   async function startRealtimeMonitoring() {
-    stopRealtimeMonitoring();
-    fetchAdminOverview(false);
+    if (pollInterval) {
+      // Already monitoring; just trigger a silent refresh from local Express server (0 Firestore reads)
+      fetchAdminOverview(true);
+      return;
+    }
+    await fetchAdminOverview(false);
 
-    // Poll every 3.5 seconds via Axios for real-time updates
+    // Poll lightweight local Express backend every 15 seconds (costs 0 Firestore reads!)
     pollInterval = setInterval(() => {
       fetchAdminOverview(true);
-    }, 3500);
+    }, 15000);
 
-    await ensureSuperAdminFirebaseSession();
-
-    const targetDb = sisaUangDb || db;
-    unsubFirestoreUsers = onSnapshot(
-      collection(targetDb, 'users'),
-      (snap) => {
+    // Only query Firestore /users ONE TIME if the local Express server registry only has the default admin account
+    if (users.value.length <= 1) {
+      try {
+        await ensureSuperAdminFirebaseSession();
+        const targetDb = sisaUangDb || db;
+        const snap = await getDocs(collection(targetDb, 'users'));
         const fbUsers: AdminUserItem[] = [];
         snap.docs.forEach((d) => {
-          // Skip the internal default_category holder pseudo-user
           if (d.id === 'ci4_user_46') return;
           const fbUser = d.data();
           const tsToIso = (val: any) => {
@@ -257,63 +263,28 @@ export const useAdminStore = defineStore('admin', () => {
         });
         if (fbUsers.length > 0) {
           users.value = fbUsers;
-        }
-      },
-      () => {
-        // Ignore snapshot listener permission warning if rules are strict
-      }
-    );
-
-    unsubFirestoreLogs = onSnapshot(
-      collection(targetDb, 'activity_logs'),
-      (snap) => {
-        const fbLogs: AdminActivityLogItem[] = snap.docs.map((d) => {
-          const data = d.data();
-          let createdAtIso = new Date().toISOString();
-          if (typeof data.createdAt === 'string') createdAtIso = data.createdAt;
-          else if (data.createdAt && typeof data.createdAt.toDate === 'function') {
-            createdAtIso = data.createdAt.toDate().toISOString();
-          } else if (data.createdAt && typeof data.createdAt.seconds === 'number') {
-            createdAtIso = new Date(data.createdAt.seconds * 1000).toISOString();
+          // Sync into Express disk cache so future server restarts have all users without touching Firestore
+          try {
+            await apiClient.post('/admin/import-sql-json', {
+              users: fbUsers,
+              activity_logs: [],
+            });
+          } catch {
+            // Ignore
           }
-          return {
-            id: d.id,
-            actorUid: data.actorUid || 'system',
-            actorEmail: data.actorEmail || 'system@sisa-uang.id',
-            action: data.action || 'user_action',
-            detail: data.detail || '',
-            severity:
-              data.severity === 'critical'
-                ? 'critical'
-                : data.severity === 'warning'
-                ? 'warning'
-                : 'info',
-            createdAt: createdAtIso,
-          };
-        });
-        if (fbLogs.length > 0) {
-          fbLogs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-          logs.value = fbLogs;
         }
-      },
-      () => {
-        // Ignore
+      } catch (err) {
+        if (isFirestoreQuotaError(err)) {
+          useNotificationStore().notifyQuotaExceeded();
+        }
       }
-    );
+    }
   }
 
   function stopRealtimeMonitoring() {
     if (pollInterval) {
       clearInterval(pollInterval);
       pollInterval = null;
-    }
-    if (unsubFirestoreUsers) {
-      unsubFirestoreUsers();
-      unsubFirestoreUsers = null;
-    }
-    if (unsubFirestoreLogs) {
-      unsubFirestoreLogs();
-      unsubFirestoreLogs = null;
     }
   }
 
@@ -740,8 +711,12 @@ export const useAdminStore = defineStore('admin', () => {
 
     // Deduplicate operations by collection + docId so a single batch never writes the same doc twice
     const dedupedMap = new Map<string, QueuedWriteOp>();
+    const affectedOwnerIds = new Set<string>();
     for (const op of operations) {
       dedupedMap.set(`${op.col}/${op.docId}`, op);
+      if (op.payload?.ownerId && typeof op.payload.ownerId === 'string') {
+        affectedOwnerIds.add(op.payload.ownerId);
+      }
     }
     const uniqueOperations = Array.from(dedupedMap.values());
 
@@ -834,6 +809,38 @@ export const useAdminStore = defineStore('admin', () => {
       }
     }
 
+    // Touch `updatedAt` on affected user documents so 1-Read Sync Token triggers fresh sync on all devices
+    if (affectedOwnerIds.size > 0) {
+      try {
+        const tokenBatch = writeBatch(db);
+        for (const ownerUid of affectedOwnerIds) {
+          tokenBatch.update(doc(db, 'users', ownerUid), {
+            updatedAt: serverTimestamp(),
+          });
+        }
+        await tokenBatch.commit();
+      } catch {
+        // Ignore if user doc was not part of the migration
+      }
+    }
+
+    // Clear in-memory caches and local sync_token so UI immediately reflects newly imported data
+    cachedCollectionStats = null;
+    cachedRawCollectionDocs.clear();
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (
+          k &&
+          (k.includes('sisa_uang_real_sync_token') || k.includes('sisa_uang_real_last_sync_at'))
+        ) {
+          localStorage.removeItem(k);
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+
     const totalDocumentsImported = uniqueOperations.length;
 
     return {
@@ -851,11 +858,16 @@ export const useAdminStore = defineStore('admin', () => {
 
   /**
    * Fetch live document counts for all collections in Cloud Firestore (`sisa-uang`)
-   * for the Super Admin Database Table Cleanup & Management panel.
+   * using aggregation queries (`getCountFromServer`, 1 read per 1,000 docs instead of reading every document)
+   * and caching the result in memory unless `forceRefresh` is true.
    */
-  async function fetchFirestoreCollectionStats(): Promise<
-    { collectionName: string; label: string; description: string; docCount: number }[]
-  > {
+  async function fetchFirestoreCollectionStats(
+    forceRefresh = false
+  ): Promise<{ collectionName: string; label: string; description: string; docCount: number }[]> {
+    if (!forceRefresh && cachedCollectionStats) {
+      return cachedCollectionStats;
+    }
+
     await ensureSuperAdminFirebaseSession();
     const targetDb = sisaUangDb || db;
 
@@ -902,15 +914,27 @@ export const useAdminStore = defineStore('admin', () => {
       },
     ];
 
+    let quotaHit = false;
     const results = await Promise.all(
       collectionDefs.map(async (def) => {
         try {
-          const snap = await getDocs(collection(targetDb, def.collectionName));
+          // If we already have the collection docs cached in memory, use its length (0 reads)
+          const memDocs = cachedRawCollectionDocs.get(def.collectionName);
+          if (!forceRefresh && memDocs) {
+            return {
+              ...def,
+              docCount: memDocs.length,
+            };
+          }
+          const countSnap = await getCountFromServer(collection(targetDb, def.collectionName));
           return {
             ...def,
-            docCount: snap.size,
+            docCount: countSnap.data().count,
           };
-        } catch {
+        } catch (err) {
+          if (isFirestoreQuotaError(err)) {
+            quotaHit = true;
+          }
           return {
             ...def,
             docCount: 0,
@@ -919,19 +943,38 @@ export const useAdminStore = defineStore('admin', () => {
       })
     );
 
+    if (quotaHit) {
+      useNotificationStore().notifyQuotaExceeded();
+    } else {
+      cachedCollectionStats = results;
+    }
+
     return results;
   }
 
   /**
-   * Fetch all raw documents from a specific Cloud Firestore collection (`sisa-uang`)
-   * with normalized timestamps and field inspection for the Super Admin Data Explorer.
+   * Fetch raw documents from a specific Cloud Firestore collection (`sisa-uang`)
+   * with in-memory caching so switching tabs or sorting/filtering never re-reads the collection unless explicitly refreshed.
    */
   async function fetchFirestoreRawCollectionDocs(
-    collectionName: string
+    collectionName: string,
+    forceRefresh = false
   ): Promise<Record<string, any>[]> {
+    if (!forceRefresh && cachedRawCollectionDocs.has(collectionName)) {
+      return cachedRawCollectionDocs.get(collectionName)!;
+    }
+
     await ensureSuperAdminFirebaseSession();
     const targetDb = sisaUangDb || db;
-    const snap = await getDocs(collection(targetDb, collectionName));
+    let snap;
+    try {
+      snap = await getDocs(collection(targetDb, collectionName));
+    } catch (err) {
+      if (isFirestoreQuotaError(err)) {
+        useNotificationStore().notifyQuotaExceeded();
+      }
+      throw err;
+    }
 
     const serializeFirestoreValue = (val: any): any => {
       if (val === null || val === undefined) return val;
@@ -962,7 +1005,7 @@ export const useAdminStore = defineStore('admin', () => {
       return val;
     };
 
-    return snap.docs.map((d) => {
+    const docs = snap.docs.map((d) => {
       const rawData = d.data();
       const serialized = serializeFirestoreValue(rawData);
       return {
@@ -971,6 +1014,9 @@ export const useAdminStore = defineStore('admin', () => {
         ...serialized,
       };
     });
+
+    cachedRawCollectionDocs.set(collectionName, docs);
+    return docs;
   }
 
   /**
@@ -1029,6 +1075,12 @@ export const useAdminStore = defineStore('admin', () => {
       }
     }
 
+    // Invalidate in-memory caches for deleted collections
+    cachedCollectionStats = null;
+    for (const colName of collectionNames) {
+      cachedRawCollectionDocs.delete(colName);
+    }
+
     // Clear matching localStorage cache keys so UI refreshes cleanly
     try {
       const keysToRemove: string[] = [];
@@ -1036,7 +1088,14 @@ export const useAdminStore = defineStore('admin', () => {
         const k = localStorage.key(i);
         if (!k) continue;
         for (const colName of collectionNames) {
-          if (k.includes(`sisa_uang_${colName}`) || (colName === 'categories' && k.includes('sisa_uang_user_categories'))) {
+          if (
+            k.includes(`sisa_uang_${colName}`) ||
+            k.includes(`sisa_uang_real_${colName}`) ||
+            k.includes('sisa_uang_real_sync_token') ||
+            k.includes('sisa_uang_real_last_sync_at') ||
+            (colName === 'categories' && k.includes('sisa_uang_user_categories')) ||
+            (colName === 'categories' && k.includes('sisa_uang_real_user_categories'))
+          ) {
             keysToRemove.push(k);
           }
         }
