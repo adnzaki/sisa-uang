@@ -42,18 +42,12 @@ async function superAdminMiddleware(
     return;
   }
 
-  // Enforce email verification code (OTP) exclusively for vuedevo@gmail.com
+  // Enforce email verification code (OTP) exclusively when an active OTP challenge is pending
   if (
     authStore.user?.email.toLowerCase() === 'vuedevo@gmail.com' &&
+    authStore.requiresOtp &&
     !authStore.otpVerified
   ) {
-    if (!authStore.otpDispatchInfo) {
-      try {
-        await authStore.requestSuperAdminOtp();
-      } catch {
-        // Ignore
-      }
-    }
     next({ path: '/auth', query: { step: 'otp', redirect: to.fullPath } });
     return;
   }
