@@ -310,9 +310,9 @@ async function handleDeleteEditingBudget() {
     <!-- VIEW 1: DAFTAR PERIODE ANGGARAN (Berdasarkan Tahun yang Dipilih)    -->
     <!-- =================================================================== -->
     <template v-if="!activeBudgetPeriod">
-      <!-- Header & Year Dropdown + Add Period Action -->
-      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3.5">
-        <div class="min-w-0">
+      <!-- Header & Year Dropdown + Add Period Action (Stacked below title & description) -->
+      <div class="flex flex-col gap-3.5 w-full">
+        <div class="w-full min-w-0">
           <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
             {{ t('budgets.title') }}
           </h1>
@@ -321,9 +321,9 @@ async function handleDeleteEditingBudget() {
           </p>
         </div>
 
-        <div class="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2.5 shrink-0">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-stretch lg:items-center gap-2.5 w-full">
           <!-- Dropdown Pilihan Tahun -->
-          <div class="w-full sm:w-56">
+          <div class="w-full lg:w-56 min-w-0">
             <CustomSelect
               v-model="selectedYear"
               :options="yearDropdownOptions"
@@ -338,7 +338,7 @@ async function handleDeleteEditingBudget() {
           <!-- Tombol Tambah Periode (Bulan) -->
           <button
             type="button"
-            class="min-h-[46px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-colors shadow-xs whitespace-nowrap"
+            class="w-full lg:w-auto min-h-[46px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-colors shadow-xs whitespace-nowrap"
             @click="openAddPeriodModal"
           >
             <Plus class="w-4 h-4 shrink-0" />
@@ -502,8 +502,8 @@ async function handleDeleteEditingBudget() {
     <!-- VIEW 2: DETAIL PERIODE ANGGARAN (Tambah & Kelola Kategori Anggaran) -->
     <!-- =================================================================== -->
     <template v-else>
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div class="space-y-1 min-w-0">
+      <div class="flex flex-col gap-3 w-full">
+        <div class="space-y-1 w-full min-w-0">
           <button
             type="button"
             class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline"
@@ -520,10 +520,10 @@ async function handleDeleteEditingBudget() {
           </p>
         </div>
 
-        <div class="flex flex-wrap items-center gap-2 shrink-0">
+        <div class="flex flex-wrap items-center gap-2 w-full">
           <button
             type="button"
-            class="min-h-[46px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 transition-colors shadow-xs"
+            class="w-full sm:w-auto min-h-[46px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-colors shadow-xs"
             @click="openAddBudgetModal"
           >
             <Plus class="w-4 h-4 shrink-0" />

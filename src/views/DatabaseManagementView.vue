@@ -1096,7 +1096,7 @@ async function confirmAndExecuteImport() {
 </script>
 
 <template>
-  <div class="space-y-5 sm:space-y-6 max-w-5xl w-full min-w-0 overflow-x-hidden">
+  <div class="space-y-5 sm:space-y-6 w-full max-w-full min-w-0 overflow-x-hidden">
     <!-- Top Page Header + 2-Tab Switcher (Impor Database vs Hapus Database) -->
     <div class="flex flex-col gap-4">
       <div>
@@ -1291,9 +1291,9 @@ async function confirmAndExecuteImport() {
         </div>
 
         <!-- Row 1: Global LIKE Search + Status Deleted Filter + Sort Field + Sort Order + Limit -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-12 gap-3">
           <!-- Global LIKE Search -->
-          <div class="sm:col-span-2 lg:col-span-4">
+          <div class="sm:col-span-2 xl:col-span-4 min-w-0">
             <div class="relative">
               <Search class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
@@ -1307,7 +1307,7 @@ async function confirmAndExecuteImport() {
           </div>
 
           <!-- Soft Delete Status Filter -->
-          <div class="lg:col-span-2">
+          <div class="xl:col-span-2 min-w-0">
             <CustomSelect
               v-model="explorerSoftDeleteFilter"
               :options="explorerSoftDeleteOptions"
@@ -1318,7 +1318,7 @@ async function confirmAndExecuteImport() {
           </div>
 
           <!-- Sort Field (ORDER BY) -->
-          <div class="lg:col-span-3">
+          <div class="xl:col-span-3 min-w-0">
             <CustomSelect
               v-model="explorerSortField"
               :options="explorerFieldSelectOptions"
@@ -1329,20 +1329,20 @@ async function confirmAndExecuteImport() {
           </div>
 
           <!-- Sort Direction (ASC / DESC) -->
-          <div class="lg:col-span-2">
+          <div class="xl:col-span-2 min-w-0">
             <button
               type="button"
               class="w-full min-h-[44px] sm:min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-800 dark:text-slate-200 flex items-center justify-between gap-2 hover:border-emerald-500 transition-colors"
               @click="explorerSortOrder = explorerSortOrder === 'asc' ? 'desc' : 'asc'"
             >
-              <span>{{ explorerSortOrder === 'asc' ? 'ASC (A-Z / 0-9)' : 'DESC (Z-A / 9-0)' }}</span>
+              <span class="truncate">{{ explorerSortOrder === 'asc' ? 'ASC (A-Z / 0-9)' : 'DESC (Z-A / 9-0)' }}</span>
               <ArrowUp v-if="explorerSortOrder === 'asc'" class="w-3.5 h-3.5 text-emerald-600 shrink-0" />
               <ArrowDown v-else class="w-3.5 h-3.5 text-amber-500 shrink-0" />
             </button>
           </div>
 
           <!-- Page Size (LIMIT) -->
-          <div class="lg:col-span-1">
+          <div class="sm:col-span-2 xl:col-span-1 min-w-0">
             <CustomSelect
               v-model="explorerLimitPerPage"
               :options="explorerLimitSelectOptions"
@@ -1390,14 +1390,24 @@ async function confirmAndExecuteImport() {
           <div
             v-for="(cond, cIdx) in explorerWhereConditions"
             :key="cond.id"
-            class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800"
+            class="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-center bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200/80 dark:border-slate-800"
           >
-            <div class="sm:col-span-1 text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
-              {{ cIdx === 0 ? 'WHERE' : explorerWhereLogic }}
+            <div class="lg:col-span-1 flex items-center justify-between lg:justify-start">
+              <span class="text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                {{ cIdx === 0 ? 'WHERE' : explorerWhereLogic }}
+              </span>
+              <button
+                type="button"
+                class="lg:hidden min-h-[34px] min-w-[34px] rounded-lg border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center hover:bg-rose-100"
+                title="Hapus kondisi"
+                @click="removeExplorerWhereCondition(cond.id)"
+              >
+                <X class="w-4 h-4" />
+              </button>
             </div>
 
             <!-- Field Selector -->
-            <div class="sm:col-span-4">
+            <div class="lg:col-span-4 min-w-0">
               <CustomSelect
                 v-model="cond.field"
                 :options="explorerFieldSelectOptions"
@@ -1408,7 +1418,7 @@ async function confirmAndExecuteImport() {
             </div>
 
             <!-- Operator Selector (==, !=, LIKE, >, <, IN, IS_TRUE, etc.) -->
-            <div class="sm:col-span-3">
+            <div class="lg:col-span-3 min-w-0">
               <CustomSelect
                 v-model="cond.operator"
                 :options="explorerOperatorSelectOptions"
@@ -1418,7 +1428,7 @@ async function confirmAndExecuteImport() {
             </div>
 
             <!-- Value Input -->
-            <div class="sm:col-span-3">
+            <div class="lg:col-span-3 min-w-0">
               <input
                 v-if="operatorNeedsValue(cond.operator)"
                 v-model="cond.value"
@@ -1435,8 +1445,8 @@ async function confirmAndExecuteImport() {
               </div>
             </div>
 
-            <!-- Remove Button -->
-            <div class="sm:col-span-1 flex justify-end">
+            <!-- Remove Button (Desktop lg+) -->
+            <div class="hidden lg:flex lg:col-span-1 justify-end">
               <button
                 type="button"
                 class="min-h-[38px] min-w-[38px] rounded-lg border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center hover:bg-rose-100"
@@ -2041,8 +2051,8 @@ async function confirmAndExecuteImport() {
               </div>
             </div>
 
-            <!-- MOBILE VIEW (< md): Clean Card List so no buttons overlap or require horizontal scroll -->
-            <div class="grid grid-cols-1 gap-3 md:hidden">
+            <!-- MOBILE & TABLET VIEW (< xl): Clean Card List (1 col on mobile, 2 cols on tablet) so no buttons overlap or require horizontal scroll -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 xl:hidden">
               <div
                 v-for="(tbl, idx) in rawTables"
                 :key="`mob-${tbl.tableName}`"
@@ -2108,7 +2118,7 @@ async function confirmAndExecuteImport() {
                   </select>
                 </div>
 
-                <!-- Mobile Action Buttons -->
+                <!-- Mobile & Tablet Action Buttons -->
                 <div class="grid grid-cols-1 gap-2 pt-1">
                   <button
                     type="button"
@@ -2153,8 +2163,8 @@ async function confirmAndExecuteImport() {
               </div>
             </div>
 
-            <!-- DESKTOP VIEW (md+): Full Control Table for Managing Each Legacy Table -->
-            <div class="hidden md:block rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900">
+            <!-- DESKTOP VIEW (xl+): Full Control Table for Managing Each Legacy Table -->
+            <div class="hidden xl:block rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900">
               <div class="overflow-x-auto">
                 <table class="w-full text-left border-collapse text-xs">
                   <thead>

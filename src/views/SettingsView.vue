@@ -449,9 +449,9 @@ async function handleChangePassword() {
           <span>Skema Database</span>
           <span class="font-mono text-slate-900 dark:text-slate-100">sisa-uang (Cloud Firestore)</span>
         </div>
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 py-2 border-t border-slate-100 dark:border-slate-800">
-          <div class="space-y-0.5">
-            <div class="font-medium text-slate-900 dark:text-slate-100 flex items-center gap-2">
+        <div class="flex flex-col gap-3 py-2.5 border-t border-slate-100 dark:border-slate-800 w-full">
+          <div class="w-full space-y-1">
+            <div class="font-medium text-slate-900 dark:text-slate-100 flex flex-wrap items-center gap-2">
               <span>Versi &amp; Pembaruan Aplikasi</span>
               <span class="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
                 {{ currentAppVersion }}
@@ -463,39 +463,39 @@ async function handleChangePassword() {
                 Update Tersedia
               </span>
             </div>
-            <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+            <p class="w-full text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
               Jika sudah reload namun tampilan aplikasi belum terupdate, gunakan tombol <strong>Bersihkan Cache &amp; Reload Penuh</strong> untuk memuat ulang seluruh aset terbaru dari server.
             </p>
           </div>
 
-          <div class="flex flex-wrap items-center gap-2 shrink-0">
+          <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5 w-full">
             <button
               type="button"
-              class="min-h-[38px] px-3.5 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/70 dark:bg-emerald-950/40 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              class="sm:col-span-4 w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/70 dark:bg-emerald-950/40 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
               @click="notificationStore.openChangelogModal()"
             >
               <Sparkles class="w-3.5 h-3.5 shrink-0" />
-              <span>Catatan Rilis (Changelog)</span>
+              <span class="truncate">Catatan Rilis (Changelog)</span>
             </button>
 
             <button
               type="button"
               :disabled="isCheckingUpdate || isReloadingForUpdate"
-              class="min-h-[38px] px-3.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-600 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              class="sm:col-span-4 w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-600 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
               @click="handleManualCheckUpdate"
             >
               <RefreshCw class="w-3.5 h-3.5 shrink-0" :class="isCheckingUpdate ? 'animate-spin' : ''" />
-              <span>Cek Update</span>
+              <span class="truncate">Cek Update</span>
             </button>
 
             <button
               type="button"
               :disabled="isReloadingForUpdate"
-              class="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-2xs"
+              class="sm:col-span-4 w-full min-h-[42px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-2xs"
               @click="performFullAppReload(true)"
             >
               <RefreshCw class="w-3.5 h-3.5 shrink-0" :class="isReloadingForUpdate ? 'animate-spin' : ''" />
-              <span>Bersihkan Cache &amp; Reload Penuh</span>
+              <span class="truncate">Bersihkan Cache &amp; Reload Penuh</span>
             </button>
           </div>
         </div>
@@ -550,7 +550,7 @@ async function handleChangePassword() {
       </div>
 
       <form class="space-y-3.5" @submit.prevent="handleChangePassword">
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
           <!-- Current Password -->
           <div class="space-y-1.5">
             <label class="block text-xs font-medium text-slate-700 dark:text-slate-300">

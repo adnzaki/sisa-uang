@@ -453,10 +453,10 @@ async function handleLogout() {
     </div>
 
     <!-- Main Authenticated Workspace (Fixed Desktop Sidebar + Fixed Top Navbar + Scrollable Main Content) -->
-    <div v-else class="flex-1 flex min-h-0 w-full overflow-hidden">
-      <!-- Desktop & Tablet Left Sidebar (md:flex) - Locked in place, never scrolls with main page -->
+    <div v-else class="flex-1 flex min-h-0 w-full max-w-full overflow-hidden">
+      <!-- Desktop Left Sidebar (lg:flex) - Hidden by default on Mobile & Tablet (< lg), locked on Desktop -->
       <aside
-        class="hidden md:flex md:w-64 lg:w-68 shrink-0 flex-col border-r border-slate-200/80 dark:border-slate-800/80 bg-white dark:bg-slate-900/95 h-full max-h-full overflow-y-auto p-4 justify-between gap-4 z-30"
+        class="hidden lg:flex lg:w-68 shrink-0 flex-col border-r border-slate-200/80 dark:border-slate-800/80 bg-white dark:bg-slate-900/95 h-full max-h-full overflow-y-auto p-4 justify-between gap-4 z-30"
       >
         <!-- Top & Scrollable Menu Area -->
         <div class="space-y-4">
@@ -601,9 +601,9 @@ async function handleLogout() {
 
       <!-- Main Column (Fixed Top Header + Independent Scrollable Content Area) -->
       <div class="flex-1 flex flex-col min-w-0 max-w-full h-full max-h-full overflow-hidden">
-        <!-- Desktop Top Bar: Permanently pinned at top of Main Column -->
+        <!-- Desktop Top Bar (lg+): Permanently pinned at top of Main Column -->
         <header
-          class="hidden md:flex shrink-0 items-center justify-between px-8 py-3.5 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-30"
+          class="hidden lg:flex shrink-0 items-center justify-between px-8 py-3.5 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-30"
         >
           <RouterLink
             :to="authStore.isSuperAdmin ? '/control-panel' : '/'"
@@ -613,8 +613,6 @@ async function handleLogout() {
           </RouterLink>
 
           <div class="flex items-center gap-2.5">
-            <!-- <PWAInstallButton variant="topbar" /> -->
-
             <!-- "+ Catat Transaksi" ONLY for Regular Users (hidden on /transactions page) -->
             <button
               v-if="!authStore.isSuperAdmin && route.path !== '/transactions'"
@@ -752,30 +750,39 @@ async function handleLogout() {
           </div>
         </header>
 
-        <!-- Mobile Top App Bar (< md) - Permanently pinned at top, without Sisa Uang title -->
+        <!-- Mobile & Tablet Top App Bar (< lg) - Hamburger Menu for Slide-Out Sidebar -->
         <header
-          class="md:hidden shrink-0 z-30 h-14 px-3.5 flex items-center justify-between gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80"
+          class="lg:hidden shrink-0 z-30 h-14 px-3.5 sm:px-5 flex items-center justify-between gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80"
         >
           <button
             type="button"
             class="min-h-[44px] min-w-[44px] -ml-1.5 flex items-center justify-center rounded-xl text-slate-700 dark:text-slate-200 shrink-0 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-            aria-label="Menu"
+            aria-label="Buka Menu Sidebar"
             @click="mobileDrawerOpen = true"
           >
             <Menu class="w-5 h-5" />
           </button>
 
-          <!-- Empty spacer instead of Sisa Uang app title on mobile -->
+          <!-- Empty spacer on mobile & tablet -->
           <div class="flex-1"></div>
 
-          <div class="flex items-center gap-1.5 shrink-0">
-            <!-- <PWAInstallButton variant="topbar" /> -->
+          <div class="flex items-center gap-2 shrink-0">
+            <!-- "+ Catat Transaksi" on Tablet (sm to <lg) for quick access -->
+            <button
+              v-if="!authStore.isSuperAdmin && route.path !== '/transactions'"
+              type="button"
+              class="hidden sm:flex min-h-[40px] px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors whitespace-nowrap items-center gap-1.5"
+              @click="financeStore.openAddTransactionModal()"
+            >
+              <Plus class="w-4 h-4 shrink-0" />
+              <span>{{ t('dashboard.addTransaction') }}</span>
+            </button>
 
-            <!-- Unified User Account Menu at Rightmost Corner of Mobile Topbar -->
+            <!-- Unified User Account Menu at Rightmost Corner of Mobile/Tablet Topbar -->
             <div ref="mobileAccountMenuRef" class="relative">
               <button
                 type="button"
-                class="min-h-[40px] pl-2 pr-2.5 py-1 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/70 hover:border-emerald-600/60 flex items-center gap-1.5 transition-colors"
+                class="min-h-[40px] pl-2 pr-2.5 py-1 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/70 hover:border-emerald-600/60 flex items-center gap-1.5 sm:gap-2 transition-colors"
                 :aria-expanded="accountMenuOpen"
                 aria-label="Menu Akun Pengguna"
                 @click="accountMenuOpen = !accountMenuOpen"
@@ -783,7 +790,7 @@ async function handleLogout() {
                 <div class="w-7 h-7 rounded-lg bg-emerald-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0">
                   {{ userInitials }}
                 </div>
-                <span class="max-w-[100px] text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">
+                <span class="max-w-[100px] sm:max-w-[150px] text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">
                   {{ authStore.user?.displayName || 'Akun' }}
                 </span>
                 <ChevronDown
@@ -792,7 +799,7 @@ async function handleLogout() {
                 />
               </button>
 
-              <!-- Mobile Account Dropdown Popover -->
+              <!-- Mobile & Tablet Account Dropdown Popover -->
               <Transition name="dropdown">
                 <div
                   v-if="accountMenuOpen"
@@ -900,9 +907,9 @@ async function handleLogout() {
         <!-- Scrollable Main View Content -->
         <main
           ref="mainScrollContainer"
-          class="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden pb-24 md:pb-8"
+          class="flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden pb-24 md:pb-8"
         >
-          <div class="w-full px-3.5 sm:px-6 md:px-8 py-4 sm:py-7">
+          <div class="w-full max-w-full min-w-0 px-3.5 sm:px-6 lg:px-8 py-4 sm:py-6 lg:py-7">
             <RouterView v-slot="{ Component }">
               <Transition name="page" mode="out-in">
                 <component :is="Component" />
@@ -912,18 +919,18 @@ async function handleLogout() {
         </main>
       </div>
 
-      <!-- Mobile Slide-Out Sidebar Drawer with Smooth Transition -->
+      <!-- Mobile & Tablet Slide-Out Sidebar Drawer (< lg) with Smooth Transition -->
       <Transition name="drawer">
         <div
           v-if="mobileDrawerOpen"
-          class="md:hidden fixed inset-0 z-50 flex bg-black/50 backdrop-blur-xs"
+          class="lg:hidden fixed inset-0 z-50 flex bg-black/50 backdrop-blur-xs"
           @click.self="mobileDrawerOpen = false"
         >
           <div
-            class="drawer-panel w-72 max-w-[84vw] bg-white dark:bg-slate-900 h-dvh max-h-dvh overflow-y-auto p-5 flex flex-col justify-between gap-4 border-r border-slate-200 dark:border-slate-800 shadow-2xl"
+            class="drawer-panel w-72 sm:w-80 max-w-[85vw] bg-white dark:bg-slate-900 h-dvh max-h-dvh overflow-y-auto p-5 flex flex-col justify-between gap-4 border-r border-slate-200 dark:border-slate-800 shadow-2xl"
           >
             <div class="space-y-5">
-              <!-- Dedicated App Logo Container at top of Mobile Sidebar -->
+              <!-- Dedicated App Logo Container + Language Toggle + Close Button at top of Slide-Out Sidebar -->
               <div class="flex items-center justify-between gap-2">
                 <div class="flex-1 min-w-0">
                   <div
@@ -955,14 +962,23 @@ async function handleLogout() {
                 </div>
                 <button
                   type="button"
+                  class="min-h-[40px] px-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-mono font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
+                  title="Ganti Bahasa"
+                  @click="toggleLocale"
+                >
+                  {{ locale.toUpperCase() }}
+                </button>
+                <button
+                  type="button"
                   class="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
+                  aria-label="Tutup Menu Sidebar"
                   @click="mobileDrawerOpen = false"
                 >
                   <X class="w-5 h-5" />
                 </button>
               </div>
 
-              <!-- Sisa Uang Compact Anchor Card (ONLY for Regular Users, shown in Mobile Sidebar too) -->
+              <!-- Sisa Uang Compact Anchor Card (ONLY for Regular Users, shown in Mobile & Tablet Sidebar too) -->
               <div
                 v-if="!authStore.isSuperAdmin"
                 class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 p-3.5 space-y-1.5"
@@ -995,7 +1011,7 @@ async function handleLogout() {
                 </div>
               </div>
 
-            <!-- Mobile Drawer Navigation: Regular User -->
+            <!-- Mobile & Tablet Drawer Navigation: Regular User -->
             <nav v-if="!authStore.isSuperAdmin" class="space-y-1">
               <RouterLink
                 v-for="item in userNavItems"
@@ -1013,7 +1029,7 @@ async function handleLogout() {
               </RouterLink>
             </nav>
 
-            <!-- Mobile Drawer Navigation: Super Admin (No Finance Menus) -->
+            <!-- Mobile & Tablet Drawer Navigation: Super Admin (No Finance Menus) -->
             <nav v-else class="space-y-1">
               <RouterLink
                 v-for="item in adminNavItems"
@@ -1040,7 +1056,7 @@ async function handleLogout() {
             </nav>
           </div>
 
-          <!-- Mobile Sidebar Footer Controls: Install Button & Version -->
+          <!-- Mobile & Tablet Sidebar Footer Controls: Install Button & Version -->
           <div class="space-y-2.5 pt-4 border-t border-slate-200 dark:border-slate-800 shrink-0">
             <PWAInstallButton variant="sidebar" />
 
@@ -1062,7 +1078,7 @@ async function handleLogout() {
       <!-- 1. Regular User Bottom Navigation (Personal Finance) -->
       <nav
         v-if="!authStore.isSuperAdmin"
-        class="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800/80 grid grid-cols-5 items-center px-1"
+        class="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800/80 grid grid-cols-5 items-center px-1 sm:px-6"
       >
         <RouterLink
           to="/"
@@ -1074,7 +1090,7 @@ async function handleLogout() {
           "
         >
           <LayoutDashboard class="w-5 h-5" />
-          <span class="text-[10px] font-medium tracking-tight whitespace-nowrap">
+          <span class="text-[10px] sm:text-xs font-medium tracking-tight whitespace-nowrap">
             {{ t('nav.dashboard') }}
           </span>
         </RouterLink>
@@ -1089,7 +1105,7 @@ async function handleLogout() {
           "
         >
           <ArrowLeftRight class="w-5 h-5" />
-          <span class="text-[10px] font-medium tracking-tight whitespace-nowrap">
+          <span class="text-[10px] sm:text-xs font-medium tracking-tight whitespace-nowrap">
             {{ t('nav.transactions') }}
           </span>
         </RouterLink>
@@ -1116,7 +1132,7 @@ async function handleLogout() {
           "
         >
           <Wallet class="w-5 h-5" />
-          <span class="text-[10px] font-medium tracking-tight whitespace-nowrap">
+          <span class="text-[10px] sm:text-xs font-medium tracking-tight whitespace-nowrap">
             {{ t('nav.wallets') }}
           </span>
         </RouterLink>
@@ -1131,16 +1147,16 @@ async function handleLogout() {
           "
         >
           <Settings class="w-5 h-5" />
-          <span class="text-[10px] font-medium tracking-tight whitespace-nowrap">
+          <span class="text-[10px] sm:text-xs font-medium tracking-tight whitespace-nowrap">
             {{ t('nav.settings') }}
           </span>
         </RouterLink>
       </nav>
 
-      <!-- 2. Super Admin Mobile Bottom Navigation (Strictly Users, Logs, Alerts, Database, Settings) -->
+      <!-- 2. Super Admin Mobile Bottom Navigation (< md) -->
       <nav
         v-else
-        class="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800/80 grid grid-cols-5 items-center px-1"
+        class="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800/80 grid grid-cols-5 items-center px-1 sm:px-6"
       >
         <RouterLink
           to="/control-panel?tab=users"
@@ -1152,7 +1168,7 @@ async function handleLogout() {
           "
         >
           <Users class="w-5 h-5" />
-          <span class="text-[10px] font-medium tracking-tight whitespace-nowrap">
+          <span class="text-[10px] sm:text-xs font-medium tracking-tight whitespace-nowrap">
             Pengguna
           </span>
         </RouterLink>
@@ -1167,7 +1183,7 @@ async function handleLogout() {
           "
         >
           <Activity class="w-5 h-5" />
-          <span class="text-[10px] font-medium tracking-tight whitespace-nowrap">
+          <span class="text-[10px] sm:text-xs font-medium tracking-tight whitespace-nowrap">
             Log Sistem
           </span>
         </RouterLink>
@@ -1182,7 +1198,7 @@ async function handleLogout() {
           "
         >
           <ShieldAlert class="w-5 h-5" />
-          <span class="text-[10px] font-medium tracking-tight whitespace-nowrap">
+          <span class="text-[10px] sm:text-xs font-medium tracking-tight whitespace-nowrap">
             Peringatan
           </span>
         </RouterLink>
@@ -1197,7 +1213,7 @@ async function handleLogout() {
           "
         >
           <Database class="w-5 h-5" />
-          <span class="text-[10px] font-medium tracking-tight whitespace-nowrap">
+          <span class="text-[10px] sm:text-xs font-medium tracking-tight whitespace-nowrap">
             {{ t('nav.database') }}
           </span>
         </RouterLink>
@@ -1212,7 +1228,7 @@ async function handleLogout() {
           "
         >
           <Settings class="w-5 h-5" />
-          <span class="text-[10px] font-medium tracking-tight whitespace-nowrap">
+          <span class="text-[10px] sm:text-xs font-medium tracking-tight whitespace-nowrap">
             {{ t('nav.settings') }}
           </span>
         </RouterLink>

@@ -75,14 +75,14 @@ function updatePopoverPosition() {
   const width = Math.min(rect.width, viewportWidth - 16);
   const left = Math.max(8, Math.min(rect.left, viewportWidth - width - 8));
 
-  const isMobile =
-    window.innerWidth < 640 ||
+  const isTouchOrCompact =
+    window.innerWidth < 1024 ||
     (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches);
 
-  // On mobile with searchable=true, the virtual keyboard covers the bottom ~45-50% of the screen.
+  // On mobile/tablet with searchable=true, the virtual keyboard covers the bottom ~45-50% of the screen.
   // Always anchor by `top` in the upper keyboard-safe region so filtering down to 1 item
   // shrinks the bottom upward toward the search bar instead of dropping the list behind the keyboard.
-  if (isMobile && props.searchable) {
+  if (isTouchOrCompact && props.searchable) {
     const baselineHeight = Math.max(maxObservedHeight, window.innerHeight, 640);
     const keyboardSafeHeight = Math.min(vvHeight, Math.round(baselineHeight * 0.52));
     const safeBottom = vvTop + Math.max(250, keyboardSafeHeight) - margin;
