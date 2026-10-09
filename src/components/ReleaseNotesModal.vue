@@ -2,18 +2,10 @@
 import { ref, computed, watch } from 'vue';
 import {
   Sparkles,
-  Code2,
   Database,
-  Palette,
   PiggyBank,
-  Tags,
-  Globe,
-  UserCheck,
-  Wallet,
-  ShieldCheck,
-  Smartphone,
-  BarChart3,
-  CheckCircle2,
+  Tablet,
+  Keyboard,
   Rocket,
   Layers,
   Check,
@@ -22,186 +14,89 @@ import { useNotificationStore } from '../stores/notification';
 import { useAuthStore } from '../stores/auth';
 import AppModal from './AppModal.vue';
 
-const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0_rc_3';
-const RELEASE_VERSION = '1.0.0-rc.3';
+const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0_rc_4';
+const RELEASE_VERSION = '1.0.0-rc.4';
 const RELEASE_DATE = 'Oktober 2026';
 
 const notificationStore = useNotificationStore();
 const authStore = useAuthStore();
 
-const activeFilter = ref<'all' | 'architecture' | 'features' | 'personalization' | 'security'>('all');
+const activeFilter = ref<'all' | 'features' | 'interface' | 'accessibility' | 'performance'>('all');
 
 export interface ChangelogItem {
   id: string;
-  category: 'architecture' | 'features' | 'personalization' | 'security';
+  category: 'features' | 'interface' | 'accessibility' | 'performance';
   badge: string;
   badgeColor: 'emerald' | 'indigo' | 'amber' | 'rose' | 'sky';
   title: string;
   summary: string;
-  highlights: string[];
   icon: any;
 }
 
 const changelogItems: ChangelogItem[] = [
   {
-    id: 'js-rewrite',
-    category: 'architecture',
-    badge: 'REWRITE TOTAL',
-    badgeColor: 'emerald',
-    title: 'Transformasi Penuh ke Ekosistem JavaScript Modern (Meninggalkan PHP)',
-    summary:
-      'Seluruh kode sumber aplikasi Sisa Uang telah ditulis ulang dari nol menggunakan ekosistem JavaScript/TypeScript full-stack modern, menggantikan arsitektur lama berbasis PHP (CodeIgniter 4).',
-    highlights: [
-      'Arsitektur Single Page Application (SPA) reaktif berbasis Vue 3 Composition API, Pinia, Vue Router, dan Vite untuk perpindahan halaman instan tanpa reload.',
-      'Backend server berbasis Node.js & Express (TypeScript) yang cepat, ringan, dan terintegrasi langsung dengan API modern.',
-      'Performa pemuatan halaman dan respons interaksi meningkat drastis di perangkat mobile maupun desktop.',
-    ],
-    icon: Code2,
-  },
-  {
-    id: 'firestore-migration',
-    category: 'architecture',
-    badge: 'DATABASE CLOUD',
-    badgeColor: 'sky',
-    title: 'Migrasi Sistem Database dari MySQL ke Cloud Firestore',
-    summary:
-      'Beralih sepenuhnya dari database relasional MySQL ke Google Cloud Firestore (skema database "sisa-uang") yang mendukung sinkronisasi data real-time lintas perangkat.',
-    highlights: [
-      'Sinkronisasi otomatis secara real-time (live listener) untuk dompet, kepemilikan dana, transaksi, kategori, dan anggaran tanpa perlu refresh manual.',
-      'Kompatibilitas penuh dengan data akun lama hasil migrasi MySQL/PHPMyAdmin (termasuk dukungan verifikasi hash kata sandi lama & alat konversi JSON migrasi).',
-      'Mekanisme Soft Delete terstandarisasi sehingga penghapusan data tetap menjaga keutuhan histori dan audit.',
-    ],
-    icon: Database,
-  },
-  {
-    id: 'ui-theme-redesign',
-    category: 'personalization',
-    badge: 'ANTARMUKA BARU',
-    badgeColor: 'indigo',
-    title: 'Pembaruan Total Antarmuka dengan Tema Terang, Gelap & Sistem',
-    summary:
-      'Desain ulang menyeluruh pada seluruh halaman aplikasi dengan tata letak modern yang bersih, proporsional, dan nyaman di mata pada segala ukuran layar.',
-    highlights: [
-      'Pilihan 3 mode tampilan: Tema Terang (Light), Tema Gelap (Dark), dan Otomatis mengikuti Sistem perangkat yang dapat diakses cepat dari menu profil di pojok kanan atas.',
-      'Navigasi adaptif: Sidebar tetap & Topbar bersih di layar desktop, serta Bottom Navigation Bar ramah jempol (thumb-zone) dan Slide-Out Drawer di layar smartphone.',
-      'Komponen pemilih tanggal bergaya kalender Material Design, modal dialog terfokus, serta dropdown pintar dengan pencarian instan (ketik untuk cari) yang bebas tertutup keyboard mobile.',
-    ],
-    icon: Palette,
-  },
-  {
-    id: 'budget-planner',
+    id: 'periodic-budget',
     category: 'features',
-    badge: 'FITUR BARU',
+    badge: 'FITUR ANGGARAN',
     badgeColor: 'emerald',
-    title: 'Fitur Perencanaan & Pemantauan Anggaran Bulanan (Budgeting)',
+    title: 'Peningkatan Fitur Anggaran dengan Dukungan Periodik Bulanan',
     summary:
-      'Kini Anda dapat menetapkan batas anggaran pengeluaran bulanan untuk setiap kategori guna menjaga pengeluaran tetap terkendali.',
-    highlights: [
-      'Indikator visual persentase pemakaian anggaran secara real-time (Hijau: Aman, Kuning: Waspada >=70%, Merah: Kritis >=90%).',
-      'Perhitungan otomatis nominal terpakai, sisa anggaran kategori, serta rekomendasi batas aman pengeluaran harian di Dashboard.',
-      'Ketuk langsung kartu anggaran untuk mengubah batas nominal atau menghapus anggaran dengan cepat.',
-    ],
+      'Penyempurnaan alur penyusunan dan pemantauan anggaran yang kini berbasis periode bulan dengan pilihan tahun, pengelolaan kategori anggaran per periode, serta perhitungan serapan anggaran yang lebih akurat.',
     icon: PiggyBank,
   },
   {
-    id: 'editable-default-categories',
-    category: 'features',
-    badge: 'PENINGKATAN',
-    badgeColor: 'amber',
-    title: 'Kategori Bawaan Kini Dapat Diedit dan Dihapus Secara Fleksibel',
-    summary:
-      'Manajemen kategori pemasukan dan pengeluaran kini memberikan kendali penuh kepada pengguna, baik untuk kategori kustom maupun kategori bawaan sistem.',
-    highlights: [
-      'Kategori bawaan sistem (default) kini dapat langsung diketuk untuk diubah nama maupun tipenya; saat disimpan, kategori tersebut otomatis menjadi kategori Kustom milik Anda.',
-      'Kategori bawaan yang tidak Anda gunakan kini dapat dihapus dari daftar aktif Anda tanpa memengaruhi pengguna lain.',
-      'Tautan pintasan cepat "Kelola kategori di sini" langsung dari halaman Anggaran serta pencarian kategori instan.',
-    ],
-    icon: Tags,
-  },
-  {
-    id: 'wallet-ownership-dashboard',
-    category: 'features',
-    badge: 'CORE UPGRADE',
-    badgeColor: 'emerald',
-    title: 'Peningkatan Fitur Kepemilikan Dana, Dompet & Tampilan Dashboard',
-    summary:
-      'Pengelolaan multi-dompet dan pemisahan kepemilikan dana dalam satu rekening kini jauh lebih rapi, akurat, dan terintegrasi.',
-    highlights: [
-      'Alur pencatatan transaksi terstruktur: Pilih Sumber Dana -> Pilih Pemilik Dana -> Input Nominal dengan pemisah ribuan otomatis (titik) saat mengetik.',
-      'Dukungan penuh transaksi Pemasukan, Pengeluaran, dan Transfer Antar Dompet/Pemilik Dana beserta opsi pencatatan Biaya Admin otomatis.',
-      'Dashboard eksekutif baru yang merangkum Sisa Uang Aktif, Arus Kas Bersih, Rasio Tabungan, Ringkasan Kepemilikan Dana, dan 5 Transaksi Terakhir.',
-      'Filter transaksi terpadu dalam satu tombol & modal dialog (Periode Bulan, Jenis Transaksi, Kategori, Sumber Dana, dan Kepemilikan) serta halaman Analitik Visual interaktif.',
-    ],
-    icon: Wallet,
-  },
-  {
-    id: 'language-currency-font',
-    category: 'personalization',
-    badge: 'PERSONALISASI',
+    id: 'tablet-layout',
+    category: 'interface',
+    badge: 'TATA LETAK',
     badgeColor: 'indigo',
-    title: 'Pilihan Bahasa, Mata Uang & Tipografi Font Khusus Angka',
+    title: 'Perbaikan Struktur Layout pada Layar Tablet',
     summary:
-      'Sesuaikan pengalaman membaca laporan keuangan dengan preferensi bahasa, format mata uang, dan gaya tipografi angka favorit Anda di halaman Pengaturan.',
-    highlights: [
-      'Dukungan multi-bahasa: Bahasa Indonesia dan Bahasa Inggris (English) secara instan.',
-      'Pilihan format tampilan mata uang: Rupiah (IDR) dan Dolar AS (USD).',
-      'Pilihan gaya font khusus nominal uang & angka (Font Angka) dengan dukungan tabular-nums agar deretan angka selalu sejajar dan tajam.',
-    ],
-    icon: Globe,
+      'Penyesuaian tata letak dan proporsi antarmuka aplikasi pada perangkat berlayar tablet agar navigasi serta tampilan konten lebih rapi, proporsional, dan nyaman digunakan.',
+    icon: Tablet,
   },
   {
-    id: 'display-name-profile',
-    category: 'personalization',
-    badge: 'PROFIL & AKUN',
+    id: 'keyboard-tab-accessibility',
+    category: 'accessibility',
+    badge: 'AKSESIBILITAS',
+    badgeColor: 'amber',
+    title: 'Peningkatan Navigasi Tombol TAB (Aksesibilitas) pada Setiap Form Input',
+    summary:
+      'Optimalisasi urutan fokus dan responsivitas tombol TAB pada keyboard fisik di seluruh formulir input untuk memudahkan perpindahan antar kolom isian secara cepat dan berurutan.',
+    icon: Keyboard,
+  },
+  {
+    id: 'db-cache-optimization',
+    category: 'performance',
+    badge: 'PERFORMA & CACHE',
     badgeColor: 'sky',
-    title: 'Opsi Mengatur Tampilan Nama (Display Name), Username & Kata Sandi',
+    title: 'Peningkatan Performa Aplikasi melalui Optimalisasi Operasi Database dan Penggunaan Cache',
     summary:
-      'Kelola identitas akun Anda secara mandiri kapan saja melalui halaman Pengaturan tanpa perlu membuat akun baru.',
-    highlights: [
-      'Opsi mengubah Nama Tampilan (Display Name) dan Username login secara langsung yang tersinkronisasi ke topbar dan database.',
-      'Fitur Keamanan & Ubah Kata Sandi dengan verifikasi kata sandi lama dan tombol lihat/sembunyikan karakter.',
-      'Menu Akun terpadu di pojok kanan atas layar yang menampilkan inisial profil, detail akun, pengatur tema, informasi rilis, dan tombol keluar.',
-    ],
-    icon: UserCheck,
-  },
-  {
-    id: 'pwa-security-confirmation',
-    category: 'security',
-    badge: 'PWA & KEAMANAN',
-    badgeColor: 'rose',
-    title: 'Dukungan Aplikasi PWA, Konfirmasi Hapus & Pembaruan Otomatis',
-    summary:
-      'Dilengkapi perlindungan ekstra terhadap penghapusan tidak sengaja, autentikasi berlapis, serta kemampuan instalasi ke layar utama perangkat.',
-    highlights: [
-      'Modal Konfirmasi Hapus Data pada setiap aksi penghapusan (Transaksi, Dompet, Kepemilikan Dana, Kategori, Anggaran, dan Pengguna).',
-      'Progressive Web App (PWA): Dapat diinstal ke Homescreen smartphone/desktop, indikator status offline, serta deteksi update versi baru dengan fitur Bersihkan Cache & Reload Penuh.',
-      'Keamanan autentikasi Google OAuth, Email/Username, serta proteksi 2FA Real OTP via Email (SMTP) untuk akses Control Panel Super Admin.',
-    ],
-    icon: ShieldCheck,
+      'Perombakan mekanisme pembacaan dan penulisan database dengan pemanfaatan cache pintar untuk memangkas beban operasi database secara signifikan serta mempercepat waktu muat aplikasi.',
+    icon: Database,
   },
 ];
 
 const filterTabs = [
   { id: 'all' as const, label: 'Semua Pembaruan', count: changelogItems.length },
   {
-    id: 'architecture' as const,
-    label: 'Arsitektur & DB',
-    count: changelogItems.filter((i) => i.category === 'architecture').length,
-  },
-  {
     id: 'features' as const,
-    label: 'Fitur Keuangan',
+    label: 'Fitur Anggaran',
     count: changelogItems.filter((i) => i.category === 'features').length,
   },
   {
-    id: 'personalization' as const,
-    label: 'UI & Personalisasi',
-    count: changelogItems.filter((i) => i.category === 'personalization').length,
+    id: 'interface' as const,
+    label: 'Tata Letak',
+    count: changelogItems.filter((i) => i.category === 'interface').length,
   },
   {
-    id: 'security' as const,
-    label: 'PWA & Keamanan',
-    count: changelogItems.filter((i) => i.category === 'security').length,
+    id: 'accessibility' as const,
+    label: 'Aksesibilitas',
+    count: changelogItems.filter((i) => i.category === 'accessibility').length,
+  },
+  {
+    id: 'performance' as const,
+    label: 'Performa & Cache',
+    count: changelogItems.filter((i) => i.category === 'performance').length,
   },
 ];
 
@@ -219,7 +114,7 @@ function markChangelogSeenAndClose() {
   notificationStore.closeChangelogModal();
 }
 
-// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.0-rc.3 changelog yet
+// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.0-rc.4 changelog yet
 watch(
   () => [authStore.isReady, authStore.isAuthenticated, authStore.requiresOtp] as const,
   ([ready, authenticated, needOtp]) => {
@@ -263,7 +158,7 @@ watch(
             </span>
           </div>
           <p class="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-            Major Rewrite Edition · {{ RELEASE_DATE }}
+            Release Candidate 4 · {{ RELEASE_DATE }}
           </p>
         </div>
       </div>
@@ -280,63 +175,25 @@ watch(
               class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-[11px] font-bold uppercase tracking-wider"
             >
               <Rocket class="w-3.5 h-3.5" />
-              <span>Major Release · v{{ RELEASE_VERSION }}</span>
+              <span>Rilis Baru · v{{ RELEASE_VERSION }}</span>
             </span>
             <span
               class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 text-slate-200 text-[11px] font-mono"
             >
               <Layers class="w-3.5 h-3.5 text-emerald-400" />
-              <span>JavaScript + Cloud Firestore Rewrite</span>
+              <span>4 Pembaruan Utama</span>
             </span>
           </div>
 
           <div class="space-y-1.5">
             <h3 class="text-base sm:text-lg font-bold tracking-tight text-white">
-              Selamat Datang di Generasi Baru Sisa Uang!
+              Catatan Pembaruan Sisa Uang v{{ RELEASE_VERSION }}
             </h3>
             <p class="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Versi <strong class="text-emerald-300 font-mono">{{ RELEASE_VERSION }}</strong> merupakan
-              pembaruan besar (<em>major rewrite</em>) dari versi sebelumnya. Seluruh fondasi aplikasi telah
-              ditulis ulang menggunakan ekosistem <strong>JavaScript modern</strong> dan database
-              <strong>Cloud Firestore</strong>, menghadirkan antarmuka baru yang jauh lebih cepat, responsif,
-              dan kaya fitur.
+              Pembaruan versi <strong class="text-emerald-300 font-mono">{{ RELEASE_VERSION }}</strong> menghadirkan
+              dukungan anggaran periodik bulanan, penyempurnaan tata letak layar tablet, peningkatan aksesibilitas
+              navigasi tombol TAB pada formulir, serta optimalisasi operasi database dan penggunaan cache.
             </p>
-          </div>
-
-          <!-- Quick Summary Metrics -->
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-            <div class="rounded-xl bg-white/5 border border-white/10 px-3 py-2">
-              <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
-                Engine Baru
-              </div>
-              <div class="text-xs sm:text-sm font-bold text-emerald-300 mt-0.5">
-                100% JavaScript
-              </div>
-            </div>
-            <div class="rounded-xl bg-white/5 border border-white/10 px-3 py-2">
-              <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
-                Database
-              </div>
-              <div class="text-xs sm:text-sm font-bold text-sky-300 mt-0.5">
-                Cloud Firestore
-              </div>
-            </div>
-            <div class="rounded-xl bg-white/5 border border-white/10 px-3 py-2">
-              <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
-                Tampilan UI
-              </div>
-              <div class="text-xs sm:text-sm font-bold text-indigo-300 mt-0.5">
-                Terang &amp; Gelap
-              </div>
-            </div>
-            <div class="rounded-xl bg-white/5 border border-white/10 px-3 py-2">
-              <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
-                Total Pembaruan
-              </div>
-              <div class="text-xs sm:text-sm font-bold text-amber-300 mt-0.5">
-                9 Pilar Utama
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -422,22 +279,6 @@ watch(
               {{ item.summary }}
             </p>
           </div>
-
-          <!-- Highlight Bullet Points -->
-          <ul
-            class="space-y-1.5 pt-2 border-t border-slate-200/60 dark:border-slate-800/80 pl-1"
-          >
-            <li
-              v-for="(point, pIdx) in item.highlights"
-              :key="pIdx"
-              class="flex items-start gap-2 text-xs text-slate-700 dark:text-slate-300 leading-relaxed"
-            >
-              <CheckCircle2
-                class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5"
-              />
-              <span>{{ point }}</span>
-            </li>
-          </ul>
         </div>
       </div>
     </div>

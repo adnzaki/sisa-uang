@@ -22,7 +22,7 @@ const needRefresh = ref(false);
 const isReloadingForUpdate = ref(false);
 const reloadDidNotUpdate = ref(false);
 const reloadAttemptCount = ref(0);
-const currentAppVersion = ref('1.0.0-rc.3');
+const currentAppVersion = ref('1.0.0-rc.4');
 const currentBuildHash = ref<string | null>(null);
 const latestServerBuildHash = ref<string | null>(null);
 
