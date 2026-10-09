@@ -118,15 +118,26 @@ watch(mobileDrawerOpen, (isOpen) => {
   }
 });
 
+function handleAppVisibilityOrFocus() {
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  if (authStore.isAuthenticated && !authStore.isSuperAdmin && authStore.user?.uid) {
+    void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid);
+  }
+}
+
 onMounted(() => {
   themeStore.initThemeListener();
   authStore.initAuth();
   window.addEventListener('popstate', handleDrawerPopState);
+  window.addEventListener('focus', handleAppVisibilityOrFocus);
+  document.addEventListener('visibilitychange', handleAppVisibilityOrFocus);
   document.addEventListener('mousedown', handleAccountMenuClickOutside);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('popstate', handleDrawerPopState);
+  window.removeEventListener('focus', handleAppVisibilityOrFocus);
+  document.removeEventListener('visibilitychange', handleAppVisibilityOrFocus);
   document.removeEventListener('mousedown', handleAccountMenuClickOutside);
 });
 
@@ -170,6 +181,18 @@ watch(
     }
     if (route.query.denied === 'admin_only') {
       deniedBannerVisible.value = true;
+    }
+    if (authStore.isAuthenticated && !authStore.isSuperAdmin && authStore.user?.uid) {
+      void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid);
+    }
+  }
+);
+
+watch(
+  () => financeStore.selectedPeriod,
+  () => {
+    if (authStore.isAuthenticated && !authStore.isSuperAdmin && authStore.user?.uid) {
+      void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid);
     }
   }
 );

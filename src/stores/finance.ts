@@ -279,11 +279,13 @@ export const useFinanceStore = defineStore('finance', () => {
   function openAddTransactionModal() {
     editingTransaction.value = null;
     quickModalOpen.value = true;
+    void checkAndSyncIfRemoteChanged();
   }
 
   function openEditTransactionModal(tx: TransactionItem) {
     editingTransaction.value = { ...tx };
     quickModalOpen.value = true;
+    void checkAndSyncIfRemoteChanged();
   }
 
   // Selected Period ('all' or 'YYYY-MM'). Automatically defaults to user's latest active month in Firestore.
@@ -669,17 +671,176 @@ export const useFinanceStore = defineStore('finance', () => {
     );
   });
 
+  let isCheckingSyncToken = false;
+  let lastTokenCheckAt = 0;
+  const TOKEN_CHECK_COOLDOWN_MS = 10 * 1000; // 10s debounce so rapid clicks/navigations don't spam reads
+
+  async function fetchAllCollectionsFromFirestore(uid: string, remoteSyncToken = 0) {
+    const queries: Promise<any>[] = [
+      getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
+      getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
+      getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid))),
+      getDocs(query(collection(db, 'transactions'), where('ownerId', '==', uid))),
+      getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid))),
+    ];
+
+    // Only fetch global default categories if not already cached in localStorage
+    const shouldFetchDefaultCats =
+      uid !== DEFAULT_CATEGORY_OWNER_ID && defaultCategories.value.length === 0;
+    if (shouldFetchDefaultCats) {
+      queries.push(
+        getDocs(
+          query(collection(db, 'categories'), where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID))
+        )
+      );
+    }
+
+    const results = await Promise.all(queries);
+    const [walletsSnap, holdersSnap, userCatSnap, txSnap, budgetSnap, defaultCatSnap] = results;
+
+    wallets.value = walletsSnap.docs
+      .map((d: any) => ({
+        id: d.id,
+        ...(d.data() as Omit<WalletItem, 'id'>),
+      }))
+      .filter((w: WalletItem) => !w.deleted)
+      .sort((a: WalletItem, b: WalletItem) => a.name.localeCompare(b.name));
+
+    rawWalletOwners.value = holdersSnap.docs
+      .map((d: any) => ({
+        id: d.id,
+        ...(d.data() as Omit<WalletOwnerItem, 'id'>),
+      }))
+      .filter((fo: WalletOwnerItem) => !fo.deleted);
+
+    rawUserCategories.value = userCatSnap.docs
+      .map((d: any) => ({
+        id: d.id,
+        ...(d.data() as Omit<CategoryItem, 'id'>),
+        isDefault: false,
+      }))
+      .sort((a: CategoryItem, b: CategoryItem) => a.name.localeCompare(b.name));
+
+    if (defaultCatSnap) {
+      defaultCategories.value = defaultCatSnap.docs
+        .map((d: any) => ({
+          id: d.id,
+          ...(d.data() as Omit<CategoryItem, 'id'>),
+          isDefault: true,
+        }))
+        .filter((c: CategoryItem) => !c.deleted)
+        .sort((a: CategoryItem, b: CategoryItem) => a.name.localeCompare(b.name));
+    }
+
+    const txList: TransactionItem[] = txSnap.docs
+      .map((d: any) => ({
+        id: d.id,
+        ...(d.data() as Omit<TransactionItem, 'id'>),
+      }))
+      .filter((t: TransactionItem) => !t.deleted);
+
+    txList.sort((a, b) => {
+      const cmp = String(b.date || '').localeCompare(String(a.date || ''));
+      if (cmp !== 0) return cmp;
+      return String(b.id || '').localeCompare(String(a.id || ''));
+    });
+    rawTransactions.value = txList;
+
+    budgets.value = budgetSnap.docs
+      .map((d: any) => ({
+        id: d.id,
+        ...(d.data() as Omit<BudgetItem, 'id'>),
+      }))
+      .filter((b: BudgetItem) => !b.deleted);
+
+    syncWalletTotalBalancesFromHolders();
+
+    if (!hasAutoSelectedPeriod.value && txList.length > 0) {
+      hasAutoSelectedPeriod.value = true;
+      const currentMonth = getCurrentMonthPeriod();
+      const hasCurrentMonthTx = txList.some(
+        (tx) => String(tx.date || '').slice(0, 7) === currentMonth
+      );
+      if (hasCurrentMonthTx) {
+        selectedPeriod.value = currentMonth;
+      } else {
+        const latestTxMonth = String(txList[0].date || '').slice(0, 7);
+        if (/^\d{4}-\d{2}$/.test(latestTxMonth)) {
+          selectedPeriod.value = latestTxMonth;
+        }
+      }
+    }
+
+    isSyncedWithFirestore.value = true;
+    saveLocalSnapshot(uid, true, Math.max(remoteSyncToken, Date.now()));
+  }
+
+  /**
+   * Background 1-Read Sync Check triggered on in-app user activities
+   * (switching pages/menus, returning to app tab/window focus, changing period, opening modals).
+   * Costs ONLY 1 document read (`/users/{uid}`) and silently updates state in-place if another device made changes.
+   */
+  async function checkAndSyncIfRemoteChanged(uidInput?: string, bypassCooldown = false) {
+    const authStore = useAuthStore();
+    if (!authStore.isAuthenticated || authStore.isSuperAdmin) return;
+
+    const uid = sanitizeId(uidInput || authStore.user?.uid || activeOwnerUid.value || '');
+    if (!uid || uid === 'guest') return;
+
+    // If initial load hasn't completed yet, let initFinanceData handle it
+    if (isLoading.value || !isSyncedWithFirestore.value || activeOwnerUid.value !== uid) {
+      return;
+    }
+
+    const now = Date.now();
+    if (!bypassCooldown && now - lastTokenCheckAt < TOKEN_CHECK_COOLDOWN_MS) {
+      return;
+    }
+    if (isCheckingSyncToken) return;
+
+    isCheckingSyncToken = true;
+    lastTokenCheckAt = now;
+
+    try {
+      const canQuery = await ensureFirestoreSessionForUser(uid);
+      if (!canQuery) return;
+
+      const savedSyncToken =
+        localStorage.getItem(storageKey('sync_token', uid)) ||
+        localStorage.getItem(storageKey('last_sync_at', uid));
+      const localSyncToken = Number(savedSyncToken) || 0;
+
+      const userSnap = await getDoc(doc(db, 'users', uid));
+      if (!userSnap.exists()) return;
+
+      const uData = userSnap.data();
+      const remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
+
+      // If remote document has a newer timestamp (> 2s tolerance), silently pull fresh collections in-place
+      if (remoteSyncToken > 0 && remoteSyncToken > localSyncToken + 2000) {
+        await fetchAllCollectionsFromFirestore(uid, remoteSyncToken);
+      }
+    } catch (err) {
+      if (isFirestoreQuotaError(err)) {
+        useNotificationStore().notifyQuotaExceeded();
+      }
+    } finally {
+      isCheckingSyncToken = false;
+    }
+  }
+
   async function initFinanceData(uidInput: string, forceRefresh = false) {
     cleanupListeners();
     const uid = sanitizeId(uidInput);
 
-    // If already loaded in memory for this user and not forced to refresh, skip re-fetching
+    // If already loaded in memory for this user and not forced to refresh, perform a lightweight 1-read sync check instead
     if (
       !forceRefresh &&
       activeOwnerUid.value === uid &&
       isSyncedWithFirestore.value &&
       (wallets.value.length > 0 || rawTransactions.value.length > 0)
     ) {
+      await checkAndSyncIfRemoteChanged(uid, false);
       return;
     }
 
@@ -758,6 +919,7 @@ export const useFinanceStore = defineStore('finance', () => {
     if (canQueryFirestore) {
       try {
         let remoteSyncToken = 0;
+        lastTokenCheckAt = Date.now();
 
         // 1-Read Sync Token Check:
         // Read ONLY 1 document (`/users/{uid}`) to verify if any other device modified financial data.
@@ -787,104 +949,8 @@ export const useFinanceStore = defineStore('finance', () => {
           return;
         }
 
-        const queries: Promise<any>[] = [
-          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
-          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
-          getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid))),
-          getDocs(query(collection(db, 'transactions'), where('ownerId', '==', uid))),
-          getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid))),
-        ];
-
-        // Only fetch global default categories if not already cached in localStorage
-        const shouldFetchDefaultCats =
-          uid !== DEFAULT_CATEGORY_OWNER_ID && defaultCategories.value.length === 0;
-        if (shouldFetchDefaultCats) {
-          queries.push(
-            getDocs(
-              query(collection(db, 'categories'), where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID))
-            )
-          );
-        }
-
-        const results = await Promise.all(queries);
-        const [walletsSnap, holdersSnap, userCatSnap, txSnap, budgetSnap, defaultCatSnap] = results;
-
-        wallets.value = walletsSnap.docs
-          .map((d: any) => ({
-            id: d.id,
-            ...(d.data() as Omit<WalletItem, 'id'>),
-          }))
-          .filter((w: WalletItem) => !w.deleted)
-          .sort((a: WalletItem, b: WalletItem) => a.name.localeCompare(b.name));
-
-        rawWalletOwners.value = holdersSnap.docs
-          .map((d: any) => ({
-            id: d.id,
-            ...(d.data() as Omit<WalletOwnerItem, 'id'>),
-          }))
-          .filter((fo: WalletOwnerItem) => !fo.deleted);
-
-        rawUserCategories.value = userCatSnap.docs
-          .map((d: any) => ({
-            id: d.id,
-            ...(d.data() as Omit<CategoryItem, 'id'>),
-            isDefault: false,
-          }))
-          .sort((a: CategoryItem, b: CategoryItem) => a.name.localeCompare(b.name));
-
-        if (defaultCatSnap) {
-          defaultCategories.value = defaultCatSnap.docs
-            .map((d: any) => ({
-              id: d.id,
-              ...(d.data() as Omit<CategoryItem, 'id'>),
-              isDefault: true,
-            }))
-            .filter((c: CategoryItem) => !c.deleted)
-            .sort((a: CategoryItem, b: CategoryItem) => a.name.localeCompare(b.name));
-        }
-
-        const txList: TransactionItem[] = txSnap.docs
-          .map((d: any) => ({
-            id: d.id,
-            ...(d.data() as Omit<TransactionItem, 'id'>),
-          }))
-          .filter((t: TransactionItem) => !t.deleted);
-
-        txList.sort((a, b) => {
-          const cmp = String(b.date || '').localeCompare(String(a.date || ''));
-          if (cmp !== 0) return cmp;
-          return String(b.id || '').localeCompare(String(a.id || ''));
-        });
-        rawTransactions.value = txList;
-
-        budgets.value = budgetSnap.docs
-          .map((d: any) => ({
-            id: d.id,
-            ...(d.data() as Omit<BudgetItem, 'id'>),
-          }))
-          .filter((b: BudgetItem) => !b.deleted);
-
-        syncWalletTotalBalancesFromHolders();
-
-        if (!hasAutoSelectedPeriod.value && txList.length > 0) {
-          hasAutoSelectedPeriod.value = true;
-          const currentMonth = getCurrentMonthPeriod();
-          const hasCurrentMonthTx = txList.some(
-            (tx) => String(tx.date || '').slice(0, 7) === currentMonth
-          );
-          if (hasCurrentMonthTx) {
-            selectedPeriod.value = currentMonth;
-          } else {
-            const latestTxMonth = String(txList[0].date || '').slice(0, 7);
-            if (/^\d{4}-\d{2}$/.test(latestTxMonth)) {
-              selectedPeriod.value = latestTxMonth;
-            }
-          }
-        }
-
-        isSyncedWithFirestore.value = true;
+        await fetchAllCollectionsFromFirestore(uid, remoteSyncToken);
         isLoading.value = false;
-        saveLocalSnapshot(uid, true, Math.max(remoteSyncToken, Date.now()));
       } catch (err) {
         isLoading.value = false;
         if (isFirestoreQuotaError(err)) {
@@ -2503,6 +2569,7 @@ export const useFinanceStore = defineStore('finance', () => {
     formatPeriodLabel,
     formatTransactionDateBadge,
     initFinanceData,
+    checkAndSyncIfRemoteChanged,
     cleanupListeners,
     getHoldersByWalletId,
     addWallet,
