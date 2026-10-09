@@ -42,13 +42,18 @@ const periodOptions = computed<SelectOptionItem[]>(() => [
   })),
 ]);
 
-const budgetUtilizationPercent = computed(() => {
+const budgetUtilizationRawPercent = computed(() => {
   if (financeStore.totalBudgetLimit <= 0) return 0;
-  return Math.min(
-    100,
-    Math.round((financeStore.monthlyExpense / financeStore.totalBudgetLimit) * 100)
-  );
+  return Math.round((financeStore.totalBudgetSpent / financeStore.totalBudgetLimit) * 100);
 });
+
+const budgetUtilizationBarWidth = computed(() =>
+  Math.min(100, Math.max(0, budgetUtilizationRawPercent.value))
+);
+
+const budgetNetVariance = computed(
+  () => financeStore.totalBudgetLimit - financeStore.totalBudgetSpent
+);
 
 const activePeriodLabel = computed(() =>
   formatPeriodLabel(financeStore.selectedPeriod, locale.value === 'id' ? 'id-ID' : 'en-US')
@@ -152,22 +157,54 @@ function getDateBadge(dateStr: string) {
 
           <!-- Clean Utilization Progress Bar -->
           <div v-if="financeStore.totalBudgetLimit > 0" class="space-y-1.5 pt-1">
-            <div class="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+            <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
               <span>Serapan Anggaran ({{ activePeriodLabel }})</span>
-              <span class="font-money">{{ budgetUtilizationPercent }}% terpakai</span>
+              <span
+                class="font-money font-semibold"
+                :class="
+                  budgetUtilizationRawPercent > 100
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : budgetUtilizationRawPercent >= 85
+                      ? 'text-amber-600 dark:text-amber-400'
+                      : 'text-emerald-600 dark:text-emerald-400'
+                "
+              >
+                {{ budgetUtilizationRawPercent }}% terpakai
+                <template v-if="budgetUtilizationRawPercent > 100">
+                  (Melebihi {{ themeStore.formatMoney(Math.abs(budgetNetVariance)) }})
+                </template>
+              </span>
             </div>
             <div class="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
               <div
                 class="h-full rounded-full transition-all duration-200"
                 :class="
-                  budgetUtilizationPercent > 85
+                  budgetUtilizationRawPercent > 100
                     ? 'bg-rose-600'
-                    : budgetUtilizationPercent > 65
-                    ? 'bg-amber-500'
-                    : 'bg-emerald-600'
+                    : budgetUtilizationRawPercent >= 85
+                      ? 'bg-amber-500'
+                      : 'bg-emerald-600'
                 "
-                :style="{ width: `${budgetUtilizationPercent}%` }"
+                :style="{ width: `${budgetUtilizationBarWidth}%` }"
               ></div>
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400 font-money">
+              <span>
+                Terpakai {{ themeStore.formatMoney(financeStore.totalBudgetSpent) }} dari {{ themeStore.formatMoney(financeStore.totalBudgetLimit) }}
+              </span>
+              <span
+                :class="
+                  budgetNetVariance >= 0
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-rose-600 dark:text-rose-400'
+                "
+              >
+                {{
+                  budgetNetVariance >= 0
+                    ? `Sisa ${themeStore.formatMoney(budgetNetVariance)}`
+                    : `Lebih ${themeStore.formatMoney(Math.abs(budgetNetVariance))}`
+                }}
+              </span>
             </div>
           </div>
           <div v-else class="pt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
@@ -520,7 +557,13 @@ function getDateBadge(dateStr: string) {
               <span class="font-bold text-slate-800 dark:text-slate-200 truncate">
                 {{ b.category }}
               </span>
-              <span class="font-money text-slate-500 dark:text-slate-400 shrink-0">
+              <span
+                v-if="b.overAmount > 0"
+                class="font-money text-rose-600 dark:text-rose-400 font-semibold shrink-0"
+              >
+                Lebih: {{ themeStore.formatMoney(b.overAmount) }}
+              </span>
+              <span v-else class="font-money text-slate-500 dark:text-slate-400 shrink-0">
                 {{ t('budgets.remaining') }}:
                 <strong class="text-slate-900 dark:text-slate-100">
                   {{ themeStore.formatMoney(b.remaining) }}
@@ -532,11 +575,11 @@ function getDateBadge(dateStr: string) {
               <div
                 class="h-full rounded-full transition-all duration-200"
                 :class="
-                  b.percentage >= 90
+                  b.rawPercentage > 100
                     ? 'bg-rose-600'
-                    : b.percentage >= 70
-                    ? 'bg-amber-500'
-                    : 'bg-emerald-600'
+                    : b.rawPercentage >= 85
+                      ? 'bg-amber-500'
+                      : 'bg-emerald-600'
                 "
                 :style="{ width: `${b.percentage}%` }"
               ></div>
@@ -544,7 +587,15 @@ function getDateBadge(dateStr: string) {
 
             <div class="flex items-center justify-between text-[11px] text-slate-400 font-money">
               <span>Terpakai {{ themeStore.formatMoney(b.spentAmount) }}</span>
-              <span>Batas {{ themeStore.formatMoney(b.limitAmount) }} ({{ b.percentage }}%)</span>
+              <span
+                :class="
+                  b.rawPercentage > 100
+                    ? 'text-rose-600 dark:text-rose-400 font-semibold'
+                    : ''
+                "
+              >
+                Batas {{ themeStore.formatMoney(b.limitAmount) }} ({{ b.rawPercentage }}%)
+              </span>
             </div>
           </RouterLink>
         </div>
