@@ -4,13 +4,17 @@ import { useI18n } from 'vue-i18n';
 import {
   ChevronLeft,
   ChevronRight,
-  SlidersHorizontal,
   TrendingUp,
   TrendingDown,
   Wallet,
   ArrowUpRight,
   ArrowDownRight,
   CalendarRange,
+  FileDown,
+  FileText,
+  Scale,
+  PieChart,
+  Check,
 } from 'lucide-vue-next';
 import {
   useFinanceStore,
@@ -18,14 +22,27 @@ import {
   type TransactionItem,
 } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
+import { useAuthStore } from '../stores/auth';
+import { useNotificationStore } from '../stores/notification';
+import AppModal from '../components/AppModal.vue';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 import MaterialDatePicker from '../components/MaterialDatePicker.vue';
+import {
+  computePdfReportPreview,
+  generateAnalyticsPdfDocument,
+  doesTxMatchScope,
+  getScopeNetDeltaForTx,
+  getScopeLiveBalance,
+  type PdfReportType,
+} from '../utils/pdfReportGenerator';
 
 export type AnalyticsRangeType = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom';
 
 const { locale } = useI18n();
 const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
+const authStore = useAuthStore();
+const notificationStore = useNotificationStore();
 
 // Collapsible filter state ("SEMBUNYIKAN FILTER TANGGAL" / "TAMPILKAN FILTER TANGGAL")
 const showDateFilter = ref(true);
@@ -33,8 +50,59 @@ const showDateFilter = ref(true);
 // Range type: Harian, Mingguan, Bulanan, Tahunan, Custom
 const rangeType = ref<AnalyticsRangeType>('monthly');
 
-// Owner filter: 'all' ("Semua") or specific formatted holder name
+// Wallet filter: 'all' ("Semua Sumber Dana") or specific walletId
+const selectedWallet = ref<string>('all');
+
+// Owner filter: 'all' ("Semua Kepemilikan") or specific formatted holder name
 const selectedOwner = ref<string>('all');
+
+// =========================================================================
+// PDF Report Generator Modal State
+// =========================================================================
+const pdfModalOpen = ref(false);
+const pdfReportType = ref<PdfReportType>('kas_umum');
+const pdfSelectedWallet = ref<string>('all');
+const pdfSelectedOwner = ref<string>('all');
+const isGeneratingPdf = ref(false);
+
+const pdfReportTypeCards: {
+  id: PdfReportType;
+  title: string;
+  subtitle: string;
+  icon: any;
+  badge: string;
+}[] = [
+  {
+    id: 'kas_umum',
+    title: 'Laporan Kas Umum',
+    subtitle:
+      'Buku kas umum kronologis berisi saldo awal, rincian kas masuk (debit), kas keluar (kredit), mutasi transfer, dan saldo berjalan hingga akhir periode.',
+    icon: FileText,
+    badge: 'Buku Kas Umum',
+  },
+  {
+    id: 'rekonsiliasi_kas',
+    title: 'Laporan Rekonsiliasi Kas',
+    subtitle:
+      'Evaluasi kesesuaian antara saldo awal, akumulasi mutasi pemasukan/pengeluaran/transfer per pos dana, dengan saldo aktual sistem.',
+    icon: Scale,
+    badge: 'Audit & Rekonsiliasi',
+  },
+  {
+    id: 'realisasi_anggaran',
+    title: 'Realisasi / Serapan Anggaran',
+    subtitle:
+      'Perbandingan pagu anggaran bulanan terhadap realisasi pengeluaran aktual per kategori, lengkap dengan persentase serapan dan status evaluasi.',
+    icon: PieChart,
+    badge: 'Evaluasi Anggaran',
+  },
+];
+
+function openPdfGeneratorModal() {
+  pdfSelectedWallet.value = selectedWallet.value;
+  pdfSelectedOwner.value = selectedOwner.value;
+  pdfModalOpen.value = true;
+}
 
 // Helper to format Date object as local YYYY-MM-DD
 function toIsoDate(d: Date): string {
@@ -237,7 +305,7 @@ const formattedPeriodRangeLabel = computed(() => {
   return `${formatShortDisplayDate(startIso)} - ${formatShortDisplayDate(endIso)}`;
 });
 
-// Dropdown 1: Pilih rentang waktu (matches Screenshot 2: Harian, Mingguan, Bulanan, Tahunan, Custom)
+// Dropdown 1: Pilih rentang waktu (Harian, Mingguan, Bulanan, Tahunan, Custom)
 const rangeTypeOptions = computed<SelectOptionItem[]>(() => [
   { value: 'daily', label: 'Harian' },
   { value: 'weekly', label: 'Mingguan' },
@@ -246,7 +314,20 @@ const rangeTypeOptions = computed<SelectOptionItem[]>(() => [
   { value: 'custom', label: 'Custom' },
 ]);
 
-// Dropdown 2: Pemilik ("Semua" + all unique fund owners from walletOwners & transactions)
+// Dropdown 2: Sumber Dana ("Semua Sumber Dana" + active wallets)
+const walletOptions = computed<SelectOptionItem[]>(() => {
+  const activeWallets = financeStore.wallets.filter((w) => !w.deleted);
+  return [
+    { value: 'all', label: 'Semua Sumber Dana' },
+    ...activeWallets.map((w) => ({
+      value: w.id,
+      label: w.name,
+      badge: themeStore.formatMoney(Number(w.balance || 0)),
+    })),
+  ];
+});
+
+// Dropdown 3: Kepemilikan ("Semua Kepemilikan" + unique fund owners)
 const ownerOptions = computed<SelectOptionItem[]>(() => {
   const names = new Set<string>();
   for (const item of financeStore.ownershipSummary) {
@@ -264,7 +345,7 @@ const ownerOptions = computed<SelectOptionItem[]>(() => {
   }
   const sortedNames = Array.from(names).sort((a, b) => a.localeCompare(b));
   return [
-    { value: 'all', label: 'Semua' },
+    { value: 'all', label: 'Semua Kepemilikan' },
     ...sortedNames.map((name) => ({
       value: name,
       label: name,
@@ -272,78 +353,58 @@ const ownerOptions = computed<SelectOptionItem[]>(() => {
   ];
 });
 
-// Helper: does transaction involve the selected owner?
-function isTxMatchingOwner(tx: TransactionItem, owner: string): boolean {
-  if (!owner || owner === 'all') return true;
-  const sourceOwner = formatHolderName(tx.fundOwnerName);
-  const destOwner = tx.toFundOwnerName ? formatHolderName(tx.toFundOwnerName) : '';
-  return sourceOwner === owner || destOwner === owner;
-}
-
-// Helper: compute net balance change caused by a single transaction for the selected owner scope
-function getTransactionNetDelta(tx: TransactionItem, owner: string): number {
-  const amt = Number(tx.amount || 0);
-  const fee = Number(tx.adminFee || 0);
-
-  if (!owner || owner === 'all') {
-    if (tx.type === 'income') return amt;
-    if (tx.type === 'expense') return -amt;
-    if (tx.type === 'transfer') return -fee;
-    return 0;
-  }
-
-  const sourceOwner = formatHolderName(tx.fundOwnerName);
-  const destOwner = tx.toFundOwnerName ? formatHolderName(tx.toFundOwnerName) : '';
-
-  if (tx.type === 'income') {
-    return sourceOwner === owner ? amt : 0;
-  }
-  if (tx.type === 'expense') {
-    return sourceOwner === owner ? -amt : 0;
-  }
-  if (tx.type === 'transfer') {
-    let delta = 0;
-    if (sourceOwner === owner) {
-      delta -= amt + fee;
-    }
-    if (destOwner === owner) {
-      delta += amt;
-    }
-    return delta;
-  }
-  return 0;
-}
-
-// Current live balance for the selected owner ('all' or specific holder)
-const currentScopeLiveBalance = computed(() => {
-  if (selectedOwner.value === 'all') {
-    return financeStore.totalBalance;
-  }
-  const found = financeStore.ownershipSummary.find(
-    (o) => o.displayHolderName === selectedOwner.value || o.rawHolderName === selectedOwner.value
-  );
-  return found ? found.totalBalance : 0;
+const selectedWalletLabel = computed(() => {
+  if (selectedWallet.value === 'all') return 'Semua Sumber Dana';
+  const found = financeStore.wallets.find((w) => w.id === selectedWallet.value);
+  return found ? found.name : 'Sumber Dana Tertentu';
 });
 
-// Transactions inside active [startIso, endIso] and matching selectedOwner
+function isTxSourceInScope(tx: TransactionItem, walletId: string, owner: string): boolean {
+  const walletOk = walletId === 'all' || tx.walletId === walletId;
+  const srcOwner = formatHolderName(tx.fundOwnerName);
+  const ownerOk = owner === 'all' || srcOwner === owner;
+  return walletOk && ownerOk;
+}
+
+function isTxDestInScope(tx: TransactionItem, walletId: string, owner: string): boolean {
+  if (tx.type !== 'transfer') return false;
+  const dstWalletId = tx.toWalletId || tx.walletId;
+  const dstOwner = tx.toFundOwnerName
+    ? formatHolderName(tx.toFundOwnerName)
+    : formatHolderName(tx.fundOwnerName);
+  const walletOk = walletId === 'all' || dstWalletId === walletId;
+  const ownerOk = owner === 'all' || dstOwner === owner;
+  return walletOk && ownerOk;
+}
+
+// Current live balance for the selected (wallet, owner) scope
+const currentScopeLiveBalance = computed(() =>
+  getScopeLiveBalance(
+    financeStore.wallets,
+    financeStore.walletOwners,
+    selectedWallet.value,
+    selectedOwner.value
+  )
+);
+
+// Transactions inside active [startIso, endIso] and matching selected (wallet, owner)
 const filteredPeriodTransactions = computed<TransactionItem[]>(() => {
   const { startIso, endIso } = activeBounds.value;
   return financeStore.transactions.filter((tx) => {
     const d = String(tx.date || '').slice(0, 10);
     if (d < startIso || d > endIso) return false;
-    return isTxMatchingOwner(tx, selectedOwner.value);
+    return doesTxMatchScope(tx, selectedWallet.value, selectedOwner.value);
   });
 });
 
-// Saldo Awal & Saldo Akhir calculation for the selected [startIso, endIso] and selectedOwner
+// Saldo Awal & Saldo Akhir calculation for the selected [startIso, endIso], selectedWallet, and selectedOwner
 const saldoAkhir = computed(() => {
   const { endIso } = activeBounds.value;
-  const owner = selectedOwner.value;
   let netAfterEnd = 0;
   for (const tx of financeStore.transactions) {
     const d = String(tx.date || '').slice(0, 10);
     if (d > endIso) {
-      netAfterEnd += getTransactionNetDelta(tx, owner);
+      netAfterEnd += getScopeNetDeltaForTx(tx, selectedWallet.value, selectedOwner.value);
     }
   }
   return currentScopeLiveBalance.value - netAfterEnd;
@@ -351,12 +412,11 @@ const saldoAkhir = computed(() => {
 
 const periodNetDelta = computed(() => {
   const { startIso, endIso } = activeBounds.value;
-  const owner = selectedOwner.value;
   let netInPeriod = 0;
   for (const tx of financeStore.transactions) {
     const d = String(tx.date || '').slice(0, 10);
     if (d >= startIso && d <= endIso) {
-      netInPeriod += getTransactionNetDelta(tx, owner);
+      netInPeriod += getScopeNetDeltaForTx(tx, selectedWallet.value, selectedOwner.value);
     }
   }
   return netInPeriod;
@@ -364,25 +424,21 @@ const periodNetDelta = computed(() => {
 
 const saldoAwal = computed(() => saldoAkhir.value - periodNetDelta.value);
 
-// Period Income & Expense for selected range and owner (strictly pure income & pure expense + admin fee)
+// Period Income & Expense for selected range, wallet, and owner
 const periodIncome = computed(() => {
-  const owner = selectedOwner.value;
   let sum = 0;
   for (const tx of filteredPeriodTransactions.value) {
-    if (tx.type === 'income') {
-      if (owner === 'all' || formatHolderName(tx.fundOwnerName) === owner) {
-        sum += Number(tx.amount || 0);
-      }
+    if (tx.type === 'income' && isTxSourceInScope(tx, selectedWallet.value, selectedOwner.value)) {
+      sum += Number(tx.amount || 0);
     }
   }
   return sum;
 });
 
 const periodExpense = computed(() => {
-  const owner = selectedOwner.value;
   let sum = 0;
   for (const tx of filteredPeriodTransactions.value) {
-    const isSource = owner === 'all' || formatHolderName(tx.fundOwnerName) === owner;
+    const isSource = isTxSourceInScope(tx, selectedWallet.value, selectedOwner.value);
     if (tx.type === 'expense' && isSource) {
       sum += Number(tx.amount || 0);
     } else if (tx.type === 'transfer' && isSource && Number(tx.adminFee || 0) > 0) {
@@ -395,16 +451,15 @@ const periodExpense = computed(() => {
 // Pure Cashflow Difference (Total Pemasukan - Total Pengeluaran)
 const periodCashflowDiff = computed(() => periodIncome.value - periodExpense.value);
 
-// Cross-owner transfer in/out when a specific owner is selected
-const periodCrossOwnerTransferIn = computed(() => {
-  const owner = selectedOwner.value;
-  if (!owner || owner === 'all') return 0;
+// Cross-scope transfer in/out when a specific wallet or owner is selected
+const periodCrossScopeTransferIn = computed(() => {
+  if (selectedWallet.value === 'all' && selectedOwner.value === 'all') return 0;
   let sum = 0;
   for (const tx of filteredPeriodTransactions.value) {
     if (tx.type === 'transfer') {
-      const srcOwner = formatHolderName(tx.fundOwnerName);
-      const dstOwner = tx.toFundOwnerName ? formatHolderName(tx.toFundOwnerName) : srcOwner;
-      if (dstOwner === owner && srcOwner !== owner) {
+      const inSrc = isTxSourceInScope(tx, selectedWallet.value, selectedOwner.value);
+      const inDst = isTxDestInScope(tx, selectedWallet.value, selectedOwner.value);
+      if (inDst && !inSrc) {
         sum += Number(tx.amount || 0);
       }
     }
@@ -412,15 +467,14 @@ const periodCrossOwnerTransferIn = computed(() => {
   return sum;
 });
 
-const periodCrossOwnerTransferOut = computed(() => {
-  const owner = selectedOwner.value;
-  if (!owner || owner === 'all') return 0;
+const periodCrossScopeTransferOut = computed(() => {
+  if (selectedWallet.value === 'all' && selectedOwner.value === 'all') return 0;
   let sum = 0;
   for (const tx of filteredPeriodTransactions.value) {
     if (tx.type === 'transfer') {
-      const srcOwner = formatHolderName(tx.fundOwnerName);
-      const dstOwner = tx.toFundOwnerName ? formatHolderName(tx.toFundOwnerName) : srcOwner;
-      if (srcOwner === owner && dstOwner !== owner) {
+      const inSrc = isTxSourceInScope(tx, selectedWallet.value, selectedOwner.value);
+      const inDst = isTxDestInScope(tx, selectedWallet.value, selectedOwner.value);
+      if (inSrc && !inDst) {
         sum += Number(tx.amount || 0);
       }
     }
@@ -429,7 +483,7 @@ const periodCrossOwnerTransferOut = computed(() => {
 });
 
 const periodNetTransferDelta = computed(
-  () => periodCrossOwnerTransferIn.value - periodCrossOwnerTransferOut.value
+  () => periodCrossScopeTransferIn.value - periodCrossScopeTransferOut.value
 );
 
 const periodSavingsRate = computed(() => {
@@ -440,10 +494,9 @@ const periodSavingsRate = computed(() => {
 
 const categoryBreakdown = computed(() => {
   const map = new Map<string, number>();
-  const owner = selectedOwner.value;
 
   for (const tx of filteredPeriodTransactions.value) {
-    const isSource = owner === 'all' || formatHolderName(tx.fundOwnerName) === owner;
+    const isSource = isTxSourceInScope(tx, selectedWallet.value, selectedOwner.value);
     if (!isSource) continue;
 
     if (tx.type === 'expense') {
@@ -471,13 +524,10 @@ const categoryBreakdown = computed(() => {
 
 const incomeCategoryBreakdown = computed(() => {
   const map = new Map<string, number>();
-  const owner = selectedOwner.value;
 
   for (const tx of filteredPeriodTransactions.value) {
-    if (tx.type === 'income') {
-      if (owner === 'all' || formatHolderName(tx.fundOwnerName) === owner) {
-        map.set(tx.category, (map.get(tx.category) || 0) + Number(tx.amount || 0));
-      }
+    if (tx.type === 'income' && isTxSourceInScope(tx, selectedWallet.value, selectedOwner.value)) {
+      map.set(tx.category, (map.get(tx.category) || 0) + Number(tx.amount || 0));
     }
   }
 
@@ -501,8 +551,15 @@ const walletAllocation = computed(() => {
         o.displayHolderName === selectedOwner.value || o.rawHolderName === selectedOwner.value
     );
     if (!ownerItem) return [];
-    const total = Math.max(1, ownerItem.totalBalance);
-    return ownerItem.wallets
+    const filteredWallets =
+      selectedWallet.value === 'all'
+        ? ownerItem.wallets
+        : ownerItem.wallets.filter((w) => w.walletId === selectedWallet.value);
+    const total = Math.max(
+      1,
+      filteredWallets.reduce((s, w) => s + Number(w.balance || 0), 0)
+    );
+    return filteredWallets
       .map((w) => ({
         id: w.holderId,
         name: w.walletName,
@@ -512,8 +569,16 @@ const walletAllocation = computed(() => {
       .sort((a, b) => b.balance - a.balance);
   }
 
-  const total = Math.max(1, financeStore.totalBalance);
-  return financeStore.wallets
+  const targetWallets =
+    selectedWallet.value === 'all'
+      ? financeStore.wallets
+      : financeStore.wallets.filter((w) => w.id === selectedWallet.value);
+
+  const total = Math.max(
+    1,
+    targetWallets.reduce((s, w) => s + Number(w.balance || 0), 0)
+  );
+  return targetWallets
     .map((w) => ({
       id: w.id,
       name: w.name,
@@ -522,30 +587,95 @@ const walletAllocation = computed(() => {
     }))
     .sort((a, b) => b.balance - a.balance);
 });
+
+// Live preview inside the PDF Modal for the chosen report type & scope
+const pdfPreviewSummary = computed(() =>
+  computePdfReportPreview({
+    reportType: pdfReportType.value,
+    startIso: activeBounds.value.startIso,
+    endIso: activeBounds.value.endIso,
+    periodRangeLabel: formattedPeriodRangeLabel.value,
+    rangeModeLabel:
+      rangeTypeOptions.value.find((o) => o.value === rangeType.value)?.label || 'Bulanan',
+    selectedWalletId: pdfSelectedWallet.value,
+    selectedOwnerName: pdfSelectedOwner.value,
+    wallets: financeStore.wallets,
+    walletOwners: financeStore.walletOwners,
+    allTransactions: financeStore.transactions,
+    budgets: financeStore.budgets,
+    formatMoney: (n: number) => themeStore.formatMoney(n),
+    userDisplayName: authStore.user?.displayName || 'Pengguna Sisa Uang',
+    userEmail: authStore.user?.email || '-',
+    locale: locale.value === 'en' ? 'en' : 'id',
+  })
+);
+
+function handleDownloadPdfReport() {
+  isGeneratingPdf.value = true;
+  try {
+    const fileName = generateAnalyticsPdfDocument({
+      reportType: pdfReportType.value,
+      startIso: activeBounds.value.startIso,
+      endIso: activeBounds.value.endIso,
+      periodRangeLabel: formattedPeriodRangeLabel.value,
+      rangeModeLabel:
+        rangeTypeOptions.value.find((o) => o.value === rangeType.value)?.label || 'Bulanan',
+      selectedWalletId: pdfSelectedWallet.value,
+      selectedOwnerName: pdfSelectedOwner.value,
+      wallets: financeStore.wallets,
+      walletOwners: financeStore.walletOwners,
+      allTransactions: financeStore.transactions,
+      budgets: financeStore.budgets,
+      formatMoney: (n: number) => themeStore.formatMoney(n),
+      userDisplayName: authStore.user?.displayName || 'Pengguna Sisa Uang',
+      userEmail: authStore.user?.email || '-',
+      locale: locale.value === 'en' ? 'en' : 'id',
+    });
+
+    pdfModalOpen.value = false;
+    notificationStore.notifySuccess(
+      'Laporan PDF Berhasil Diunduh',
+      `${pdfPreviewSummary.value.reportTitle} (${formattedPeriodRangeLabel.value}) telah disimpan sebagai ${fileName}.`
+    );
+  } catch (err) {
+    notificationStore.notifyError('Gagal Membuat Laporan PDF', err);
+  } finally {
+    isGeneratingPdf.value = false;
+  }
+}
 </script>
 
 <template>
   <div class="space-y-5 sm:space-y-6 max-w-full overflow-x-hidden">
-    <!-- Page Title Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+    <!-- Page Title Header & Generate PDF Button -->
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
       <div class="min-w-0">
         <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
           Statistik & Analitik Keuangan
         </h1>
         <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-          Pantau saldo awal, saldo akhir, dan arus kas berdasarkan rentang waktu serta kepemilikan dana.
+          Pantau saldo awal, saldo akhir, arus kas, serta cetak laporan PDF resmi berdasarkan sumber dana dan kepemilikan.
         </p>
       </div>
+
+      <button
+        type="button"
+        class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs cursor-pointer"
+        @click="openPdfGeneratorModal"
+      >
+        <FileDown class="w-4 h-4 shrink-0" />
+        <span>Generate Laporan PDF</span>
+      </button>
     </div>
 
     <!-- =================================================================== -->
     <!-- FILTER & PERIOD NAVIGATION CARD (Sisa Uang Style)                   -->
     <!-- =================================================================== -->
     <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4">
-      <!-- Collapsible Filter Controls (Pilih rentang waktu, Pemilik, Custom Dates) -->
+      <!-- Collapsible Filter Controls (Pilih rentang waktu, Sumber Dana, Kepemilikan, Custom Dates) -->
       <Transition name="dropdown">
         <div v-if="showDateFilter" class="space-y-3.5">
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3.5">
             <!-- 1. Pilih rentang waktu (Harian, Mingguan, Bulanan, Tahunan, Custom) -->
             <CustomSelect
               v-model="rangeType"
@@ -553,11 +683,22 @@ const walletAllocation = computed(() => {
               placeholder="Pilih rentang waktu"
             />
 
-            <!-- 2. Pemilik (Semua / Specific Fund Owner) -->
+            <!-- 2. Sumber Dana (Semua Sumber Dana / Sumber Dana Tertentu) -->
+            <CustomSelect
+              v-model="selectedWallet"
+              :options="walletOptions"
+              placeholder="Sumber Dana"
+              searchable
+              search-placeholder="Cari sumber dana..."
+            />
+
+            <!-- 3. Kepemilikan (Semua Kepemilikan / Kepemilikan Tertentu) -->
             <CustomSelect
               v-model="selectedOwner"
               :options="ownerOptions"
-              placeholder="Pemilik"
+              placeholder="Kepemilikan Dana"
+              searchable
+              search-placeholder="Cari pemilik dana..."
             />
           </div>
 
@@ -647,6 +788,8 @@ const walletAllocation = computed(() => {
           </div>
           <div class="text-[11px] font-medium text-slate-500 dark:text-slate-400 truncate mt-0.5">
             <span>{{ rangeTypeOptions.find((o) => o.value === rangeType)?.label }}</span>
+            <span class="mx-1.5">·</span>
+            <span>{{ selectedWalletLabel }}</span>
             <span class="mx-1.5">·</span>
             <span>Pemilik: {{ selectedOwner === 'all' ? 'Semua' : selectedOwner }}</span>
             <span class="mx-1.5">·</span>
@@ -799,7 +942,7 @@ const walletAllocation = computed(() => {
             Distribusi Pengeluaran per Kategori
           </h2>
           <p class="text-xs text-slate-500 dark:text-slate-400">
-            {{ formattedPeriodRangeLabel }} · Pemilik: {{ selectedOwner === 'all' ? 'Semua' : selectedOwner }}
+            {{ formattedPeriodRangeLabel }} · {{ selectedWalletLabel }} · Pemilik: {{ selectedOwner === 'all' ? 'Semua' : selectedOwner }}
           </p>
         </div>
 
@@ -839,12 +982,12 @@ const walletAllocation = computed(() => {
               Alokasi Dana Lintas Sumber Dana
             </h2>
             <p class="text-xs text-slate-500 dark:text-slate-400">
-              Komposisi saldo saat ini ({{ selectedOwner === 'all' ? 'Semua Pemilik' : `Pemilik: ${selectedOwner}` }})
+              Komposisi saldo saat ini ({{ selectedWalletLabel }} · {{ selectedOwner === 'all' ? 'Semua Pemilik' : `Pemilik: ${selectedOwner}` }})
             </p>
           </div>
 
           <div v-if="walletAllocation.length === 0" class="py-6 text-center text-xs text-slate-500">
-            Belum ada sumber dana untuk pemilik ini.
+            Belum ada sumber dana untuk cakupan ini.
           </div>
 
           <div v-else class="space-y-3.5">
@@ -880,7 +1023,7 @@ const walletAllocation = computed(() => {
               Sumber Pemasukan per Kategori
             </h2>
             <p class="text-xs text-slate-500 dark:text-slate-400">
-              {{ formattedPeriodRangeLabel }} · Pemilik: {{ selectedOwner === 'all' ? 'Semua' : selectedOwner }}
+              {{ formattedPeriodRangeLabel }} · {{ selectedWalletLabel }} · Pemilik: {{ selectedOwner === 'all' ? 'Semua' : selectedOwner }}
             </p>
           </div>
 
@@ -909,5 +1052,199 @@ const walletAllocation = computed(() => {
         </section>
       </div>
     </div>
+
+    <!-- =================================================================== -->
+    <!-- MODAL GENERATE LAPORAN PDF RESMI                                    -->
+    <!-- =================================================================== -->
+    <AppModal
+      v-model="pdfModalOpen"
+      title="Generate Laporan Keuangan PDF"
+      :subtitle="`Periode Aktif: ${formattedPeriodRangeLabel} (${rangeTypeOptions.find((o) => o.value === rangeType)?.label})`"
+      max-width="xl"
+    >
+      <div class="space-y-5">
+        <!-- 1. Pilih Jenis Laporan PDF -->
+        <div class="space-y-2">
+          <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+            1. Pilih Jenis Laporan PDF
+          </label>
+          <div class="grid grid-cols-1 gap-2.5">
+            <button
+              v-for="card in pdfReportTypeCards"
+              :key="card.id"
+              type="button"
+              class="w-full p-3.5 sm:p-4 rounded-2xl border text-left transition-all flex items-start gap-3.5 cursor-pointer"
+              :class="
+                pdfReportType === card.id
+                  ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/35 ring-2 ring-emerald-500/15'
+                  : 'border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/40 hover:border-slate-300 dark:hover:border-slate-700'
+              "
+              @click="pdfReportType = card.id"
+            >
+              <div
+                class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 mt-0.5 transition-colors"
+                :class="
+                  pdfReportType === card.id
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                "
+              >
+                <component :is="card.icon" class="w-5 h-5" />
+              </div>
+
+              <div class="min-w-0 flex-1 space-y-1">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <span class="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
+                    {{ card.title }}
+                  </span>
+                  <span
+                    class="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider"
+                    :class="
+                      pdfReportType === card.id
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                    "
+                  >
+                    {{ card.badge }}
+                  </span>
+                </div>
+                <p class="text-[11px] sm:text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  {{ card.subtitle }}
+                </p>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- 2. Opsi Cakupan Sumber Dana & Kepemilikan Dana -->
+        <div class="space-y-2.5">
+          <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+            2. Opsi Cakupan Sumber Dana &amp; Kepemilikan
+          </label>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div class="space-y-1.5">
+              <span class="block text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+                Cakupan Sumber Dana
+              </span>
+              <CustomSelect
+                v-model="pdfSelectedWallet"
+                :options="walletOptions"
+                placeholder="Semua Sumber Dana"
+                searchable
+                search-placeholder="Cari sumber dana..."
+              />
+            </div>
+
+            <div class="space-y-1.5">
+              <span class="block text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+                Cakupan Kepemilikan Dana
+              </span>
+              <CustomSelect
+                v-model="pdfSelectedOwner"
+                :options="ownerOptions"
+                placeholder="Semua Kepemilikan"
+                searchable
+                search-placeholder="Cari pemilik dana..."
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Ringkasan Pratinjau Data yang Akan Dicetak ke PDF -->
+        <div class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/25 p-4 space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-200/60 dark:border-emerald-900/50 pb-2.5">
+            <div>
+              <div class="text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                {{ pdfPreviewSummary.reportTitle }}
+              </div>
+              <div class="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                {{ pdfPreviewSummary.scopeWalletLabel }} · {{ pdfPreviewSummary.scopeOwnerLabel }} · {{ formattedPeriodRangeLabel }}
+              </div>
+            </div>
+            <span class="px-2.5 py-1 rounded-lg bg-emerald-600/15 text-emerald-700 dark:text-emerald-300 text-[11px] font-mono font-bold">
+              {{
+                pdfReportType === 'realisasi_anggaran'
+                  ? `${pdfPreviewSummary.budgetItemCount} Pos Anggaran`
+                  : `${pdfPreviewSummary.matchingTxCount} Transaksi`
+              }}
+            </span>
+          </div>
+
+          <!-- Preview metrics for Kas Umum & Rekonsiliasi Kas -->
+          <div
+            v-if="pdfReportType !== 'realisasi_anggaran'"
+            class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs"
+          >
+            <div class="rounded-xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 p-2.5">
+              <div class="text-[10px] text-slate-500 dark:text-slate-400">Saldo Awal</div>
+              <div class="font-money font-bold text-slate-900 dark:text-slate-100 mt-0.5 truncate">
+                {{ themeStore.formatMoney(pdfPreviewSummary.saldoAwal) }}
+              </div>
+            </div>
+            <div class="rounded-xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 p-2.5">
+              <div class="text-[10px] text-slate-500 dark:text-slate-400">Pemasukan</div>
+              <div class="font-money font-bold text-emerald-600 dark:text-emerald-400 mt-0.5 truncate">
+                +{{ themeStore.formatMoney(pdfPreviewSummary.totalIncome) }}
+              </div>
+            </div>
+            <div class="rounded-xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 p-2.5">
+              <div class="text-[10px] text-slate-500 dark:text-slate-400">Pengeluaran</div>
+              <div class="font-money font-bold text-rose-600 dark:text-rose-400 mt-0.5 truncate">
+                -{{ themeStore.formatMoney(pdfPreviewSummary.totalExpense) }}
+              </div>
+            </div>
+            <div class="rounded-xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 p-2.5">
+              <div class="text-[10px] text-slate-500 dark:text-slate-400">Saldo Akhir</div>
+              <div class="font-money font-bold text-slate-900 dark:text-slate-100 mt-0.5 truncate">
+                {{ themeStore.formatMoney(pdfPreviewSummary.saldoAkhir) }}
+              </div>
+            </div>
+          </div>
+
+          <!-- Preview metrics for Realisasi / Serapan Anggaran -->
+          <div v-else class="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
+            <div class="rounded-xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 p-2.5">
+              <div class="text-[10px] text-slate-500 dark:text-slate-400">Total Pagu Anggaran</div>
+              <div class="font-money font-bold text-slate-900 dark:text-slate-100 mt-0.5 truncate">
+                {{ themeStore.formatMoney(pdfPreviewSummary.totalBudgetLimit) }}
+              </div>
+            </div>
+            <div class="rounded-xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 p-2.5">
+              <div class="text-[10px] text-slate-500 dark:text-slate-400">Realisasi Terpakai</div>
+              <div class="font-money font-bold text-rose-600 dark:text-rose-400 mt-0.5 truncate">
+                {{ themeStore.formatMoney(pdfPreviewSummary.totalBudgetRealized) }}
+              </div>
+            </div>
+            <div class="col-span-2 sm:col-span-1 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 p-2.5">
+              <div class="text-[10px] text-slate-500 dark:text-slate-400">Serapan Anggaran</div>
+              <div class="font-money font-bold text-emerald-600 dark:text-emerald-400 mt-0.5 truncate">
+                {{ pdfPreviewSummary.budgetAbsorptionRate }}%
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex flex-col sm:flex-row sm:items-center justify-end gap-2.5 w-full">
+          <button
+            type="button"
+            class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            @click="pdfModalOpen = false"
+          >
+            Batal
+          </button>
+          <button
+            type="button"
+            :disabled="isGeneratingPdf"
+            class="w-full sm:w-auto min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
+            @click="handleDownloadPdfReport"
+          >
+            <Check v-if="!isGeneratingPdf" class="w-4 h-4 shrink-0" />
+            <span>{{ isGeneratingPdf ? 'Menyiapkan Dokumen PDF...' : 'Unduh Laporan PDF' }}</span>
+          </button>
+        </div>
+      </template>
+    </AppModal>
   </div>
 </template>
