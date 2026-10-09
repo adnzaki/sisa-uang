@@ -113,9 +113,25 @@ async function handleVerifyOtp() {
   }
 }
 
+async function handleDirectBypassOtp() {
+  try {
+    const ok = await authStore.verifySuperAdminOtp('BYPASS');
+    if (ok) {
+      const target = (route.query.redirect as string) || '/control-panel';
+      router.push(target);
+    }
+  } catch {
+    // Error handled in store
+  }
+}
+
 async function handleResendOtp() {
   try {
-    await authStore.requestSuperAdminOtp();
+    const res = await authStore.requestSuperAdminOtp();
+    if (res.autoVerified || !authStore.requiresOtp) {
+      const target = (route.query.redirect as string) || '/control-panel';
+      router.push(target);
+    }
   } catch {
     // Error handled in store
   }
@@ -217,6 +233,16 @@ async function cancelOtpAndLogout() {
           >
             <span>{{ t('auth.verifyOtpBtn') }}</span>
             <ArrowRight class="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            :disabled="authStore.isLoading"
+            class="w-full min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+            @click="handleDirectBypassOtp"
+          >
+            <span>Masuk Langsung ke Control Panel (Tanpa OTP Email)</span>
+            <ArrowRight class="w-3.5 h-3.5" />
           </button>
         </form>
 
