@@ -120,6 +120,7 @@ export interface OwnershipSummaryItem {
 
 // In Firestore `sisa-uang`, user ID `ci4_user_46` (`default_category@sisa-uang.com`) holds the 45 global default categories
 export const DEFAULT_CATEGORY_OWNER_ID = 'ci4_user_46';
+export const BUDGET_PERIOD_MARKER_CATEGORY = '__PERIOD_MARKER__';
 
 export const FALLBACK_EXPENSE_CATEGORIES = [
   'Makan dan Minum',
@@ -210,6 +211,7 @@ export const useFinanceStore = defineStore('finance', () => {
   const defaultCategories = ref<CategoryItem[]>([]);
   const rawTransactions = ref<TransactionItem[]>([]);
   const budgets = ref<BudgetItem[]>([]);
+  const budgetPeriods = ref<string[]>([]);
 
   const userCategories = computed<CategoryItem[]>(() =>
     rawUserCategories.value
@@ -344,6 +346,7 @@ export const useFinanceStore = defineStore('finance', () => {
       localStorage.setItem(storageKey('wallet_owners', uid), JSON.stringify(rawWalletOwners.value));
       localStorage.setItem(storageKey('user_categories', uid), JSON.stringify(rawUserCategories.value));
       localStorage.setItem(storageKey('budgets', uid), JSON.stringify(budgets.value));
+      localStorage.setItem(storageKey('budget_periods', uid), JSON.stringify(budgetPeriods.value));
       if (defaultCategories.value.length > 0) {
         localStorage.setItem('sisa_uang_real_default_categories', JSON.stringify(defaultCategories.value));
       }
@@ -746,12 +749,24 @@ export const useFinanceStore = defineStore('finance', () => {
     });
     rawTransactions.value = txList;
 
-    budgets.value = budgetSnap.docs
+    const allActiveBudgetDocs = budgetSnap.docs
       .map((d: any) => ({
         id: d.id,
         ...(d.data() as Omit<BudgetItem, 'id'>),
       }))
       .filter((b: BudgetItem) => !b.deleted);
+
+    budgets.value = allActiveBudgetDocs.filter(
+      (b: BudgetItem) => b.category !== BUDGET_PERIOD_MARKER_CATEGORY
+    );
+
+    const periodSet = new Set<string>(budgetPeriods.value);
+    for (const b of allActiveBudgetDocs) {
+      if (b.period && /^\d{4}-\d{2}$/.test(b.period)) {
+        periodSet.add(b.period);
+      }
+    }
+    budgetPeriods.value = Array.from(periodSet).sort((a, b) => b.localeCompare(a));
 
     syncWalletTotalBalancesFromHolders();
 
@@ -856,6 +871,7 @@ export const useFinanceStore = defineStore('finance', () => {
     rawUserCategories.value = [];
     rawTransactions.value = [];
     budgets.value = [];
+    budgetPeriods.value = [];
 
     let hasRestoredLocalCache = false;
     let localSyncToken = 0;
@@ -868,6 +884,7 @@ export const useFinanceStore = defineStore('finance', () => {
       const savedDefaultCats = localStorage.getItem('sisa_uang_real_default_categories');
       const savedTransactions = localStorage.getItem(storageKey('transactions', uid));
       const savedBudgets = localStorage.getItem(storageKey('budgets', uid));
+      const savedBudgetPeriods = localStorage.getItem(storageKey('budget_periods', uid));
       const savedSyncToken =
         localStorage.getItem(storageKey('sync_token', uid)) ||
         localStorage.getItem(storageKey('last_sync_at', uid));
@@ -886,7 +903,22 @@ export const useFinanceStore = defineStore('finance', () => {
       if (savedUserCats) rawUserCategories.value = JSON.parse(savedUserCats);
       if (savedDefaultCats) defaultCategories.value = JSON.parse(savedDefaultCats);
       if (savedTransactions) rawTransactions.value = JSON.parse(savedTransactions);
-      if (savedBudgets) budgets.value = JSON.parse(savedBudgets);
+      if (savedBudgets) {
+        const parsedBudgets = JSON.parse(savedBudgets) as BudgetItem[];
+        budgets.value = parsedBudgets.filter(
+          (b) => !b.deleted && b.category !== BUDGET_PERIOD_MARKER_CATEGORY
+        );
+      }
+      const periodSet = new Set<string>();
+      if (savedBudgetPeriods) {
+        for (const p of JSON.parse(savedBudgetPeriods) as string[]) {
+          if (p && /^\d{4}-\d{2}$/.test(p)) periodSet.add(p);
+        }
+      }
+      for (const b of budgets.value) {
+        if (b.period && /^\d{4}-\d{2}$/.test(b.period)) periodSet.add(b.period);
+      }
+      budgetPeriods.value = Array.from(periodSet).sort((a, b) => b.localeCompare(a));
 
       syncWalletTotalBalancesFromHolders();
 
@@ -1055,27 +1087,59 @@ export const useFinanceStore = defineStore('finance', () => {
       .reduce((acc, t) => acc + Number(t.amount || 0), 0)
   );
 
-  const totalBudgetLimit = computed(() =>
-    budgets.value.reduce((acc, b) => acc + Number(b.limitAmount || 0), 0)
-  );
+  /**
+   * Helper to compute enriched budgets for any specific `YYYY-MM` period (or 'all').
+   * Calculates actual `spentAmount` strictly from real expense transactions of that exact period & category!
+   */
+  function getEnrichedBudgetsByPeriod(targetPeriod: string) {
+    const cleanPeriod = targetPeriod || getCurrentMonthPeriod();
+    const relevantBudgets =
+      cleanPeriod === 'all'
+        ? budgets.value.filter((b) => !b.deleted && b.category !== BUDGET_PERIOD_MARKER_CATEGORY)
+        : budgets.value.filter(
+            (b) =>
+              !b.deleted &&
+              b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
+              b.period === cleanPeriod
+          );
 
-  const enrichedBudgets = computed(() => {
-    return budgets.value.map((b) => {
-      const txSpent = periodTransactions.value
-        .filter((t) => t.type === 'expense' && t.category.toLowerCase() === b.category.toLowerCase())
+    return relevantBudgets.map((b) => {
+      const txSpent = transactions.value
+        .filter(
+          (t) =>
+            t.type === 'expense' &&
+            String(t.date || '').slice(0, 7) === b.period &&
+            t.category.trim().toLowerCase() === b.category.trim().toLowerCase()
+        )
         .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-      const effectiveSpent = txSpent > 0 ? txSpent : Number(b.spentAmount || 0);
-      const remaining = Math.max(0, b.limitAmount - effectiveSpent);
-      const percentage =
-        b.limitAmount > 0 ? Math.min(100, Math.round((effectiveSpent / b.limitAmount) * 100)) : 0;
+
+      const effectiveSpent = txSpent;
+      const limit = Number(b.limitAmount || 0);
+      const remaining = Math.max(0, limit - effectiveSpent);
+      const overAmount = Math.max(0, effectiveSpent - limit);
+      const rawPercentage = limit > 0 ? Math.round((effectiveSpent / limit) * 100) : 0;
+      const percentage = Math.min(100, rawPercentage);
+
       return {
         ...b,
         spentAmount: effectiveSpent,
         remaining,
+        overAmount,
+        rawPercentage,
         percentage,
       };
     });
-  });
+  }
+
+  const enrichedBudgets = computed(() => getEnrichedBudgetsByPeriod(selectedPeriod.value));
+
+  const totalBudgetLimit = computed(() =>
+    enrichedBudgets.value.reduce((acc, b) => acc + Number(b.limitAmount || 0), 0)
+  );
+
+  const totalBudgetSpent = computed(() =>
+    enrichedBudgets.value.reduce((acc, b) => acc + Number(b.spentAmount || 0), 0)
+  );
 
   /**
    * Sisa Uang Aktif:
@@ -2408,10 +2472,159 @@ export const useFinanceStore = defineStore('finance', () => {
   }
 
   // =========================================================================
-  // Actions: Budgets (Anggaran Bulanan)
+  // Actions: Budgets & Budget Periods (Anggaran Bulanan Berbasis Periode)
   // =========================================================================
 
-  async function saveBudget(payload: { category: string; limitAmount: number }) {
+  async function addBudgetPeriod(periodInput: string): Promise<boolean> {
+    const authStore = useAuthStore();
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
+    const cleanPeriod = String(periodInput || '').trim();
+
+    if (!/^\d{4}-\d{2}$/.test(cleanPeriod)) {
+      useNotificationStore().notifyError(
+        'Format Periode Tidak Valid',
+        'Pilih bulan dan tahun anggaran yang valid.'
+      );
+      return false;
+    }
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
+    const minAllowedPeriod = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+    const maxAllowedPeriod = `${currentYear + 1}-12`;
+
+    if (cleanPeriod < minAllowedPeriod || cleanPeriod > maxAllowedPeriod) {
+      useNotificationStore().notifyError(
+        'Periode Di Luar Batas',
+        `Periode anggaran yang dapat ditambahkan hanya mulai bulan berjalan (${formatPeriodLabel(minAllowedPeriod)}) hingga Desember ${currentYear + 1}.`
+      );
+      return false;
+    }
+
+    const alreadyExists =
+      budgetPeriods.value.includes(cleanPeriod) ||
+      budgets.value.some((b) => !b.deleted && b.period === cleanPeriod);
+
+    if (alreadyExists) {
+      useNotificationStore().notifyError(
+        'Periode Sudah Ada',
+        `Periode anggaran ${formatPeriodLabel(cleanPeriod)} sudah terdaftar.`
+      );
+      return false;
+    }
+
+    const markerDocId = sanitizeId(`su_bgp_${uid}_${cleanPeriod.replace('-', '_')}`);
+    await ensureFirestoreSessionForUser(uid);
+
+    try {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'budgets', markerDocId), {
+        ownerId: uid,
+        category: BUDGET_PERIOD_MARKER_CATEGORY,
+        limitAmount: 1,
+        spentAmount: 0,
+        period: cleanPeriod,
+        deleted: false,
+        deletedAt: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
+    } catch (err) {
+      useNotificationStore().notifyError('Gagal Menambahkan Periode Anggaran', err);
+      handleFirestoreError(err, OperationType.CREATE, `budgets/${markerDocId}`);
+    }
+
+    if (!budgetPeriods.value.includes(cleanPeriod)) {
+      budgetPeriods.value.push(cleanPeriod);
+      budgetPeriods.value.sort((a, b) => b.localeCompare(a));
+    }
+    saveLocalSnapshot(uid, true);
+
+    await authStore.recordAuditLog(
+      'budget_period_created',
+      `Menambahkan periode anggaran baru: ${formatPeriodLabel(cleanPeriod)} (${cleanPeriod}).`,
+      'info'
+    );
+    useNotificationStore().notifySuccess(
+      'Periode Anggaran Ditambahkan',
+      `Periode ${formatPeriodLabel(cleanPeriod)} berhasil dibuat. Klik periode tersebut untuk mulai menambahkan kategori anggaran.`
+    );
+    return true;
+  }
+
+  async function removeBudgetPeriod(periodInput: string): Promise<boolean> {
+    const authStore = useAuthStore();
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
+    const cleanPeriod = String(periodInput || '').trim();
+
+    const activeBudgetsInPeriod = budgets.value.filter(
+      (b) =>
+        !b.deleted &&
+        b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
+        b.period === cleanPeriod
+    );
+
+    if (activeBudgetsInPeriod.length > 0) {
+      useNotificationStore().notifyError(
+        'Periode Tidak Dapat Dihapus',
+        `Periode ${formatPeriodLabel(cleanPeriod)} masih memiliki ${activeBudgetsInPeriod.length} kategori anggaran aktif. Hapus seluruh anggaran di dalamnya terlebih dahulu.`
+      );
+      return false;
+    }
+
+    const confirmed = await useNotificationStore().requestConfirmation({
+      title: 'Konfirmasi Hapus Periode Anggaran',
+      message: `Apakah Anda yakin ingin menghapus periode anggaran "${formatPeriodLabel(cleanPeriod)}"?`,
+      detail: 'Periode ini kosong dan belum memiliki item kategori anggaran aktif.',
+      confirmLabel: 'Ya, Hapus Periode',
+    });
+    if (!confirmed) return false;
+
+    const markerDocId = sanitizeId(`su_bgp_${uid}_${cleanPeriod.replace('-', '_')}`);
+    await ensureFirestoreSessionForUser(uid);
+
+    try {
+      const batch = writeBatch(db);
+      batch.set(
+        doc(db, 'budgets', markerDocId),
+        {
+          ownerId: uid,
+          category: BUDGET_PERIOD_MARKER_CATEGORY,
+          limitAmount: 1,
+          spentAmount: 0,
+          period: cleanPeriod,
+          deleted: true,
+          deletedAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
+    } catch {
+      // Ignore if marker doc didn't exist on server
+    }
+
+    budgetPeriods.value = budgetPeriods.value.filter((p) => p !== cleanPeriod);
+    saveLocalSnapshot(uid, true);
+
+    useNotificationStore().notifySuccess(
+      'Periode Anggaran Dihapus',
+      `Periode ${formatPeriodLabel(cleanPeriod)} berhasil dihapus.`
+    );
+    return true;
+  }
+
+  async function saveBudget(payload: {
+    id?: string | null;
+    category: string;
+    limitAmount: number;
+    period?: string;
+  }) {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
     const safeCategory = sanitizeString(
@@ -2421,13 +2634,21 @@ export const useFinanceStore = defineStore('finance', () => {
     );
     const numericLimit = Math.max(10000, Number(payload.limitAmount) || 0);
     const period =
-      selectedPeriod.value && selectedPeriod.value !== 'all'
-        ? selectedPeriod.value
-        : getCurrentMonthPeriod();
+      payload.period && /^\d{4}-\d{2}$/.test(payload.period)
+        ? payload.period
+        : selectedPeriod.value && selectedPeriod.value !== 'all'
+          ? selectedPeriod.value
+          : getCurrentMonthPeriod();
 
-    const existing = budgets.value.find(
-      (b) => b.category.toLowerCase() === safeCategory.toLowerCase()
-    );
+    // Match either by explicit editing ID or by (period + category)
+    const existing = payload.id
+      ? budgets.value.find((b) => b.id === payload.id)
+      : budgets.value.find(
+          (b) =>
+            !b.deleted &&
+            b.period === period &&
+            b.category.trim().toLowerCase() === safeCategory.trim().toLowerCase()
+        );
     const targetId = existing ? existing.id : sanitizeId(`su_bg_${Date.now()}`);
 
     await ensureFirestoreSessionForUser(uid);
@@ -2478,16 +2699,20 @@ export const useFinanceStore = defineStore('finance', () => {
         deleted: false,
       });
     }
+    if (!budgetPeriods.value.includes(period)) {
+      budgetPeriods.value.push(period);
+      budgetPeriods.value.sort((a, b) => b.localeCompare(a));
+    }
     saveLocalSnapshot(uid, true);
 
     await authStore.recordAuditLog(
       'budget_updated',
-      `Mengatur batas anggaran kategori "${safeCategory}" sebesar Rp ${numericLimit.toLocaleString('id-ID')}.`,
+      `Mengatur batas anggaran kategori "${safeCategory}" (${formatPeriodLabel(period)}) sebesar Rp ${numericLimit.toLocaleString('id-ID')}.`,
       'info'
     );
     useNotificationStore().notifySuccess(
       'Anggaran Disimpan',
-      `Batas anggaran "${safeCategory}" diatur sebesar Rp ${numericLimit.toLocaleString('id-ID')}.`
+      `Batas anggaran "${safeCategory}" (${formatPeriodLabel(period)}) diatur sebesar Rp ${numericLimit.toLocaleString('id-ID')}.`
     );
   }
 
@@ -2500,7 +2725,7 @@ export const useFinanceStore = defineStore('finance', () => {
       title: 'Konfirmasi Hapus Anggaran',
       message: `Apakah Anda yakin ingin menghapus batas anggaran untuk kategori "${target?.category || budgetId}"?`,
       detail: target
-        ? `Batas anggaran: Rp ${Number(target.limitAmount || 0).toLocaleString('id-ID')}. Data anggaran kategori ini akan diarsipkan.`
+        ? `Periode: ${formatPeriodLabel(target.period)} · Batas anggaran: Rp ${Number(target.limitAmount || 0).toLocaleString('id-ID')}. Data anggaran kategori ini akan diarsipkan.`
         : 'Data anggaran kategori ini akan diarsipkan.',
       confirmLabel: 'Ya, Hapus Anggaran',
     });
@@ -2521,13 +2746,20 @@ export const useFinanceStore = defineStore('finance', () => {
       handleFirestoreError(err, OperationType.UPDATE, `budgets/${budgetId}`);
     }
 
+    // Keep the period in `budgetPeriods` even if its last budget item is removed,
+    // so the empty period card remains visible until the user explicitly deletes the period.
+    if (target?.period && !budgetPeriods.value.includes(target.period)) {
+      budgetPeriods.value.push(target.period);
+      budgetPeriods.value.sort((a, b) => b.localeCompare(a));
+    }
+
     budgets.value = budgets.value.filter((b) => b.id !== budgetId);
     saveLocalSnapshot(uid, true);
 
     if (target) {
       useNotificationStore().notifySuccess(
         'Anggaran Dihapus',
-        `Anggaran kategori "${target.category}" berhasil diarsipkan (Soft Delete).`
+        `Anggaran kategori "${target.category}" (${formatPeriodLabel(target.period)}) berhasil dihapus.`
       );
     }
     return true;
@@ -2547,7 +2779,9 @@ export const useFinanceStore = defineStore('finance', () => {
     availablePeriods,
     selectedPeriod,
     budgets,
+    budgetPeriods,
     enrichedBudgets,
+    getEnrichedBudgetsByPeriod,
     ownershipSummary,
     isLoading,
     isSyncedWithFirestore,
@@ -2561,6 +2795,7 @@ export const useFinanceStore = defineStore('finance', () => {
     monthlyTransfer,
     periodNetCashflow,
     totalBudgetLimit,
+    totalBudgetSpent,
     sisaUangBulanIni,
     daysRemainingInMonth,
     safeDailySpend,
@@ -2585,6 +2820,8 @@ export const useFinanceStore = defineStore('finance', () => {
     addTransaction,
     updateTransaction,
     removeTransaction,
+    addBudgetPeriod,
+    removeBudgetPeriod,
     saveBudget,
     removeBudget,
   };
