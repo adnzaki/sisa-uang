@@ -364,7 +364,7 @@ const periodNetDelta = computed(() => {
 
 const saldoAwal = computed(() => saldoAkhir.value - periodNetDelta.value);
 
-// Period Income & Expense for selected range and owner
+// Period Income & Expense for selected range and owner (strictly pure income & pure expense + admin fee)
 const periodIncome = computed(() => {
   const owner = selectedOwner.value;
   let sum = 0;
@@ -373,15 +373,6 @@ const periodIncome = computed(() => {
       if (owner === 'all' || formatHolderName(tx.fundOwnerName) === owner) {
         sum += Number(tx.amount || 0);
       }
-    } else if (
-      tx.type === 'transfer' &&
-      owner !== 'all' &&
-      tx.toFundOwnerName &&
-      formatHolderName(tx.toFundOwnerName) === owner &&
-      formatHolderName(tx.fundOwnerName) !== owner
-    ) {
-      // Incoming transfer from another owner into this owner
-      sum += Number(tx.amount || 0);
     }
   }
   return sum;
@@ -394,19 +385,52 @@ const periodExpense = computed(() => {
     const isSource = owner === 'all' || formatHolderName(tx.fundOwnerName) === owner;
     if (tx.type === 'expense' && isSource) {
       sum += Number(tx.amount || 0);
-    } else if (tx.type === 'transfer' && isSource) {
-      const fee = Number(tx.adminFee || 0);
-      if (owner === 'all') {
-        sum += fee;
-      } else {
-        const isDestSameOwner =
-          tx.toFundOwnerName && formatHolderName(tx.toFundOwnerName) === owner;
-        sum += isDestSameOwner ? fee : Number(tx.amount || 0) + fee;
+    } else if (tx.type === 'transfer' && isSource && Number(tx.adminFee || 0) > 0) {
+      sum += Number(tx.adminFee || 0);
+    }
+  }
+  return sum;
+});
+
+// Pure Cashflow Difference (Total Pemasukan - Total Pengeluaran)
+const periodCashflowDiff = computed(() => periodIncome.value - periodExpense.value);
+
+// Cross-owner transfer in/out when a specific owner is selected
+const periodCrossOwnerTransferIn = computed(() => {
+  const owner = selectedOwner.value;
+  if (!owner || owner === 'all') return 0;
+  let sum = 0;
+  for (const tx of filteredPeriodTransactions.value) {
+    if (tx.type === 'transfer') {
+      const srcOwner = formatHolderName(tx.fundOwnerName);
+      const dstOwner = tx.toFundOwnerName ? formatHolderName(tx.toFundOwnerName) : srcOwner;
+      if (dstOwner === owner && srcOwner !== owner) {
+        sum += Number(tx.amount || 0);
       }
     }
   }
   return sum;
 });
+
+const periodCrossOwnerTransferOut = computed(() => {
+  const owner = selectedOwner.value;
+  if (!owner || owner === 'all') return 0;
+  let sum = 0;
+  for (const tx of filteredPeriodTransactions.value) {
+    if (tx.type === 'transfer') {
+      const srcOwner = formatHolderName(tx.fundOwnerName);
+      const dstOwner = tx.toFundOwnerName ? formatHolderName(tx.toFundOwnerName) : srcOwner;
+      if (srcOwner === owner && dstOwner !== owner) {
+        sum += Number(tx.amount || 0);
+      }
+    }
+  }
+  return sum;
+});
+
+const periodNetTransferDelta = computed(
+  () => periodCrossOwnerTransferIn.value - periodCrossOwnerTransferOut.value
+);
 
 const periodSavingsRate = computed(() => {
   if (periodIncome.value <= 0) return 0;
@@ -735,15 +759,31 @@ const walletAllocation = computed(() => {
         <div
           class="text-xl sm:text-2xl font-money font-bold tabular-nums truncate"
           :class="
-            periodNetDelta >= 0
+            periodCashflowDiff >= 0
               ? 'text-emerald-600 dark:text-emerald-400'
               : 'text-rose-600 dark:text-rose-400'
           "
         >
-          {{ periodNetDelta >= 0 ? '+' : '' }}{{ themeStore.formatMoney(periodNetDelta) }}
+          {{ periodCashflowDiff >= 0 ? '+' : '' }}{{ themeStore.formatMoney(periodCashflowDiff) }}
         </div>
         <div class="text-xs text-slate-500 dark:text-slate-400 truncate">
           Rasio Tabungan: <strong class="font-money">{{ periodSavingsRate }}%</strong>
+          <template v-if="selectedOwner !== 'all' && periodNetTransferDelta !== 0">
+            <span class="mx-1">·</span>
+            <span>
+              Mutasi Antar Pemilik:
+              <strong
+                class="font-money"
+                :class="
+                  periodNetTransferDelta >= 0
+                    ? 'text-indigo-600 dark:text-indigo-400'
+                    : 'text-amber-600 dark:text-amber-400'
+                "
+              >
+                {{ periodNetTransferDelta >= 0 ? '+' : '' }}{{ themeStore.formatMoney(periodNetTransferDelta) }}
+              </strong>
+            </span>
+          </template>
         </div>
       </div>
     </div>

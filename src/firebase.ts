@@ -1,7 +1,14 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { doc, getDocFromServer, initializeFirestore } from 'firebase/firestore';
+import {
+  doc,
+  getDocFromServer,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
+import { useNotificationStore } from './stores/notification';
 
 // Blueprint validation constants (verbatim synced from firebase-blueprint.json)
 export const VALID_ID_PATTERN = /^[a-zA-Z0-9_\-]+$/;
@@ -29,11 +36,14 @@ export function sanitizeString(raw: string | null | undefined, maxLen: number, f
 // Exact Firebase configuration provided by user for project "sisa-uang-dfb7b" and named database "sisa-uang"
 const app = initializeApp(firebaseConfig);
 
-// Connect specifically to named database "sisa-uang" (firebaseConfig.firestoreDatabaseId === "sisa-uang")
+// Connect specifically to named database "sisa-uang" with IndexedDB persistent local cache so previously fetched documents are served from local cache without re-reading unchanged docs from Firestore
 export const db = initializeFirestore(
   app,
   {
     experimentalForceLongPolling: true,
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager(),
+    }),
   },
   firebaseConfig.firestoreDatabaseId
 );
@@ -45,6 +55,26 @@ googleProvider.setCustomParameters({ prompt: 'select_account' });
 // Export aliases so all stores refer to the exact same "sisa-uang" database & auth instance
 export const sisaUangDb = db;
 export const sisaUangAuth = auth;
+
+export function isFirestoreQuotaError(error: unknown): boolean {
+  const anyErr = error as any;
+  const code = String(anyErr?.code || '').toLowerCase();
+  const msg = String(anyErr?.message || error || '').toLowerCase();
+  const respErr = String(anyErr?.response?.data?.error || '').toLowerCase();
+  return (
+    code === 'resource-exhausted' ||
+    code.includes('resource-exhausted') ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('quota limit exceeded') ||
+    msg.includes('quota exceeded') ||
+    msg.includes('free daily read units') ||
+    msg.includes('kuota baca harian gratis') ||
+    msg.includes('db-unhandled') ||
+    respErr.includes('resource-exhausted') ||
+    respErr.includes('quota') ||
+    respErr.includes('db-unhandled')
+  );
+}
 
 export enum OperationType {
   CREATE = 'create',
@@ -77,6 +107,13 @@ export function handleFirestoreError(
   operationType: OperationType,
   path: string | null
 ): never {
+  if (isFirestoreQuotaError(error)) {
+    try {
+      useNotificationStore().notifyQuotaExceeded();
+    } catch {
+      // Ignore if Pinia is not active yet
+    }
+  }
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -98,14 +135,3 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
-    }
-  }
-}
-
-testConnection();

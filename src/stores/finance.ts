@@ -3,14 +3,13 @@ import { ref, computed } from 'vue';
 import {
   collection,
   doc,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  onSnapshot,
+  getDoc,
+  getDocs,
   query,
   where,
   serverTimestamp,
   writeBatch,
+  type WriteBatch,
 } from 'firebase/firestore';
 import {
   signInWithEmailAndPassword,
@@ -21,6 +20,7 @@ import {
   db,
   OperationType,
   handleFirestoreError,
+  isFirestoreQuotaError,
   sanitizeId,
   sanitizeString,
   MAX_WALLET_NAME_LENGTH,
@@ -290,12 +290,38 @@ export const useFinanceStore = defineStore('finance', () => {
   const selectedPeriod = ref<string>(getCurrentMonthPeriod());
   const hasAutoSelectedPeriod = ref(false);
 
-  let unsubWallets: (() => void) | null = null;
-  let unsubWalletOwners: (() => void) | null = null;
-  let unsubUserCategories: (() => void) | null = null;
-  let unsubDefaultCategories: (() => void) | null = null;
-  let unsubTransactions: (() => void) | null = null;
-  let unsubBudgets: (() => void) | null = null;
+  // Extract millisecond timestamp from Firestore Timestamp, serialized object, or ISO string
+  function extractTimestampMillis(val: any): number {
+    if (!val) return 0;
+    if (typeof val === 'number') return val;
+    if (typeof val.toMillis === 'function') {
+      try {
+        return Number(val.toMillis()) || 0;
+      } catch {
+        return 0;
+      }
+    }
+    if (typeof val === 'object' && typeof val.seconds === 'number') {
+      return val.seconds * 1000 + Math.floor((Number(val.nanoseconds) || 0) / 1e6);
+    }
+    if (typeof val === 'string') {
+      const parsed = Date.parse(val);
+      return Number.isNaN(parsed) ? 0 : parsed;
+    }
+    return 0;
+  }
+
+  /**
+   * 1-Read Sync Token updater:
+   * Piggybacks `updatedAt: serverTimestamp()` onto `/users/{uid}` inside the same atomic WriteBatch
+   * whenever any financial mutation happens, so other devices can detect changes with just 1 document read.
+   */
+  function touchUserSyncTokenInBatch(batch: WriteBatch, uid: string) {
+    if (!uid || uid === 'guest') return;
+    batch.update(doc(db, 'users', uid), {
+      updatedAt: serverTimestamp(),
+    });
+  }
 
   function storageKey(prefix: string, uid: string) {
     return `sisa_uang_real_${prefix}_${uid}`;
@@ -309,48 +335,33 @@ export const useFinanceStore = defineStore('finance', () => {
     }
   }
 
-  function saveLocalSnapshot(uid: string) {
+  function saveLocalSnapshot(uid: string, markSyncedNow = false, remoteSyncTokenMs?: number) {
     if (!uid) return;
     try {
       localStorage.setItem(storageKey('wallets', uid), JSON.stringify(wallets.value));
       localStorage.setItem(storageKey('wallet_owners', uid), JSON.stringify(rawWalletOwners.value));
       localStorage.setItem(storageKey('user_categories', uid), JSON.stringify(rawUserCategories.value));
       localStorage.setItem(storageKey('budgets', uid), JSON.stringify(budgets.value));
-      // Only cache up to 300 recent transactions in localStorage to avoid quota issues
+      if (defaultCategories.value.length > 0) {
+        localStorage.setItem('sisa_uang_real_default_categories', JSON.stringify(defaultCategories.value));
+      }
+      // Cache up to 5,000 transactions in localStorage so complete user history is available offline and without re-reading
       localStorage.setItem(
         storageKey('transactions', uid),
-        JSON.stringify(rawTransactions.value.slice(0, 300))
+        JSON.stringify(rawTransactions.value.slice(0, 5000))
       );
+      if (markSyncedNow) {
+        const tokenMs = remoteSyncTokenMs && remoteSyncTokenMs > 0 ? remoteSyncTokenMs : Date.now();
+        localStorage.setItem(storageKey('sync_token', uid), String(tokenMs));
+        localStorage.setItem(storageKey('last_sync_at', uid), String(Date.now()));
+      }
     } catch {
       // Ignore storage quota errors on large datasets
     }
   }
 
   function cleanupListeners() {
-    if (unsubWallets) {
-      unsubWallets();
-      unsubWallets = null;
-    }
-    if (unsubWalletOwners) {
-      unsubWalletOwners();
-      unsubWalletOwners = null;
-    }
-    if (unsubUserCategories) {
-      unsubUserCategories();
-      unsubUserCategories = null;
-    }
-    if (unsubDefaultCategories) {
-      unsubDefaultCategories();
-      unsubDefaultCategories = null;
-    }
-    if (unsubTransactions) {
-      unsubTransactions();
-      unsubTransactions = null;
-    }
-    if (unsubBudgets) {
-      unsubBudgets();
-      unsubBudgets = null;
-    }
+    // Listeners are replaced with efficient on-demand/cached reads + optimistic local updates
   }
 
   /**
@@ -492,6 +503,102 @@ export const useFinanceStore = defineStore('finance', () => {
         : undefined;
 
       if (tx.type === 'transfer') {
+        const txNum = Number(String(tx.id || '').replace(/\D/g, ''));
+        const isMigratedCi4Tx = /^su_tx_\d+$/.test(String(tx.id || '')) && txNum < 100000;
+        const rawToFundOwnerNum = String(tx.toFundOwnerId || '').replace(/\D/g, '');
+
+        // Detect migrated CI4 transfer records where `toFundOwnerId` (`su_holder_{N}`) stored the destination wallet ID (`N`)
+        const migratedTargetWalletId =
+          isMigratedCi4Tx && rawToFundOwnerNum ? `su_wallet_${rawToFundOwnerNum}` : undefined;
+
+        const isBrokenLegacyDest =
+          migratedTargetWalletId &&
+          walletMap.has(migratedTargetWalletId) &&
+          (tx.toWalletId !== migratedTargetWalletId ||
+            (tx.toWalletId === tx.walletId && tx.toFundOwnerId === tx.fundOwnerId) ||
+            tx.toFundOwnerId === 'su_holder_31' ||
+            tx.toFundOwnerId === 'su_holder_42');
+
+        if (isBrokenLegacyDest && migratedTargetWalletId) {
+          resolvedToWalletId = migratedTargetWalletId;
+          const destWallet = walletMap.get(resolvedToWalletId);
+          resolvedToWalletName = destWallet?.name || resolvedWalletName;
+
+          const activeDestHolders = walletOwners.value.filter(
+            (h) => h.walletId === resolvedToWalletId
+          );
+          const allDestHolders = rawWalletOwners.value.filter(
+            (h) => h.walletId === resolvedToWalletId
+          );
+          const candidates = activeDestHolders.length > 0 ? activeDestHolders : allDestHolders;
+          const noteLower = String(tx.note || '').toLowerCase();
+
+          let resolvedDestHolder: WalletOwnerItem | undefined;
+
+          if (resolvedToWalletId === tx.walletId) {
+            // Same-wallet transfer (e.g. Pindah alokasi / Pindah owner / Normalisasi saldo inside the same wallet)
+            if (noteLower.includes('tabungan')) {
+              resolvedDestHolder = candidates.find(
+                (h) => formatHolderName(h.holderName) === 'Tabungan'
+              );
+            } else if (noteLower.includes('sekolah')) {
+              resolvedDestHolder = candidates.find(
+                (h) => formatHolderName(h.holderName) === 'Sekolah'
+              );
+            } else if (noteLower.includes('pribadi')) {
+              resolvedDestHolder = candidates.find(
+                (h) => formatHolderName(h.holderName) === 'Pribadi'
+              );
+            }
+            if (!resolvedDestHolder) {
+              resolvedDestHolder =
+                candidates.find(
+                  (h) =>
+                    h.id !== matchedHolder?.id &&
+                    formatHolderName(h.holderName) !== resolvedFundOwnerName
+                ) ||
+                candidates.find((h) => h.id !== matchedHolder?.id) ||
+                candidates[0];
+            }
+          } else {
+            // Cross-wallet transfer (e.g. Tarik tunai, Setor tunai, Top up Flip/OVO/GoPay, Isi tabungan)
+            if (noteLower.includes('tabungan')) {
+              resolvedDestHolder = candidates.find(
+                (h) => formatHolderName(h.holderName) === 'Tabungan'
+              );
+            } else if (noteLower.includes('sekolah') && !noteLower.includes('ganti')) {
+              resolvedDestHolder = candidates.find(
+                (h) => formatHolderName(h.holderName) === 'Sekolah'
+              );
+            }
+            if (!resolvedDestHolder) {
+              resolvedDestHolder =
+                candidates.find(
+                  (h) => formatHolderName(h.holderName) === resolvedFundOwnerName
+                ) ||
+                candidates.find((h) => formatHolderName(h.holderName) === 'Pribadi') ||
+                candidates[0];
+            }
+          }
+
+          if (resolvedDestHolder) {
+            resolvedToFundOwnerName = formatHolderName(resolvedDestHolder.holderName);
+          } else {
+            resolvedToFundOwnerName = resolvedFundOwnerName;
+          }
+
+          return {
+            ...tx,
+            walletName: resolvedWalletName,
+            fundOwnerId: matchedHolder?.id || tx.fundOwnerId,
+            fundOwnerName: resolvedFundOwnerName,
+            toWalletId: resolvedToWalletId,
+            toWalletName: resolvedToWalletName,
+            toFundOwnerId: resolvedDestHolder?.id || tx.toFundOwnerId,
+            toFundOwnerName: resolvedToFundOwnerName,
+          };
+        }
+
         if (!resolvedToWalletId && tx.toWalletName && /^\d+$/.test(tx.toWalletName)) {
           resolvedToWalletId = `su_wallet_${tx.toWalletName}`;
         }
@@ -562,12 +669,22 @@ export const useFinanceStore = defineStore('finance', () => {
     );
   });
 
-  async function initFinanceData(uidInput: string) {
+  async function initFinanceData(uidInput: string, forceRefresh = false) {
     cleanupListeners();
     const uid = sanitizeId(uidInput);
+
+    // If already loaded in memory for this user and not forced to refresh, skip re-fetching
+    if (
+      !forceRefresh &&
+      activeOwnerUid.value === uid &&
+      isSyncedWithFirestore.value &&
+      (wallets.value.length > 0 || rawTransactions.value.length > 0)
+    ) {
+      return;
+    }
+
     activeOwnerUid.value = uid;
     isLoading.value = true;
-    isSyncedWithFirestore.value = false;
     hasAutoSelectedPeriod.value = false;
 
     cleanupLegacyDummyStorage(uid);
@@ -579,14 +696,24 @@ export const useFinanceStore = defineStore('finance', () => {
     rawTransactions.value = [];
     budgets.value = [];
 
-    // Restore last known real Firestore snapshot from localStorage while Firestore connects
+    let hasRestoredLocalCache = false;
+    let localSyncToken = 0;
+
+    // Restore last known real Firestore snapshot from localStorage immediately
     try {
       const savedWallets = localStorage.getItem(storageKey('wallets', uid));
       const savedHolders = localStorage.getItem(storageKey('wallet_owners', uid));
       const savedUserCats = localStorage.getItem(storageKey('user_categories', uid));
+      const savedDefaultCats = localStorage.getItem('sisa_uang_real_default_categories');
       const savedTransactions = localStorage.getItem(storageKey('transactions', uid));
       const savedBudgets = localStorage.getItem(storageKey('budgets', uid));
+      const savedSyncToken =
+        localStorage.getItem(storageKey('sync_token', uid)) ||
+        localStorage.getItem(storageKey('last_sync_at', uid));
 
+      if (savedSyncToken) {
+        localSyncToken = Number(savedSyncToken) || 0;
+      }
       if (savedWallets) {
         wallets.value = (JSON.parse(savedWallets) as WalletItem[]).filter((w) => !w.deleted);
       }
@@ -596,9 +723,32 @@ export const useFinanceStore = defineStore('finance', () => {
         );
       }
       if (savedUserCats) rawUserCategories.value = JSON.parse(savedUserCats);
+      if (savedDefaultCats) defaultCategories.value = JSON.parse(savedDefaultCats);
       if (savedTransactions) rawTransactions.value = JSON.parse(savedTransactions);
       if (savedBudgets) budgets.value = JSON.parse(savedBudgets);
+
       syncWalletTotalBalancesFromHolders();
+
+      if (rawTransactions.value.length > 0 && !hasAutoSelectedPeriod.value) {
+        hasAutoSelectedPeriod.value = true;
+        const currentMonth = getCurrentMonthPeriod();
+        const hasCurrentMonthTx = rawTransactions.value.some(
+          (tx) => String(tx.date || '').slice(0, 7) === currentMonth
+        );
+        if (hasCurrentMonthTx) {
+          selectedPeriod.value = currentMonth;
+        } else {
+          const latestTxMonth = String(rawTransactions.value[0].date || '').slice(0, 7);
+          if (/^\d{4}-\d{2}$/.test(latestTxMonth)) {
+            selectedPeriod.value = latestTxMonth;
+          }
+        }
+      }
+
+      hasRestoredLocalCache =
+        wallets.value.length > 0 ||
+        rawWalletOwners.value.length > 0 ||
+        rawTransactions.value.length > 0;
     } catch {
       // Ignore corrupt cache
     }
@@ -606,152 +756,143 @@ export const useFinanceStore = defineStore('finance', () => {
     const canQueryFirestore = await ensureFirestoreSessionForUser(uid);
 
     if (canQueryFirestore) {
-      // 1. Wallets listener for this user (filters out soft-deleted items)
-      const walletsQuery = query(collection(db, 'wallets'), where('ownerId', '==', uid));
-      unsubWallets = onSnapshot(
-        walletsQuery,
-        (snap) => {
-          wallets.value = snap.docs
-            .map((d) => ({
-              id: d.id,
-              ...(d.data() as Omit<WalletItem, 'id'>),
-            }))
-            .filter((w) => !w.deleted)
-            .sort((a, b) => a.name.localeCompare(b.name));
-          syncWalletTotalBalancesFromHolders();
+      try {
+        let remoteSyncToken = 0;
+
+        // 1-Read Sync Token Check:
+        // Read ONLY 1 document (`/users/{uid}`) to verify if any other device modified financial data.
+        // If `remoteSyncToken <= localSyncToken + 2000` (2s clock-skew tolerance), serve directly from localStorage cache (only 1 read total!).
+        try {
+          const userSnap = await getDoc(doc(db, 'users', uid));
+          if (userSnap.exists()) {
+            const uData = userSnap.data();
+            remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
+          }
+        } catch (tokenErr) {
+          if (isFirestoreQuotaError(tokenErr)) {
+            useNotificationStore().notifyQuotaExceeded();
+            isLoading.value = false;
+            return;
+          }
+        }
+
+        if (
+          !forceRefresh &&
+          hasRestoredLocalCache &&
+          localSyncToken > 0 &&
+          (remoteSyncToken === 0 || remoteSyncToken <= localSyncToken + 2000)
+        ) {
           isSyncedWithFirestore.value = true;
           isLoading.value = false;
-          saveLocalSnapshot(uid);
-        },
-        (err) => {
-          isLoading.value = false;
-          handleFirestoreError(err, OperationType.LIST, 'wallets');
+          return;
         }
-      );
 
-      // 2. Wallet Owners (Kepemilikan Sumber Dana) listener for this user (filters out soft-deleted items)
-      const holdersQuery = query(collection(db, 'wallet_owners'), where('ownerId', '==', uid));
-      unsubWalletOwners = onSnapshot(
-        holdersQuery,
-        (snap) => {
-          rawWalletOwners.value = snap.docs
-            .map((d) => ({
-              id: d.id,
-              ...(d.data() as Omit<WalletOwnerItem, 'id'>),
-            }))
-            .filter((fo) => !fo.deleted);
-          syncWalletTotalBalancesFromHolders();
-          saveLocalSnapshot(uid);
-        },
-        (err) => {
-          handleFirestoreError(err, OperationType.LIST, 'wallet_owners');
+        const queries: Promise<any>[] = [
+          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
+          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
+          getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid))),
+          getDocs(query(collection(db, 'transactions'), where('ownerId', '==', uid))),
+          getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid))),
+        ];
+
+        // Only fetch global default categories if not already cached in localStorage
+        const shouldFetchDefaultCats =
+          uid !== DEFAULT_CATEGORY_OWNER_ID && defaultCategories.value.length === 0;
+        if (shouldFetchDefaultCats) {
+          queries.push(
+            getDocs(
+              query(collection(db, 'categories'), where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID))
+            )
+          );
         }
-      );
 
-      // 3A. User's Custom Categories listener (`ownerId == uid`, keeps raw list to track soft-deleted default overrides)
-      const userCatQuery = query(collection(db, 'categories'), where('ownerId', '==', uid));
-      unsubUserCategories = onSnapshot(
-        userCatQuery,
-        (snap) => {
-          rawUserCategories.value = snap.docs
-            .map((d) => ({
+        const results = await Promise.all(queries);
+        const [walletsSnap, holdersSnap, userCatSnap, txSnap, budgetSnap, defaultCatSnap] = results;
+
+        wallets.value = walletsSnap.docs
+          .map((d: any) => ({
+            id: d.id,
+            ...(d.data() as Omit<WalletItem, 'id'>),
+          }))
+          .filter((w: WalletItem) => !w.deleted)
+          .sort((a: WalletItem, b: WalletItem) => a.name.localeCompare(b.name));
+
+        rawWalletOwners.value = holdersSnap.docs
+          .map((d: any) => ({
+            id: d.id,
+            ...(d.data() as Omit<WalletOwnerItem, 'id'>),
+          }))
+          .filter((fo: WalletOwnerItem) => !fo.deleted);
+
+        rawUserCategories.value = userCatSnap.docs
+          .map((d: any) => ({
+            id: d.id,
+            ...(d.data() as Omit<CategoryItem, 'id'>),
+            isDefault: false,
+          }))
+          .sort((a: CategoryItem, b: CategoryItem) => a.name.localeCompare(b.name));
+
+        if (defaultCatSnap) {
+          defaultCategories.value = defaultCatSnap.docs
+            .map((d: any) => ({
               id: d.id,
               ...(d.data() as Omit<CategoryItem, 'id'>),
-              isDefault: false,
+              isDefault: true,
             }))
-            .sort((a, b) => a.name.localeCompare(b.name));
-          saveLocalSnapshot(uid);
-        },
-        (err) => {
-          handleFirestoreError(err, OperationType.LIST, 'categories');
+            .filter((c: CategoryItem) => !c.deleted)
+            .sort((a: CategoryItem, b: CategoryItem) => a.name.localeCompare(b.name));
         }
-      );
 
-      // 3B. Global Default Categories listener (`ownerId == 'ci4_user_46'` / `default_category`)
-      if (uid !== DEFAULT_CATEGORY_OWNER_ID) {
-        const defaultCatQuery = query(
-          collection(db, 'categories'),
-          where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID)
-        );
-        unsubDefaultCategories = onSnapshot(
-          defaultCatQuery,
-          (snap) => {
-            defaultCategories.value = snap.docs
-              .map((d) => ({
-                id: d.id,
-                ...(d.data() as Omit<CategoryItem, 'id'>),
-                isDefault: true,
-              }))
-              .filter((c) => !c.deleted)
-              .sort((a, b) => a.name.localeCompare(b.name));
-          },
-          () => {
-            // Ignore if default_category is not accessible
-          }
-        );
-      }
+        const txList: TransactionItem[] = txSnap.docs
+          .map((d: any) => ({
+            id: d.id,
+            ...(d.data() as Omit<TransactionItem, 'id'>),
+          }))
+          .filter((t: TransactionItem) => !t.deleted);
 
-      // 4. Transactions listener for this user (filters out soft-deleted items while preserving history in Firestore)
-      const txQuery = query(collection(db, 'transactions'), where('ownerId', '==', uid));
-      unsubTransactions = onSnapshot(
-        txQuery,
-        (snap) => {
-          const list = snap.docs
-            .map((d) => ({
-              id: d.id,
-              ...(d.data() as Omit<TransactionItem, 'id'>),
-            }))
-            .filter((t) => !t.deleted);
-          list.sort((a, b) => {
-            const cmp = String(b.date || '').localeCompare(String(a.date || ''));
-            if (cmp !== 0) return cmp;
-            return String(b.id || '').localeCompare(String(a.id || ''));
-          });
-          rawTransactions.value = list;
+        txList.sort((a, b) => {
+          const cmp = String(b.date || '').localeCompare(String(a.date || ''));
+          if (cmp !== 0) return cmp;
+          return String(b.id || '').localeCompare(String(a.id || ''));
+        });
+        rawTransactions.value = txList;
 
-          // Auto-select the user's most recent active month on initial load so Dashboard & Analytics immediately show real activity
-          if (!hasAutoSelectedPeriod.value && list.length > 0) {
-            hasAutoSelectedPeriod.value = true;
-            const currentMonth = getCurrentMonthPeriod();
-            const hasCurrentMonthTx = list.some(
-              (tx) => String(tx.date || '').slice(0, 7) === currentMonth
-            );
-            if (hasCurrentMonthTx) {
-              selectedPeriod.value = currentMonth;
-            } else {
-              const latestTxMonth = String(list[0].date || '').slice(0, 7);
-              if (/^\d{4}-\d{2}$/.test(latestTxMonth)) {
-                selectedPeriod.value = latestTxMonth;
-              }
+        budgets.value = budgetSnap.docs
+          .map((d: any) => ({
+            id: d.id,
+            ...(d.data() as Omit<BudgetItem, 'id'>),
+          }))
+          .filter((b: BudgetItem) => !b.deleted);
+
+        syncWalletTotalBalancesFromHolders();
+
+        if (!hasAutoSelectedPeriod.value && txList.length > 0) {
+          hasAutoSelectedPeriod.value = true;
+          const currentMonth = getCurrentMonthPeriod();
+          const hasCurrentMonthTx = txList.some(
+            (tx) => String(tx.date || '').slice(0, 7) === currentMonth
+          );
+          if (hasCurrentMonthTx) {
+            selectedPeriod.value = currentMonth;
+          } else {
+            const latestTxMonth = String(txList[0].date || '').slice(0, 7);
+            if (/^\d{4}-\d{2}$/.test(latestTxMonth)) {
+              selectedPeriod.value = latestTxMonth;
             }
           }
-
-          isLoading.value = false;
-          saveLocalSnapshot(uid);
-        },
-        (err) => {
-          isLoading.value = false;
-          handleFirestoreError(err, OperationType.LIST, 'transactions');
         }
-      );
 
-      // 5. Budgets listener for this user (filters out soft-deleted items)
-      const budgetQuery = query(collection(db, 'budgets'), where('ownerId', '==', uid));
-      unsubBudgets = onSnapshot(
-        budgetQuery,
-        (snap) => {
-          budgets.value = snap.docs
-            .map((d) => ({
-              id: d.id,
-              ...(d.data() as Omit<BudgetItem, 'id'>),
-            }))
-            .filter((b) => !b.deleted);
-          saveLocalSnapshot(uid);
-        },
-        (err) => {
-          handleFirestoreError(err, OperationType.LIST, 'budgets');
+        isSyncedWithFirestore.value = true;
+        isLoading.value = false;
+        saveLocalSnapshot(uid, true, Math.max(remoteSyncToken, Date.now()));
+      } catch (err) {
+        isLoading.value = false;
+        if (isFirestoreQuotaError(err)) {
+          useNotificationStore().notifyQuotaExceeded();
+          return;
         }
-      );
+        handleFirestoreError(err, OperationType.LIST, 'finance_collections');
+      }
     } else {
       isLoading.value = false;
     }
@@ -923,7 +1064,8 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await setDoc(doc(db, 'wallets', id), {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'wallets', id), {
         ownerId: uid,
         name: safeName,
         type: payload.type,
@@ -934,7 +1076,7 @@ export const useFinanceStore = defineStore('finance', () => {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      await setDoc(doc(db, 'wallet_owners', holderId), {
+      batch.set(doc(db, 'wallet_owners', holderId), {
         ownerId: uid,
         walletId: id,
         walletName: safeName,
@@ -945,10 +1087,35 @@ export const useFinanceStore = defineStore('finance', () => {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menyimpan Sumber Dana', err);
       handleFirestoreError(err, OperationType.CREATE, `wallets/${id}`);
     }
+
+    // Update local state optimistically (0 extra Firestore reads)
+    wallets.value.push({
+      id,
+      ownerId: uid,
+      name: safeName,
+      type: payload.type,
+      balance: numericBalance,
+      color: safeColor,
+      deleted: false,
+    });
+    wallets.value.sort((a, b) => a.name.localeCompare(b.name));
+    rawWalletOwners.value.push({
+      id: holderId,
+      ownerId: uid,
+      walletId: id,
+      walletName: safeName,
+      holderName: safeHolderName,
+      balance: numericBalance,
+      deleted: false,
+    });
+    syncWalletTotalBalancesFromHolders();
+    saveLocalSnapshot(uid, true);
 
     await authStore.recordAuditLog(
       'wallet_created',
@@ -975,7 +1142,8 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await updateDoc(doc(db, 'wallets', walletId), {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'wallets', walletId), {
         name: safeName,
         type: payload.type,
         color: safeColor,
@@ -985,15 +1153,29 @@ export const useFinanceStore = defineStore('finance', () => {
       // Also update walletName in child wallet_owners
       const childHolders = walletOwners.value.filter((fo) => fo.walletId === walletId);
       for (const ch of childHolders) {
-        await updateDoc(doc(db, 'wallet_owners', ch.id), {
+        batch.update(doc(db, 'wallet_owners', ch.id), {
           walletName: safeName,
           updatedAt: serverTimestamp(),
         });
       }
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Memperbarui Sumber Dana', err);
       handleFirestoreError(err, OperationType.UPDATE, `wallets/${walletId}`);
     }
+
+    target.name = safeName;
+    target.type = payload.type;
+    target.color = safeColor;
+    wallets.value.sort((a, b) => a.name.localeCompare(b.name));
+    for (const ch of rawWalletOwners.value) {
+      if (ch.walletId === walletId) {
+        ch.walletName = safeName;
+      }
+    }
+    syncWalletTotalBalancesFromHolders();
+    saveLocalSnapshot(uid, true);
 
     useNotificationStore().notifySuccess(
       'Sumber Dana Diperbarui',
@@ -1021,7 +1203,8 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await setDoc(doc(db, 'wallet_owners', id), {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'wallet_owners', id), {
         ownerId: uid,
         walletId: wallet.id,
         walletName: wallet.name,
@@ -1032,14 +1215,29 @@ export const useFinanceStore = defineStore('finance', () => {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      await updateDoc(doc(db, 'wallets', wallet.id), {
+      batch.update(doc(db, 'wallets', wallet.id), {
         balance: newWalletTotal,
         updatedAt: serverTimestamp(),
       });
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menambahkan Pemilik Dana', err);
       handleFirestoreError(err, OperationType.CREATE, `wallet_owners/${id}`);
     }
+
+    rawWalletOwners.value.push({
+      id,
+      ownerId: uid,
+      walletId: wallet.id,
+      walletName: wallet.name,
+      holderName: safeHolderName,
+      balance: numericBalance,
+      deleted: false,
+    });
+    wallet.balance = newWalletTotal;
+    syncWalletTotalBalancesFromHolders();
+    saveLocalSnapshot(uid, true);
 
     await authStore.recordAuditLog(
       'fund_owner_created',
@@ -1063,28 +1261,38 @@ export const useFinanceStore = defineStore('finance', () => {
 
     const safeHolderName = sanitizeString(payload.holderName, 60, target.holderName);
     const numericBalance = Number(payload.balance) || 0;
+    const siblingHolders = walletOwners.value.filter((fo) => fo.walletId === target.walletId);
+    const newWalletTotal = siblingHolders.reduce(
+      (sum, h) => sum + (h.id === holderId ? numericBalance : Number(h.balance || 0)),
+      0
+    );
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await updateDoc(doc(db, 'wallet_owners', holderId), {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'wallet_owners', holderId), {
         holderName: safeHolderName,
         balance: numericBalance,
         updatedAt: serverTimestamp(),
       });
-
-      const siblingHolders = walletOwners.value.filter((fo) => fo.walletId === target.walletId);
-      const newWalletTotal = siblingHolders.reduce(
-        (sum, h) => sum + (h.id === holderId ? numericBalance : Number(h.balance || 0)),
-        0
-      );
-      await updateDoc(doc(db, 'wallets', target.walletId), {
+      batch.update(doc(db, 'wallets', target.walletId), {
         balance: newWalletTotal,
         updatedAt: serverTimestamp(),
       });
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Memperbarui Pemilik Dana', err);
       handleFirestoreError(err, OperationType.UPDATE, `wallet_owners/${holderId}`);
     }
+
+    const rawTarget = rawWalletOwners.value.find((fo) => fo.id === holderId);
+    if (rawTarget) {
+      rawTarget.holderName = safeHolderName;
+      rawTarget.balance = numericBalance;
+    }
+    syncWalletTotalBalancesFromHolders();
+    saveLocalSnapshot(uid, true);
 
     useNotificationStore().notifySuccess(
       'Kepemilikan Dana Diperbarui',
@@ -1116,11 +1324,20 @@ export const useFinanceStore = defineStore('finance', () => {
           updatedAt: serverTimestamp(),
         });
       }
+      touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Mengubah Nama Kepemilikan Dana', err);
       handleFirestoreError(err, OperationType.UPDATE, 'wallet_owners');
     }
+
+    const matchingIds = new Set(matchingHolders.map((h) => h.id));
+    for (const h of rawWalletOwners.value) {
+      if (matchingIds.has(h.id)) {
+        h.holderName = safeNewName;
+      }
+    }
+    saveLocalSnapshot(uid, true);
 
     useNotificationStore().notifySuccess(
       'Nama Pemilik Dana Diperbarui',
@@ -1142,25 +1359,37 @@ export const useFinanceStore = defineStore('finance', () => {
     });
     if (!confirmed) return false;
 
+    const remainingHolders = walletOwners.value.filter(
+      (fo) => fo.walletId === target.walletId && fo.id !== holderId
+    );
+    const newBalance = remainingHolders.reduce((sum, h) => sum + Number(h.balance || 0), 0);
+
     await ensureFirestoreSessionForUser(uid);
     try {
-      await updateDoc(doc(db, 'wallet_owners', holderId), {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'wallet_owners', holderId), {
         deleted: true,
         deletedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      const remainingHolders = walletOwners.value.filter(
-        (fo) => fo.walletId === target.walletId && fo.id !== holderId
-      );
-      const newBalance = remainingHolders.reduce((sum, h) => sum + Number(h.balance || 0), 0);
-      await updateDoc(doc(db, 'wallets', target.walletId), {
+      batch.update(doc(db, 'wallets', target.walletId), {
         balance: newBalance,
         updatedAt: serverTimestamp(),
       });
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menghapus Pemilik Dana', err);
       handleFirestoreError(err, OperationType.UPDATE, `wallet_owners/${holderId}`);
     }
+
+    rawWalletOwners.value = rawWalletOwners.value.filter((fo) => fo.id !== holderId);
+    const parentWallet = wallets.value.find((w) => w.id === target.walletId);
+    if (parentWallet) {
+      parentWallet.balance = newBalance;
+    }
+    syncWalletTotalBalancesFromHolders();
+    saveLocalSnapshot(uid, true);
 
     useNotificationStore().notifySuccess(
       'Pemilik Sumber Dana Dihapus',
@@ -1187,22 +1416,29 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await updateDoc(doc(db, 'wallets', walletId), {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'wallets', walletId), {
         deleted: true,
         deletedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
       for (const ch of childHolders) {
-        await updateDoc(doc(db, 'wallet_owners', ch.id), {
+        batch.update(doc(db, 'wallet_owners', ch.id), {
           deleted: true,
           deletedAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
       }
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menghapus Sumber Dana', err);
       handleFirestoreError(err, OperationType.UPDATE, `wallets/${walletId}`);
     }
+
+    wallets.value = wallets.value.filter((w) => w.id !== walletId);
+    rawWalletOwners.value = rawWalletOwners.value.filter((fo) => fo.walletId !== walletId);
+    saveLocalSnapshot(uid, true);
 
     if (target) {
       await authStore.recordAuditLog(
@@ -1235,7 +1471,8 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await setDoc(doc(db, 'categories', id), {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'categories', id), {
         ownerId: uid,
         name: safeName,
         type: payload.type,
@@ -1245,10 +1482,24 @@ export const useFinanceStore = defineStore('finance', () => {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menambahkan Kategori', err);
       handleFirestoreError(err, OperationType.CREATE, `categories/${id}`);
     }
+
+    rawUserCategories.value.push({
+      id,
+      ownerId: uid,
+      name: safeName,
+      type: payload.type,
+      color: safeColor,
+      isDefault: false,
+      deleted: false,
+    });
+    rawUserCategories.value.sort((a, b) => a.name.localeCompare(b.name));
+    saveLocalSnapshot(uid, true);
 
     useNotificationStore().notifySuccess(
       'Kategori Baru Ditambahkan',
@@ -1290,7 +1541,8 @@ export const useFinanceStore = defineStore('finance', () => {
     if (defaultTarget && uid !== DEFAULT_CATEGORY_OWNER_ID) {
       const overrideDocId = sanitizeId(`${uid}_def_${catId}`);
       try {
-        await setDoc(doc(db, 'categories', overrideDocId), {
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'categories', overrideDocId), {
           ownerId: uid,
           name: safeName,
           type: payload.type,
@@ -1300,10 +1552,30 @@ export const useFinanceStore = defineStore('finance', () => {
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+        touchUserSyncTokenInBatch(batch, uid);
+        await batch.commit();
       } catch (err) {
         useNotificationStore().notifyError('Gagal Memperbarui Kategori', err);
         handleFirestoreError(err, OperationType.CREATE, `categories/${overrideDocId}`);
       }
+
+      const existingIdx = rawUserCategories.value.findIndex((c) => c.id === overrideDocId);
+      const newCat: CategoryItem = {
+        id: overrideDocId,
+        ownerId: uid,
+        name: safeName,
+        type: payload.type,
+        color: safeColor,
+        isDefault: false,
+        deleted: false,
+      };
+      if (existingIdx >= 0) {
+        rawUserCategories.value[existingIdx] = newCat;
+      } else {
+        rawUserCategories.value.push(newCat);
+      }
+      rawUserCategories.value.sort((a, b) => a.name.localeCompare(b.name));
+      saveLocalSnapshot(uid, true);
 
       useNotificationStore().notifySuccess(
         'Kategori Diubah Menjadi Kustom',
@@ -1313,16 +1585,34 @@ export const useFinanceStore = defineStore('finance', () => {
     }
 
     try {
-      await updateDoc(doc(db, 'categories', catId), {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'categories', catId), {
         name: safeName,
         type: payload.type,
         color: safeColor,
         updatedAt: serverTimestamp(),
       });
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Memperbarui Kategori', err);
       handleFirestoreError(err, OperationType.UPDATE, `categories/${catId}`);
     }
+
+    const rawCat = rawUserCategories.value.find((c) => c.id === catId);
+    if (rawCat) {
+      rawCat.name = safeName;
+      rawCat.type = payload.type;
+      rawCat.color = safeColor;
+      rawUserCategories.value.sort((a, b) => a.name.localeCompare(b.name));
+    }
+    const defCat = defaultCategories.value.find((c) => c.id === catId);
+    if (defCat) {
+      defCat.name = safeName;
+      defCat.type = payload.type;
+      defCat.color = safeColor;
+    }
+    saveLocalSnapshot(uid, true);
 
     useNotificationStore().notifySuccess(
       'Kategori Diperbarui',
@@ -1360,25 +1650,47 @@ export const useFinanceStore = defineStore('finance', () => {
 
     if (defaultTarget && uid !== DEFAULT_CATEGORY_OWNER_ID) {
       const overrideDocId = sanitizeId(`${uid}_def_${catId}`);
+      const safeName = sanitizeString(target.name, MAX_CATEGORY_LENGTH, 'Kategori');
+      const safeColor = sanitizeString(
+        target.color || (target.type === 'income' ? 'emerald' : 'rose'),
+        20,
+        'emerald'
+      );
       try {
-        await setDoc(doc(db, 'categories', overrideDocId), {
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'categories', overrideDocId), {
           ownerId: uid,
-          name: sanitizeString(target.name, MAX_CATEGORY_LENGTH, 'Kategori'),
+          name: safeName,
           type: target.type,
-          color: sanitizeString(
-            target.color || (target.type === 'income' ? 'emerald' : 'rose'),
-            20,
-            'emerald'
-          ),
+          color: safeColor,
           deleted: true,
           deletedAt: serverTimestamp(),
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+        touchUserSyncTokenInBatch(batch, uid);
+        await batch.commit();
       } catch (err) {
         useNotificationStore().notifyError('Gagal Menghapus Kategori Bawaan', err);
         handleFirestoreError(err, OperationType.CREATE, `categories/${overrideDocId}`);
       }
+
+      const existingIdx = rawUserCategories.value.findIndex((c) => c.id === overrideDocId);
+      const deletedOverride: CategoryItem = {
+        id: overrideDocId,
+        ownerId: uid,
+        name: safeName,
+        type: target.type,
+        color: safeColor,
+        isDefault: false,
+        deleted: true,
+      };
+      if (existingIdx >= 0) {
+        rawUserCategories.value[existingIdx] = deletedOverride;
+      } else {
+        rawUserCategories.value.push(deletedOverride);
+      }
+      saveLocalSnapshot(uid, true);
 
       useNotificationStore().notifySuccess(
         'Kategori Bawaan Dihapus',
@@ -1388,15 +1700,25 @@ export const useFinanceStore = defineStore('finance', () => {
     }
 
     try {
-      await updateDoc(doc(db, 'categories', catId), {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'categories', catId), {
         deleted: true,
         deletedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menghapus Kategori', err);
       handleFirestoreError(err, OperationType.UPDATE, `categories/${catId}`);
     }
+
+    const rawCat = rawUserCategories.value.find((c) => c.id === catId);
+    if (rawCat) {
+      rawCat.deleted = true;
+    }
+    defaultCategories.value = defaultCategories.value.filter((c) => c.id !== catId);
+    saveLocalSnapshot(uid, true);
 
     useNotificationStore().notifySuccess(
       'Kategori Dihapus',
@@ -1493,7 +1815,11 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     const txPath = `transactions/${id}`;
+    const feeTxId = sanitizeId(`su_tx_fee_${Date.now()}`);
+    const feeNote = sanitizeString(`Admin ${safeNote}`, MAX_NOTE_LENGTH, 'Biaya Admin Transfer');
+
     try {
+      const batch = writeBatch(db);
       const firestoreTxData: Record<string, any> = {
         ownerId: uid,
         walletId: wallet.id,
@@ -1517,13 +1843,11 @@ export const useFinanceStore = defineStore('finance', () => {
         firestoreTxData.toFundOwnerName = destHolder?.holderName || 'Pribadi';
       }
 
-      await setDoc(doc(db, 'transactions', id), firestoreTxData);
+      batch.set(doc(db, 'transactions', id), firestoreTxData);
 
       // If transfer includes an admin fee, record a separate Bea Admin expense transaction so it complies with live Firestore schema rules
       if (payload.type === 'transfer' && numericAdminFee > 0) {
-        const feeTxId = sanitizeId(`su_tx_fee_${Date.now()}`);
-        const feeNote = sanitizeString(`Admin ${safeNote}`, MAX_NOTE_LENGTH, 'Biaya Admin Transfer');
-        await setDoc(doc(db, 'transactions', feeTxId), {
+        batch.set(doc(db, 'transactions', feeTxId), {
           ownerId: uid,
           walletId: wallet.id,
           walletName: wallet.name,
@@ -1542,34 +1866,94 @@ export const useFinanceStore = defineStore('finance', () => {
       }
 
       if (sourceHolder) {
-        await updateDoc(doc(db, 'wallet_owners', sourceHolder.id), {
+        batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
           balance: newSourceHolderBalance,
           updatedAt: serverTimestamp(),
         });
       }
-      await updateDoc(doc(db, 'wallets', wallet.id), {
+      batch.update(doc(db, 'wallets', wallet.id), {
         balance: newSourceWalletBalance,
         updatedAt: serverTimestamp(),
       });
 
       if (payload.type === 'transfer' && destWallet) {
         if (destHolder) {
-          await updateDoc(doc(db, 'wallet_owners', destHolder.id), {
+          batch.update(doc(db, 'wallet_owners', destHolder.id), {
             balance: newDestHolderBalance,
             updatedAt: serverTimestamp(),
           });
         }
         if (destWallet.id !== wallet.id) {
-          await updateDoc(doc(db, 'wallets', destWallet.id), {
+          batch.update(doc(db, 'wallets', destWallet.id), {
             balance: newDestWalletBalance,
             updatedAt: serverTimestamp(),
           });
         }
       }
+
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menyimpan Transaksi', err);
       handleFirestoreError(err, OperationType.CREATE, txPath);
     }
+
+    // Update local state optimistically (0 extra Firestore reads)
+    const newTxItem: TransactionItem = {
+      id,
+      ownerId: uid,
+      walletId: wallet.id,
+      walletName: wallet.name,
+      fundOwnerId: sourceHolder?.id || 'default',
+      fundOwnerName: sourceHolder?.holderName || 'Pribadi',
+      type: payload.type,
+      category: safeCategory,
+      amount: numericAmount,
+      note: safeNote,
+      date: safeDate,
+      deleted: false,
+    };
+    if (payload.type === 'transfer' && destWallet) {
+      newTxItem.toWalletId = destWallet.id;
+      newTxItem.toWalletName = destWallet.name;
+      newTxItem.toFundOwnerId = destHolder?.id || 'default';
+      newTxItem.toFundOwnerName = destHolder?.holderName || 'Pribadi';
+    }
+    rawTransactions.value.unshift(newTxItem);
+
+    if (payload.type === 'transfer' && numericAdminFee > 0) {
+      rawTransactions.value.unshift({
+        id: feeTxId,
+        ownerId: uid,
+        walletId: wallet.id,
+        walletName: wallet.name,
+        fundOwnerId: sourceHolder?.id || 'default',
+        fundOwnerName: sourceHolder?.holderName || 'Pribadi',
+        type: 'expense',
+        category: 'Biaya Admin',
+        amount: numericAdminFee,
+        note: feeNote,
+        date: safeDate,
+        deleted: false,
+      });
+    }
+
+    rawTransactions.value.sort((a, b) => {
+      const cmp = String(b.date || '').localeCompare(String(a.date || ''));
+      if (cmp !== 0) return cmp;
+      return String(b.id || '').localeCompare(String(a.id || ''));
+    });
+
+    if (sourceHolder) {
+      const rawSrc = rawWalletOwners.value.find((h) => h.id === sourceHolder.id);
+      if (rawSrc) rawSrc.balance = newSourceHolderBalance;
+    }
+    if (payload.type === 'transfer' && destHolder) {
+      const rawDest = rawWalletOwners.value.find((h) => h.id === destHolder.id);
+      if (rawDest) rawDest.balance = newDestHolderBalance;
+    }
+    syncWalletTotalBalancesFromHolders();
+    saveLocalSnapshot(uid, true);
 
     // Ensure selectedPeriod shows the month of the newly added transaction
     const txMonth = safeDate.slice(0, 7);
@@ -1709,6 +2093,7 @@ export const useFinanceStore = defineStore('finance', () => {
     await ensureFirestoreSessionForUser(uid);
     const txPath = `transactions/${txId}`;
     try {
+      const batch = writeBatch(db);
       const updatePayload: Record<string, any> = {
         walletId: newWallet.id,
         walletName: newWallet.name,
@@ -1728,14 +2113,14 @@ export const useFinanceStore = defineStore('finance', () => {
         updatePayload.toFundOwnerName = newDestHolder?.holderName || 'Pribadi';
       }
 
-      await updateDoc(doc(db, 'transactions', txId), updatePayload);
+      batch.update(doc(db, 'transactions', txId), updatePayload);
 
       // Apply holder balance deltas
       for (const [hId, delta] of holderDeltas.entries()) {
         if (delta === 0) continue;
         const holderDoc = walletOwners.value.find((h) => h.id === hId);
         if (holderDoc) {
-          await updateDoc(doc(db, 'wallet_owners', hId), {
+          batch.update(doc(db, 'wallet_owners', hId), {
             balance: Number(holderDoc.balance || 0) + delta,
             updatedAt: serverTimestamp(),
           });
@@ -1747,16 +2132,57 @@ export const useFinanceStore = defineStore('finance', () => {
         if (delta === 0) continue;
         const walletDoc = wallets.value.find((w) => w.id === wId);
         if (walletDoc) {
-          await updateDoc(doc(db, 'wallets', wId), {
+          batch.update(doc(db, 'wallets', wId), {
             balance: Number(walletDoc.balance || 0) + delta,
             updatedAt: serverTimestamp(),
           });
         }
       }
+
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Memperbarui Transaksi', err);
       handleFirestoreError(err, OperationType.UPDATE, txPath);
     }
+
+    const rawTxIdx = rawTransactions.value.findIndex((t) => t.id === txId);
+    if (rawTxIdx >= 0) {
+      const updatedTx: TransactionItem = {
+        ...rawTransactions.value[rawTxIdx],
+        walletId: newWallet.id,
+        walletName: newWallet.name,
+        fundOwnerId: newSourceHolder?.id || 'default',
+        fundOwnerName: newSourceHolder?.holderName || 'Pribadi',
+        type: payload.type,
+        category: safeCategory,
+        amount: numericAmount,
+        note: safeNote,
+        date: safeDate,
+      };
+      if (payload.type === 'transfer' && newDestWallet) {
+        updatedTx.toWalletId = newDestWallet.id;
+        updatedTx.toWalletName = newDestWallet.name;
+        updatedTx.toFundOwnerId = newDestHolder?.id || 'default';
+        updatedTx.toFundOwnerName = newDestHolder?.holderName || 'Pribadi';
+      }
+      rawTransactions.value[rawTxIdx] = updatedTx;
+      rawTransactions.value.sort((a, b) => {
+        const cmp = String(b.date || '').localeCompare(String(a.date || ''));
+        if (cmp !== 0) return cmp;
+        return String(b.id || '').localeCompare(String(a.id || ''));
+      });
+    }
+
+    for (const [hId, delta] of holderDeltas.entries()) {
+      if (delta === 0) continue;
+      const rawHolder = rawWalletOwners.value.find((h) => h.id === hId);
+      if (rawHolder) {
+        rawHolder.balance = Number(rawHolder.balance || 0) + delta;
+      }
+    }
+    syncWalletTotalBalancesFromHolders();
+    saveLocalSnapshot(uid, true);
 
     const txMonth = safeDate.slice(0, 7);
     if (selectedPeriod.value !== 'all' && /^\d{4}-\d{2}$/.test(txMonth)) {
@@ -1809,7 +2235,8 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await updateDoc(doc(db, 'transactions', txId), {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'transactions', txId), {
         deleted: true,
         deletedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -1818,13 +2245,13 @@ export const useFinanceStore = defineStore('finance', () => {
       if (tx.type === 'income') {
         if (sourceHolder) {
           const nextBal = Number(sourceHolder.balance || 0) - tx.amount;
-          await updateDoc(doc(db, 'wallet_owners', sourceHolder.id), {
+          batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
             balance: nextBal,
             updatedAt: serverTimestamp(),
           });
         }
         if (wallet) {
-          await updateDoc(doc(db, 'wallets', wallet.id), {
+          batch.update(doc(db, 'wallets', wallet.id), {
             balance: Number(wallet.balance || 0) - tx.amount,
             updatedAt: serverTimestamp(),
           });
@@ -1832,13 +2259,13 @@ export const useFinanceStore = defineStore('finance', () => {
       } else if (tx.type === 'expense') {
         if (sourceHolder) {
           const nextBal = Number(sourceHolder.balance || 0) + tx.amount;
-          await updateDoc(doc(db, 'wallet_owners', sourceHolder.id), {
+          batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
             balance: nextBal,
             updatedAt: serverTimestamp(),
           });
         }
         if (wallet) {
-          await updateDoc(doc(db, 'wallets', wallet.id), {
+          batch.update(doc(db, 'wallets', wallet.id), {
             balance: Number(wallet.balance || 0) + tx.amount,
             updatedAt: serverTimestamp(),
           });
@@ -1846,37 +2273,61 @@ export const useFinanceStore = defineStore('finance', () => {
       } else if (tx.type === 'transfer') {
         const txAdminFee = Number(tx.adminFee || 0);
         if (sourceHolder) {
-          await updateDoc(doc(db, 'wallet_owners', sourceHolder.id), {
+          batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
             balance: Number(sourceHolder.balance || 0) + tx.amount + txAdminFee,
             updatedAt: serverTimestamp(),
           });
         }
         if (destHolder) {
-          await updateDoc(doc(db, 'wallet_owners', destHolder.id), {
+          batch.update(doc(db, 'wallet_owners', destHolder.id), {
             balance: Number(destHolder.balance || 0) - tx.amount,
             updatedAt: serverTimestamp(),
           });
         }
         if (wallet && destWallet && wallet.id !== destWallet.id) {
-          await updateDoc(doc(db, 'wallets', wallet.id), {
+          batch.update(doc(db, 'wallets', wallet.id), {
             balance: Number(wallet.balance || 0) + tx.amount + txAdminFee,
             updatedAt: serverTimestamp(),
           });
-          await updateDoc(doc(db, 'wallets', destWallet.id), {
+          batch.update(doc(db, 'wallets', destWallet.id), {
             balance: Number(destWallet.balance || 0) - tx.amount,
             updatedAt: serverTimestamp(),
           });
         } else if (wallet && txAdminFee > 0) {
-          await updateDoc(doc(db, 'wallets', wallet.id), {
+          batch.update(doc(db, 'wallets', wallet.id), {
             balance: Number(wallet.balance || 0) + txAdminFee,
             updatedAt: serverTimestamp(),
           });
         }
       }
+
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menghapus Transaksi', err);
       handleFirestoreError(err, OperationType.UPDATE, `transactions/${txId}`);
     }
+
+    rawTransactions.value = rawTransactions.value.filter((t) => t.id !== txId);
+    if (tx.type === 'income' && sourceHolder) {
+      const rawSrc = rawWalletOwners.value.find((h) => h.id === sourceHolder.id);
+      if (rawSrc) rawSrc.balance = Number(rawSrc.balance || 0) - tx.amount;
+    } else if (tx.type === 'expense' && sourceHolder) {
+      const rawSrc = rawWalletOwners.value.find((h) => h.id === sourceHolder.id);
+      if (rawSrc) rawSrc.balance = Number(rawSrc.balance || 0) + tx.amount;
+    } else if (tx.type === 'transfer') {
+      const txAdminFee = Number(tx.adminFee || 0);
+      if (sourceHolder) {
+        const rawSrc = rawWalletOwners.value.find((h) => h.id === sourceHolder.id);
+        if (rawSrc) rawSrc.balance = Number(rawSrc.balance || 0) + tx.amount + txAdminFee;
+      }
+      if (destHolder) {
+        const rawDest = rawWalletOwners.value.find((h) => h.id === destHolder.id);
+        if (rawDest) rawDest.balance = Number(rawDest.balance || 0) - tx.amount;
+      }
+    }
+    syncWalletTotalBalancesFromHolders();
+    saveLocalSnapshot(uid, true);
 
     await authStore.recordAuditLog(
       'transaction_deleted',
@@ -1915,8 +2366,9 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
+      const batch = writeBatch(db);
       if (existing) {
-        await updateDoc(doc(db, 'budgets', targetId), {
+        batch.update(doc(db, 'budgets', targetId), {
           category: safeCategory,
           limitAmount: numericLimit,
           spentAmount: existing.spentAmount || 0,
@@ -1926,7 +2378,7 @@ export const useFinanceStore = defineStore('finance', () => {
           updatedAt: serverTimestamp(),
         });
       } else {
-        await setDoc(doc(db, 'budgets', targetId), {
+        batch.set(doc(db, 'budgets', targetId), {
           ownerId: uid,
           category: safeCategory,
           limitAmount: numericLimit,
@@ -1938,10 +2390,29 @@ export const useFinanceStore = defineStore('finance', () => {
           updatedAt: serverTimestamp(),
         });
       }
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menyimpan Anggaran', err);
       handleFirestoreError(err, existing ? OperationType.UPDATE : OperationType.CREATE, `budgets/${targetId}`);
     }
+
+    if (existing) {
+      existing.category = safeCategory;
+      existing.limitAmount = numericLimit;
+      existing.period = period;
+    } else {
+      budgets.value.push({
+        id: targetId,
+        ownerId: uid,
+        category: safeCategory,
+        limitAmount: numericLimit,
+        spentAmount: 0,
+        period,
+        deleted: false,
+      });
+    }
+    saveLocalSnapshot(uid, true);
 
     await authStore.recordAuditLog(
       'budget_updated',
@@ -1971,15 +2442,21 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      await updateDoc(doc(db, 'budgets', budgetId), {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'budgets', budgetId), {
         deleted: true,
         deletedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menghapus Anggaran', err);
       handleFirestoreError(err, OperationType.UPDATE, `budgets/${budgetId}`);
     }
+
+    budgets.value = budgets.value.filter((b) => b.id !== budgetId);
+    saveLocalSnapshot(uid, true);
 
     if (target) {
       useNotificationStore().notifySuccess(

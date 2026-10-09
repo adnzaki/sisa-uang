@@ -7,6 +7,7 @@ export interface PopupBannerItem {
   title: string;
   message: string;
   detail?: string | null;
+  errorCode?: string | null;
   actionLabel?: string;
   actionRoute?: string;
   createdAt: number;
@@ -89,6 +90,7 @@ export const useNotificationStore = defineStore('notification', () => {
     title: string;
     message: string;
     detail?: string | null;
+    errorCode?: string | null;
     actionLabel?: string;
     actionRoute?: string;
     durationMs?: number;
@@ -100,6 +102,7 @@ export const useNotificationStore = defineStore('notification', () => {
       title: options.title,
       message: options.message,
       detail: options.detail || null,
+      errorCode: options.errorCode || null,
       actionLabel: options.actionLabel,
       actionRoute: options.actionRoute,
       createdAt: Date.now(),
@@ -130,6 +133,42 @@ export const useNotificationStore = defineStore('notification', () => {
     return id;
   }
 
+  function isQuotaLimitError(rawError: unknown): boolean {
+    const anyErr = rawError as any;
+    const code = String(anyErr?.code || '').toLowerCase();
+    const msg = String(anyErr?.message || rawError || '').toLowerCase();
+    const respErr = String(anyErr?.response?.data?.error || '').toLowerCase();
+    return (
+      code === 'resource-exhausted' ||
+      code.includes('resource-exhausted') ||
+      msg.includes('resource-exhausted') ||
+      msg.includes('quota limit exceeded') ||
+      msg.includes('quota exceeded') ||
+      msg.includes('free daily read units') ||
+      msg.includes('kuota baca harian gratis') ||
+      msg.includes('db-unhandled') ||
+      respErr.includes('resource-exhausted') ||
+      respErr.includes('quota') ||
+      respErr.includes('db-unhandled')
+    );
+  }
+
+  function notifyQuotaExceeded(): string {
+    // Deduplicate if a db-unhandled banner is already visible
+    const existing = banners.value.find((b) => b.errorCode === 'db-unhandled');
+    if (existing) {
+      return existing.id;
+    }
+    return showPopup({
+      type: 'error',
+      title: 'Pemberitahuan Sistem',
+      message: 'Terjadi kesalahan sistem, mohon maaf atas ketidaknyamannya',
+      detail: null,
+      errorCode: 'db-unhandled',
+      durationMs: 12000,
+    });
+  }
+
   function notifySuccess(
     title: string,
     message: string,
@@ -151,6 +190,10 @@ export const useNotificationStore = defineStore('notification', () => {
     rawError: unknown,
     fallbackMsg = 'Terjadi kesalahan saat memproses permintaan.'
   ) {
+    if (isQuotaLimitError(rawError) || isQuotaLimitError(fallbackMsg)) {
+      return notifyQuotaExceeded();
+    }
+
     let mainMessage = fallbackMsg;
     let detailMessage: string | null = null;
 
@@ -166,6 +209,9 @@ export const useNotificationStore = defineStore('notification', () => {
       try {
         const parsed = JSON.parse(rawError.message);
         if (parsed && parsed.error) {
+          if (isQuotaLimitError(parsed.error)) {
+            return notifyQuotaExceeded();
+          }
           mainMessage = String(parsed.error);
           detailMessage = `Operasi Firestore: ${parsed.operationType || 'write'} · Path: ${parsed.path || '-'}`;
         } else {
@@ -174,6 +220,10 @@ export const useNotificationStore = defineStore('notification', () => {
       } catch {
         mainMessage = rawError.message;
       }
+    }
+
+    if (isQuotaLimitError(mainMessage)) {
+      return notifyQuotaExceeded();
     }
 
     return showPopup({
@@ -194,6 +244,7 @@ export const useNotificationStore = defineStore('notification', () => {
     openChangelogModal,
     closeChangelogModal,
     showPopup,
+    notifyQuotaExceeded,
     notifySuccess,
     notifyError,
     dismissBanner,

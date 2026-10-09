@@ -71,10 +71,9 @@ function switchDbTab(tab: 'explorer' | 'import' | 'delete') {
   activeDbTab.value = tab;
   router.replace({ path: '/database', query: { tab } });
   if (tab === 'explorer') {
-    loadFirestoreCollectionStats();
-    loadExplorerCollectionDocs(explorerSelectedCollection.value);
+    loadExplorerCollectionDocs(explorerSelectedCollection.value, false);
   } else if (tab === 'delete') {
-    loadFirestoreCollectionStats();
+    loadFirestoreCollectionStats(false);
   }
 }
 
@@ -82,12 +81,12 @@ watch(
   () => route.query.tab,
   (qTab) => {
     const resolved = resolveInitialDbTab(qTab);
+    if (activeDbTab.value === resolved) return;
     activeDbTab.value = resolved;
     if (resolved === 'explorer') {
-      loadFirestoreCollectionStats();
-      loadExplorerCollectionDocs(explorerSelectedCollection.value);
+      loadExplorerCollectionDocs(explorerSelectedCollection.value, false);
     } else if (resolved === 'delete') {
-      loadFirestoreCollectionStats();
+      loadFirestoreCollectionStats(false);
     }
   }
 );
@@ -164,12 +163,12 @@ const explorerViewMode = ref<'table' | 'json'>('table');
 const inspectingRawDoc = ref<Record<string, any> | null>(null);
 const inspectingDocCopied = ref<boolean>(false);
 
-async function loadExplorerCollectionDocs(colName: string) {
+async function loadExplorerCollectionDocs(colName: string, forceRefresh = false) {
   if (!authStore.isSuperAdmin) return;
   explorerSelectedCollection.value = colName;
   isLoadingExplorerDocs.value = true;
   try {
-    const docs = await adminStore.fetchFirestoreRawCollectionDocs(colName);
+    const docs = await adminStore.fetchFirestoreRawCollectionDocs(colName, forceRefresh);
     explorerRawDocs.value = docs;
     explorerCurrentPage.value = 1;
     // If current sort field does not exist in new collection, reset to __docId
@@ -546,11 +545,11 @@ const totalLiveFirestoreDocs = computed(() =>
   firestoreCollectionsStats.value.reduce((acc, c) => acc + c.docCount, 0)
 );
 
-async function loadFirestoreCollectionStats() {
+async function loadFirestoreCollectionStats(forceRefresh = false) {
   if (!authStore.isSuperAdmin) return;
   isLoadingFirestoreStats.value = true;
   try {
-    firestoreCollectionsStats.value = await adminStore.fetchFirestoreCollectionStats();
+    firestoreCollectionsStats.value = await adminStore.fetchFirestoreCollectionStats(forceRefresh);
   } catch (err) {
     console.warn('Failed to load Firestore collection stats:', err);
   } finally {
@@ -560,8 +559,11 @@ async function loadFirestoreCollectionStats() {
 
 onMounted(() => {
   if (authStore.isSuperAdmin) {
-    loadFirestoreCollectionStats();
-    loadExplorerCollectionDocs(explorerSelectedCollection.value);
+    if (activeDbTab.value === 'explorer') {
+      loadExplorerCollectionDocs(explorerSelectedCollection.value, false);
+    } else if (activeDbTab.value === 'delete') {
+      loadFirestoreCollectionStats(false);
+    }
   }
 });
 
@@ -1214,7 +1216,7 @@ async function confirmAndExecuteImport() {
             type="button"
             :disabled="isLoadingExplorerDocs"
             class="w-full sm:w-auto min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 hover:border-emerald-500 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
-            @click="loadExplorerCollectionDocs(explorerSelectedCollection)"
+            @click="loadExplorerCollectionDocs(explorerSelectedCollection, true)"
           >
             <RefreshCw class="w-3.5 h-3.5 shrink-0" :class="isLoadingExplorerDocs ? 'animate-spin text-emerald-600' : ''" />
             <span>Muat Ulang Data</span>
@@ -2958,7 +2960,7 @@ async function confirmAndExecuteImport() {
             type="button"
             :disabled="isLoadingFirestoreStats || isDeletingFirestoreCols"
             class="w-full sm:w-auto min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
-            @click="loadFirestoreCollectionStats"
+            @click="loadFirestoreCollectionStats(true)"
           >
             <RefreshCw class="w-3.5 h-3.5 shrink-0" :class="isLoadingFirestoreStats ? 'animate-spin' : ''" />
             <span>{{ isLoadingFirestoreStats ? 'Memuat Tabel...' : 'Refresh Jumlah Data' }}</span>

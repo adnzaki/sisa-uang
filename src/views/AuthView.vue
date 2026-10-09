@@ -369,9 +369,18 @@ async function cancelOtpAndLogout() {
             />
           </div>
 
-          <p v-if="authStore.error" class="text-xs text-rose-600 dark:text-rose-400">
-            {{ authStore.error }}
-          </p>
+          <div
+            v-if="authStore.error"
+            class="flex items-center justify-between gap-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/30 px-3.5 py-2.5 text-xs text-rose-600 dark:text-rose-400"
+          >
+            <span>{{ authStore.error }}</span>
+            <span
+              v-if="authStore.error.includes('Terjadi kesalahan sistem')"
+              class="text-[9px] font-mono text-rose-400/50 dark:text-rose-500/40 select-all shrink-0"
+            >
+              db-unhandled
+            </span>
+          </div>
 
           <button
             type="submit"
