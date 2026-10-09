@@ -194,9 +194,6 @@ watch(filteredOptions, () => {
 
 async function openDropdown() {
   if (props.disabled) return;
-  if (!props.searchable && typeof document !== 'undefined') {
-    (document.activeElement as HTMLElement | null)?.blur?.();
-  }
   isOpen.value = true;
   searchQuery.value = '';
   const idx = normalizedOptions.value.findIndex((o) => o.value === props.modelValue);
@@ -214,18 +211,26 @@ async function openDropdown() {
   }
 }
 
-function closeDropdown() {
+function closeDropdown(restoreTriggerFocus = false) {
   if (props.searchable && searchInputRef.value) {
     searchInputRef.value.blur();
   }
   isOpen.value = false;
   searchQuery.value = '';
+
+  if (restoreTriggerFocus && triggerRef.value) {
+    try {
+      triggerRef.value.focus({ preventScroll: true });
+    } catch {
+      triggerRef.value.focus();
+    }
+  }
 }
 
 function toggleDropdown() {
   if (props.disabled) return;
   if (isOpen.value) {
-    closeDropdown();
+    closeDropdown(true);
   } else {
     openDropdown();
   }
@@ -234,7 +239,7 @@ function toggleDropdown() {
 function selectOption(opt: SelectOptionItem) {
   emit('update:modelValue', opt.value);
   emit('change', opt.value);
-  closeDropdown();
+  closeDropdown(true);
 }
 
 function selectCustomSearchValue() {
@@ -242,7 +247,7 @@ function selectCustomSearchValue() {
   if (!custom) return;
   emit('update:modelValue', custom);
   emit('change', custom);
-  closeDropdown();
+  closeDropdown(true);
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -255,9 +260,16 @@ function handleKeydown(e: KeyboardEvent) {
     return;
   }
 
+  if (e.key === 'Tab') {
+    // Restore focus to triggerRef synchronously BEFORE the browser's default Tab navigation runs,
+    // so Tab/Shift+Tab moves cleanly to the next/previous form input inside the modal instead of jumping to body.
+    closeDropdown(true);
+    return;
+  }
+
   if (e.key === 'Escape') {
     e.preventDefault();
-    closeDropdown();
+    closeDropdown(true);
   } else if (e.key === 'ArrowDown') {
     e.preventDefault();
     if (filteredOptions.value.length > 0) {

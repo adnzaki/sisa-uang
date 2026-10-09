@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { X } from 'lucide-vue-next';
 
 const props = withDefaults(
@@ -45,10 +45,39 @@ function handlePopState() {
   }
 }
 
+const modalPanelRef = ref<HTMLElement | null>(null);
+
 function handleKeydown(e: KeyboardEvent) {
   if (!isOpen.value) return;
   if (e.key === 'Escape') {
     closeModal();
+    return;
+  }
+
+  if (e.key === 'Tab' && modalPanelRef.value) {
+    const focusableSelectors =
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const focusables = Array.from(
+      modalPanelRef.value.querySelectorAll<HTMLElement>(focusableSelectors)
+    ).filter((el) => el.offsetParent !== null);
+
+    if (focusables.length === 0) return;
+
+    const firstEl = focusables[0];
+    const lastEl = focusables[focusables.length - 1];
+    const activeEl = document.activeElement as HTMLElement | null;
+
+    if (e.shiftKey) {
+      if (!activeEl || !modalPanelRef.value.contains(activeEl) || activeEl === firstEl) {
+        e.preventDefault();
+        lastEl.focus();
+      }
+    } else {
+      if (!activeEl || !modalPanelRef.value.contains(activeEl) || activeEl === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    }
   }
 }
 
@@ -121,6 +150,7 @@ onBeforeUnmount(() => {
         and ONLY the middle content area scrolls (flex-1 min-h-0 overflow-y-auto).
       -->
       <div
+        ref="modalPanelRef"
         class="modal-panel w-full h-dvh max-h-dvh sm:h-auto sm:max-h-[90dvh] flex flex-col overflow-hidden bg-white dark:bg-slate-900 sm:rounded-2xl sm:border border-slate-200 dark:border-slate-800 shadow-2xl"
         :class="[
           maxWidth === 'sm'
