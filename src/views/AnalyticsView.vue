@@ -727,7 +727,7 @@ const walletAllocation = computed(() => {
     <!-- =================================================================== -->
     <!-- PEMASUKAN, PENGELUARAN & RASIO TABUNGAN PADA PERIODE INI            -->
     <!-- =================================================================== -->
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3.5 sm:gap-4">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3.5 sm:gap-4">
       <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-1.5 min-w-0">
         <div class="flex items-center justify-between gap-2">
           <span class="text-xs text-slate-500 dark:text-slate-400">Total Pemasukan Periode</span>

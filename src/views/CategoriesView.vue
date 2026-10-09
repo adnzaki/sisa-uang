@@ -173,8 +173,8 @@ async function handleDeleteEditingCategory() {
         </div>
       </div>
 
-      <form class="grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch w-full" @submit.prevent="handleAddCategory">
-        <div class="md:col-span-6 w-full min-w-0">
+      <form class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-stretch w-full" @submit.prevent="handleAddCategory">
+        <div class="sm:col-span-2 lg:col-span-6 w-full min-w-0">
           <input
             v-model="newCatName"
             type="text"
@@ -184,7 +184,7 @@ async function handleDeleteEditingCategory() {
             class="w-full h-[46px] min-h-[46px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600 transition-colors"
           />
         </div>
-        <div class="md:col-span-3 w-full min-w-0">
+        <div class="sm:col-span-1 lg:col-span-3 w-full min-w-0">
           <CustomSelect
             v-model="newCatType"
             :options="categoryTypeOptions"
@@ -192,7 +192,7 @@ async function handleDeleteEditingCategory() {
             aria-label="Jenis Kategori"
           />
         </div>
-        <div class="md:col-span-3 w-full min-w-0">
+        <div class="sm:col-span-1 lg:col-span-3 w-full min-w-0">
           <button
             type="submit"
             class="w-full h-[46px] min-h-[46px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shadow-2xs whitespace-nowrap"
@@ -205,8 +205,8 @@ async function handleDeleteEditingCategory() {
     </section>
 
     <!-- Search & Filter Bar -->
-    <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch w-full">
-      <div class="md:col-span-8 w-full min-w-0">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch w-full">
+      <div class="lg:col-span-8 w-full min-w-0">
         <div class="w-full h-[46px] min-h-[46px] px-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center gap-3 focus-within:border-emerald-600 transition-colors">
           <Search class="w-4 h-4 text-slate-400 shrink-0" />
           <input
@@ -227,7 +227,7 @@ async function handleDeleteEditingCategory() {
         </div>
       </div>
 
-      <div class="md:col-span-4 w-full min-w-0">
+      <div class="lg:col-span-4 w-full min-w-0">
         <CustomSelect
           v-model="filterSource"
           :options="sourceFilterOptions"
