@@ -257,6 +257,49 @@ const editingBudgetId = ref<string | null>(null);
 const category = ref('');
 const limitAmount = ref<number | ''>('');
 
+function formatNominalDisplay(val: number | string | ''): string {
+  const digits = String(val ?? '')
+    .replace(/\D/g, '')
+    .replace(/^0+/, '');
+  if (!digits) return '';
+  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+const limitAmountDisplay = computed(() => formatNominalDisplay(limitAmount.value));
+
+function handleLimitAmountInput(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const rawValue = input.value;
+  const selectionStart = input.selectionStart ?? rawValue.length;
+  const digitsBeforeCursor = rawValue
+    .slice(0, selectionStart)
+    .replace(/\D/g, '')
+    .replace(/^0+/, '').length;
+
+  const cleanDigits = rawValue.replace(/\D/g, '').replace(/^0+/, '');
+  limitAmount.value = cleanDigits ? Number(cleanDigits) : '';
+
+  const formatted = formatNominalDisplay(cleanDigits);
+  input.value = formatted;
+
+  if (document.activeElement === input) {
+    let newCursorPos = 0;
+    if (digitsBeforeCursor > 0) {
+      let seenDigits = 0;
+      for (let i = 0; i < formatted.length; i++) {
+        if (/\d/.test(formatted[i])) {
+          seenDigits++;
+          if (seenDigits === digitsBeforeCursor) {
+            newCursorPos = i + 1;
+            break;
+          }
+        }
+      }
+    }
+    input.setSelectionRange(newCursorPos, newCursorPos);
+  }
+}
+
 const expenseCategoryOptions = computed<SelectOptionItem[]>(() =>
   financeStore.expenseCategoryNames.map((cat) => ({
     value: cat,
@@ -773,13 +816,14 @@ async function handleDeleteEditingBudget() {
         />
 
         <input
-          v-model.number="limitAmount"
-          type="number"
-          min="10000"
-          step="any"
+          :value="limitAmountDisplay"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
           required
           :placeholder="`${t('budgets.limit')} Bulanan (Rp)`"
           class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+          @input="handleLimitAmountInput"
         />
       </form>
 
