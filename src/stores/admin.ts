@@ -377,6 +377,116 @@ export const useAdminStore = defineStore('admin', () => {
     }
   }
 
+  let firestoreUsersSyncedInSession = false;
+
+  async function syncFirestoreUsersToServerRegistry(force = false): Promise<number> {
+    if (!force && firestoreUsersSyncedInSession && usersSummary.value.totalUsers >= 5) {
+      return usersSummary.value.totalUsers;
+    }
+
+    try {
+      await ensureSuperAdminFirebaseSession();
+      const targetDb = sisaUangDb || db;
+      const snap = await getDocs(collection(targetDb, 'users'));
+      const proMarkersMap = new Map<
+        string,
+        { status: 'pending' | 'pro'; plan: 'monthly' | 'yearly'; expiresAt: string | null }
+      >();
+      try {
+        const proSnap = await getDocs(
+          query(collection(targetDb, 'budgets'), where('category', '==', '__SISAUANG_PRO__'))
+        );
+        proSnap.docs.forEach((pd) => {
+          const pData = pd.data() as Record<string, any>;
+          if (!pData.deleted && pData.ownerId) {
+            const rawPeriod = String(pData.period || '');
+            let status: 'pending' | 'pro' = 'pro';
+            let plan: 'monthly' | 'yearly' = 'monthly';
+            let expiresAt: string | null = null;
+            if (rawPeriod.startsWith('P:')) {
+              status = 'pending';
+              plan = rawPeriod.slice(2, 3) === 'Y' ? 'yearly' : 'monthly';
+              expiresAt = null;
+            } else if (rawPeriod.startsWith('Y:')) {
+              plan = 'yearly';
+              expiresAt = rawPeriod.slice(2) || null;
+            } else if (rawPeriod.startsWith('M:')) {
+              plan = 'monthly';
+              expiresAt = rawPeriod.slice(2) || null;
+            }
+            proMarkersMap.set(String(pData.ownerId), { status, plan, expiresAt });
+          }
+        });
+      } catch {
+        // Ignore if no pro markers yet
+      }
+
+      const fbUsers: AdminUserItem[] = [];
+      snap.docs.forEach((d) => {
+        const fbUser = d.data();
+        const tsToIso = (val: any) => {
+          if (!val) return new Date().toISOString();
+          if (typeof val === 'string') return val;
+          if (typeof val.toDate === 'function') return val.toDate().toISOString();
+          if (typeof val.seconds === 'number') return new Date(val.seconds * 1000).toISOString();
+          return new Date().toISOString();
+        };
+        const markerInfo = proMarkersMap.get(d.id);
+        const isPending =
+          markerInfo?.status === 'pending' || fbUser.subscriptionStatus === 'pending';
+        const isPro =
+          !isPending &&
+          (markerInfo?.status === 'pro' ||
+            fbUser.subscriptionStatus === 'pro' ||
+            fbUser.isPro === true);
+        const subscriptionPlan: 'monthly' | 'yearly' | null =
+          isPro || isPending
+            ? markerInfo?.plan || (fbUser.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly')
+            : null;
+        const subscriptionExpiresAt: string | null = isPro
+          ? markerInfo?.expiresAt || fbUser.subscriptionExpiresAt || null
+          : null;
+        fbUsers.push({
+          uid: d.id,
+          username: fbUser.username || String(fbUser.email || d.id).split('@')[0],
+          email: fbUser.email || `${d.id}@sisa-uang.id`,
+          displayName: fbUser.displayName || fbUser.username || d.id,
+          role: fbUser.role === 'admin' ? 'admin' : 'user',
+          status: fbUser.status === 'blocked' ? 'blocked' : 'active',
+          authProvider: fbUser.authProvider === 'google' ? 'google' : 'password',
+          currency: fbUser.currency === 'USD' ? 'USD' : 'IDR',
+          subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
+          isPro,
+          subscriptionPlan,
+          subscriptionExpiresAt,
+          passwordHash: fbUser.passwordHash,
+          createdAt: tsToIso(fbUser.createdAt),
+          updatedAt: tsToIso(fbUser.updatedAt),
+        });
+      });
+
+      if (fbUsers.length > 0) {
+        firestoreUsersSyncedInSession = true;
+        try {
+          await apiClient.post('/admin/import-sql-json', {
+            users: fbUsers,
+            activity_logs: [],
+          });
+        } catch {
+          // Ignore
+        }
+        invalidateAdminUsersPageCache();
+        await fetchAdminUsersPage(undefined, true, true);
+      }
+      return fbUsers.length;
+    } catch (err) {
+      if (isFirestoreQuotaError(err)) {
+        useNotificationStore().notifyQuotaExceeded();
+      }
+      return 0;
+    }
+  }
+
   async function fetchAdminOverview(silent = false) {
     if (!silent) isLoading.value = true;
     error.value = null;
@@ -384,7 +494,7 @@ export const useAdminStore = defineStore('admin', () => {
     try {
       const [overviewRes] = await Promise.all([
         apiClient.get('/admin/overview'),
-        fetchAdminUsersPage(undefined, true),
+        fetchAdminUsersPage(undefined, true, !silent),
       ]);
       const data = overviewRes.data;
       const incomingLogs: AdminActivityLogItem[] = data.logs || [];
@@ -413,6 +523,12 @@ export const useAdminStore = defineStore('admin', () => {
         }
       }
       alerts.value = incomingAlerts;
+
+      // If Express server registry only has a couple of session-synced accounts (or manual refresh was clicked),
+      // hydrate the full user list from Cloud Firestore /users collection!
+      if (!silent || usersSummary.value.totalUsers < 5) {
+        await syncFirestoreUsersToServerRegistry(!silent);
+      }
     } catch (err: any) {
       const msg =
         err?.response?.data?.error ||
@@ -428,8 +544,12 @@ export const useAdminStore = defineStore('admin', () => {
 
   async function startRealtimeMonitoring() {
     if (pollInterval) {
-      // Already monitoring; just trigger a silent refresh from local Express server (0 Firestore reads)
-      fetchAdminOverview(true);
+      // Already monitoring; if server registry still has < 5 users, ensure Firestore users are hydrated
+      if (usersSummary.value.totalUsers < 5 && !firestoreUsersSyncedInSession) {
+        void syncFirestoreUsersToServerRegistry(false);
+      } else {
+        fetchAdminOverview(true);
+      }
       return;
     }
     await fetchAdminOverview(false);
@@ -438,108 +558,6 @@ export const useAdminStore = defineStore('admin', () => {
     pollInterval = setInterval(() => {
       fetchAdminOverview(true);
     }, 15000);
-
-    // Only query Firestore /users ONE TIME if the local Express server registry only has the default admin account
-    if (users.value.length <= 1) {
-      try {
-        await ensureSuperAdminFirebaseSession();
-        const targetDb = sisaUangDb || db;
-        const snap = await getDocs(collection(targetDb, 'users'));
-        const proMarkersMap = new Map<
-          string,
-          { status: 'pending' | 'pro'; plan: 'monthly' | 'yearly'; expiresAt: string | null }
-        >();
-        try {
-          const proSnap = await getDocs(
-            query(collection(targetDb, 'budgets'), where('category', '==', '__SISAUANG_PRO__'))
-          );
-          proSnap.docs.forEach((pd) => {
-            const pData = pd.data() as Record<string, any>;
-            if (!pData.deleted && pData.ownerId) {
-              const rawPeriod = String(pData.period || '');
-              let status: 'pending' | 'pro' = 'pro';
-              let plan: 'monthly' | 'yearly' = 'monthly';
-              let expiresAt: string | null = null;
-              if (rawPeriod.startsWith('P:')) {
-                status = 'pending';
-                plan = rawPeriod.slice(2, 3) === 'Y' ? 'yearly' : 'monthly';
-                expiresAt = null;
-              } else if (rawPeriod.startsWith('Y:')) {
-                plan = 'yearly';
-                expiresAt = rawPeriod.slice(2) || null;
-              } else if (rawPeriod.startsWith('M:')) {
-                plan = 'monthly';
-                expiresAt = rawPeriod.slice(2) || null;
-              }
-              proMarkersMap.set(String(pData.ownerId), { status, plan, expiresAt });
-            }
-          });
-        } catch {
-          // Ignore if no pro markers yet
-        }
-        const fbUsers: AdminUserItem[] = [];
-        snap.docs.forEach((d) => {
-          if (d.id === 'ci4_user_46') return;
-          const fbUser = d.data();
-          const tsToIso = (val: any) => {
-            if (!val) return new Date().toISOString();
-            if (typeof val === 'string') return val;
-            if (typeof val.toDate === 'function') return val.toDate().toISOString();
-            if (typeof val.seconds === 'number') return new Date(val.seconds * 1000).toISOString();
-            return new Date().toISOString();
-          };
-          const markerInfo = proMarkersMap.get(d.id);
-          const isPending =
-            markerInfo?.status === 'pending' || fbUser.subscriptionStatus === 'pending';
-          const isPro =
-            !isPending &&
-            (markerInfo?.status === 'pro' ||
-              fbUser.subscriptionStatus === 'pro' ||
-              fbUser.isPro === true);
-          const subscriptionPlan: 'monthly' | 'yearly' | null =
-            isPro || isPending
-              ? markerInfo?.plan || (fbUser.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly')
-              : null;
-          const subscriptionExpiresAt: string | null = isPro
-            ? markerInfo?.expiresAt || fbUser.subscriptionExpiresAt || null
-            : null;
-          fbUsers.push({
-            uid: d.id,
-            username: fbUser.username || String(fbUser.email || d.id).split('@')[0],
-            email: fbUser.email || `${d.id}@sisa-uang.id`,
-            displayName: fbUser.displayName || fbUser.username || d.id,
-            role: fbUser.role === 'admin' ? 'admin' : 'user',
-            status: fbUser.status === 'blocked' ? 'blocked' : 'active',
-            authProvider: fbUser.authProvider === 'google' ? 'google' : 'password',
-            currency: fbUser.currency === 'USD' ? 'USD' : 'IDR',
-            subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
-            isPro,
-            subscriptionPlan,
-            subscriptionExpiresAt,
-            passwordHash: fbUser.passwordHash,
-            createdAt: tsToIso(fbUser.createdAt),
-            updatedAt: tsToIso(fbUser.updatedAt),
-          });
-        });
-        if (fbUsers.length > 0) {
-          // Sync into Express disk cache so future server restarts have all users without touching Firestore
-          try {
-            await apiClient.post('/admin/import-sql-json', {
-              users: fbUsers,
-              activity_logs: [],
-            });
-          } catch {
-            // Ignore
-          }
-          invalidateAdminUsersPageCache();
-          await fetchAdminUsersPage(undefined, true, true);
-        }
-      } catch (err) {
-        if (isFirestoreQuotaError(err)) {
-          useNotificationStore().notifyQuotaExceeded();
-        }
-      }
-    }
   }
 
   function stopRealtimeMonitoring() {
@@ -1406,6 +1424,11 @@ export const useAdminStore = defineStore('admin', () => {
     });
 
     cachedRawCollectionDocs.set(collectionName, docs);
+
+    if (collectionName === 'users' && docs.length > usersSummary.value.totalUsers) {
+      void syncFirestoreUsersToServerRegistry(true);
+    }
+
     return docs;
   }
 
