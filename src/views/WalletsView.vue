@@ -2,19 +2,23 @@
 import { ref, computed } from 'vue';
 import { RouterLink } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { Wallet, Plus, Trash2, Check, Users, ChevronRight } from 'lucide-vue-next';
+import { Wallet, Plus, Trash2, Check, Users, ChevronRight, Crown } from 'lucide-vue-next';
 import {
   useFinanceStore,
   WalletItem,
   formatHolderName,
 } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
+import { useAuthStore } from '../stores/auth';
+import { useNotificationStore } from '../stores/notification';
 import AppModal from '../components/AppModal.vue';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 
 const { t } = useI18n();
 const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
+const authStore = useAuthStore();
+const notificationStore = useNotificationStore();
 
 // 1. Modal: Add New Wallet
 const showAddForm = ref(false);
@@ -45,6 +49,15 @@ const walletTypeOptions = computed<SelectOptionItem[]>(() => [
 ]);
 
 function openAddWalletModal() {
+  if (!authStore.isProUser && financeStore.wallets.length >= 5) {
+    notificationStore.openProModal({
+      featureTitle: 'Batas Maksimal 5 Sumber Dana (Wallet)',
+      featureDescription:
+        'Pengguna paket Free hanya dapat menambahkan maksimal 5 sumber dana (wallet). Berlangganan SisaUang Pro untuk menambahkan sumber dana tanpa batas.',
+      limitSummary: `${financeStore.wallets.length} / 5 Sumber Dana Aktif`,
+    });
+    return;
+  }
   name.value = '';
   type.value = 'bank';
   balance.value = '';
@@ -54,14 +67,16 @@ function openAddWalletModal() {
 
 async function handleCreateWallet() {
   if (!name.value.trim()) return;
-  await financeStore.addWallet({
+  const created = await financeStore.addWallet({
     name: name.value.trim(),
     type: type.value,
     balance: Number(balance.value || 0),
     color: color.value,
     initialHolderName: initialHolderName.value.trim() || 'Pribadi',
   });
-  showAddForm.value = false;
+  if (created) {
+    showAddForm.value = false;
+  }
 }
 
 function openEditWalletModal(w: WalletItem) {
@@ -102,11 +117,18 @@ async function handleDeleteEditingWallet() {
 
       <button
         type="button"
-        class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs"
+        class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs cursor-pointer"
         @click="openAddWalletModal"
       >
         <Plus class="w-4 h-4 shrink-0" />
         <span>{{ t('dashboard.addWallet') }}</span>
+        <span
+          v-if="!authStore.isProUser && financeStore.wallets.length >= 5"
+          class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-extrabold uppercase tracking-wider"
+        >
+          <Crown class="w-3 h-3 shrink-0" />
+          <span>PRO</span>
+        </span>
       </button>
     </div>
 
@@ -119,8 +141,16 @@ async function handleDeleteEditingWallet() {
         <div class="text-2xl sm:text-3xl font-money font-bold tabular-nums text-emerald-600 dark:text-emerald-400 mt-1">
           {{ themeStore.formatMoney(financeStore.totalBalance) }}
         </div>
-        <div class="text-xs text-slate-500 dark:text-slate-400 font-money tabular-nums mt-0.5">
-          {{ financeStore.wallets.length }} dompet & rekening aktif
+        <div class="text-xs text-slate-500 dark:text-slate-400 font-money tabular-nums mt-0.5 flex flex-wrap items-center gap-1.5">
+          <span>
+            {{ financeStore.wallets.length }}{{ !authStore.isProUser ? ' / 5' : '' }} dompet &amp; rekening aktif
+          </span>
+          <span
+            v-if="!authStore.isProUser"
+            class="px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[10px] font-sans font-semibold text-slate-600 dark:text-slate-400"
+          >
+            Paket Free (Maks. 5)
+          </span>
         </div>
       </div>
 

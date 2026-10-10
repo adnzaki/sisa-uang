@@ -11,6 +11,8 @@ import {
   deleteDoc,
   serverTimestamp,
   writeBatch,
+  query,
+  where,
 } from 'firebase/firestore';
 import {
   signInWithEmailAndPassword,
@@ -47,9 +49,29 @@ export interface AdminUserItem {
   status: 'active' | 'blocked';
   authProvider: 'password' | 'google';
   currency: 'IDR' | 'USD';
+  subscriptionStatus?: 'free' | 'pro';
+  isPro?: boolean;
+  subscriptionPlan?: 'monthly' | 'yearly' | null;
+  subscriptionExpiresAt?: string | null;
   passwordHash?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export function isAdminUserProActive(u: AdminUserItem): boolean {
+  const markedPro = u.subscriptionStatus === 'pro' || u.isPro === true;
+  if (!markedPro) return false;
+  if (u.subscriptionExpiresAt) {
+    const cleanDate = String(u.subscriptionExpiresAt).slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) {
+      const now = new Date();
+      const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      if (cleanDate < todayIso) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 export interface AdminActivityLogItem {
@@ -100,6 +122,9 @@ export const useAdminStore = defineStore('admin', () => {
   );
   const blockedUsersCount = computed(
     () => users.value.filter((u) => u.status === 'blocked').length
+  );
+  const proUsersCount = computed(
+    () => users.value.filter((u) => isAdminUserProActive(u)).length
   );
 
   function triggerInstantAlertBanner(alert: AdminSecurityAlertItem) {
@@ -236,6 +261,33 @@ export const useAdminStore = defineStore('admin', () => {
         await ensureSuperAdminFirebaseSession();
         const targetDb = sisaUangDb || db;
         const snap = await getDocs(collection(targetDb, 'users'));
+        const proMarkersMap = new Map<
+          string,
+          { plan: 'monthly' | 'yearly'; expiresAt: string | null }
+        >();
+        try {
+          const proSnap = await getDocs(
+            query(collection(targetDb, 'budgets'), where('category', '==', '__SISAUANG_PRO__'))
+          );
+          proSnap.docs.forEach((pd) => {
+            const pData = pd.data() as Record<string, any>;
+            if (!pData.deleted && pData.ownerId) {
+              const rawPeriod = String(pData.period || '');
+              let plan: 'monthly' | 'yearly' = 'monthly';
+              let expiresAt: string | null = null;
+              if (rawPeriod.startsWith('Y:')) {
+                plan = 'yearly';
+                expiresAt = rawPeriod.slice(2) || null;
+              } else if (rawPeriod.startsWith('M:')) {
+                plan = 'monthly';
+                expiresAt = rawPeriod.slice(2) || null;
+              }
+              proMarkersMap.set(String(pData.ownerId), { plan, expiresAt });
+            }
+          });
+        } catch {
+          // Ignore if no pro markers yet
+        }
         const fbUsers: AdminUserItem[] = [];
         snap.docs.forEach((d) => {
           if (d.id === 'ci4_user_46') return;
@@ -247,6 +299,17 @@ export const useAdminStore = defineStore('admin', () => {
             if (typeof val.seconds === 'number') return new Date(val.seconds * 1000).toISOString();
             return new Date().toISOString();
           };
+          const markerInfo = proMarkersMap.get(d.id);
+          const isPro =
+            !!markerInfo ||
+            fbUser.subscriptionStatus === 'pro' ||
+            fbUser.isPro === true;
+          const subscriptionPlan: 'monthly' | 'yearly' | null = isPro
+            ? markerInfo?.plan || (fbUser.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly')
+            : null;
+          const subscriptionExpiresAt: string | null = isPro
+            ? markerInfo?.expiresAt || fbUser.subscriptionExpiresAt || null
+            : null;
           fbUsers.push({
             uid: d.id,
             username: fbUser.username || String(fbUser.email || d.id).split('@')[0],
@@ -256,6 +319,10 @@ export const useAdminStore = defineStore('admin', () => {
             status: fbUser.status === 'blocked' ? 'blocked' : 'active',
             authProvider: fbUser.authProvider === 'google' ? 'google' : 'password',
             currency: fbUser.currency === 'USD' ? 'USD' : 'IDR',
+            subscriptionStatus: isPro ? 'pro' : 'free',
+            isPro,
+            subscriptionPlan,
+            subscriptionExpiresAt,
             passwordHash: fbUser.passwordHash,
             createdAt: tsToIso(fbUser.createdAt),
             updatedAt: tsToIso(fbUser.updatedAt),
@@ -325,6 +392,128 @@ export const useAdminStore = defineStore('admin', () => {
     } catch (err) {
       notify.notifyError('Gagal Mengubah Status Pengguna', err);
       throw err;
+    }
+  }
+
+  async function updateUserSubscriptionStatus(
+    targetUser: AdminUserItem,
+    options: {
+      isPro: boolean;
+      subscriptionPlan?: 'monthly' | 'yearly' | null;
+      subscriptionExpiresAt?: string | null;
+    }
+  ) {
+    const notify = useNotificationStore();
+    const nextIsPro = options.isPro;
+    const nextSubStatus: 'free' | 'pro' = nextIsPro ? 'pro' : 'free';
+    const nextPlan: 'monthly' | 'yearly' | null = nextIsPro
+      ? options.subscriptionPlan === 'yearly'
+        ? 'yearly'
+        : 'monthly'
+      : null;
+    const nextExpiresAt: string | null =
+      nextIsPro && options.subscriptionExpiresAt
+        ? String(options.subscriptionExpiresAt).slice(0, 10)
+        : null;
+
+    try {
+      const { data } = await apiClient.patch(
+        `/admin/users/${encodeURIComponent(targetUser.uid)}/subscription`,
+        {
+          subscriptionStatus: nextSubStatus,
+          isPro: nextIsPro,
+          subscriptionPlan: nextPlan,
+          subscriptionExpiresAt: nextExpiresAt,
+        }
+      );
+
+      const idx = users.value.findIndex((u) => u.uid === targetUser.uid);
+      if (idx >= 0) {
+        users.value[idx] = {
+          ...users.value[idx],
+          ...(data.user || {}),
+          subscriptionStatus: nextSubStatus,
+          isPro: nextIsPro,
+          subscriptionPlan: nextPlan,
+          subscriptionExpiresAt: nextExpiresAt,
+        };
+      }
+      if (data.log) {
+        logs.value.unshift(data.log);
+      }
+
+      // Persist to Cloud Firestore so the user's client session & 1-read sync token pick it up immediately
+      // Encodes plan ('M' or 'Y') and expiration date ('YYYY-MM-DD') inside `period` (e.g. 'M:2026-11-09', 12 chars)
+      // which is 100% compliant with the deployed `isValidBudget` rule (`period` length 6..20).
+      try {
+        await ensureSuperAdminFirebaseSession();
+        const targetDb = sisaUangDb || db;
+        const safeTargetUid = sanitizeId(targetUser.uid);
+        const proMarkerId = sanitizeId(`su_sub_pro_${safeTargetUid}`);
+        const planCode = nextPlan === 'yearly' ? 'Y' : 'M';
+        const markerPeriod = nextIsPro
+          ? `${planCode}:${nextExpiresAt || '2099-12-31'}`
+          : 'pro-inactive';
+
+        await setDoc(
+          doc(targetDb, 'budgets', proMarkerId),
+          {
+            ownerId: safeTargetUid,
+            category: '__SISAUANG_PRO__',
+            limitAmount: 1,
+            spentAmount: 0,
+            period: markerPeriod,
+            deleted: !nextIsPro,
+            deletedAt: nextIsPro ? null : serverTimestamp(),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        try {
+          await updateDoc(doc(targetDb, 'users', safeTargetUid), {
+            updatedAt: serverTimestamp(),
+          });
+        } catch {
+          // Ignore if user doc not yet in Firestore
+        }
+      } catch {
+        // Fallback handled by Express server registry (.data/users-cache.json)
+      }
+
+      const planLabel = nextPlan === 'yearly' ? 'Tahunan' : 'Bulanan';
+      notify.notifySuccess(
+        nextIsPro
+          ? 'Langganan SisaUang Pro Diaktifkan'
+          : 'Langganan SisaUang Pro Dinonaktifkan',
+        nextIsPro
+          ? `Langganan SisaUang Pro (${planLabel}, aktif s/d ${nextExpiresAt || '-'}) untuk ${targetUser.displayName} (${targetUser.email}) berhasil disimpan.`
+          : `Status langganan ${targetUser.displayName} (${targetUser.email}) berhasil dikembalikan menjadi Paket Free.`
+      );
+    } catch (err) {
+      notify.notifyError('Gagal Mengubah Status Langganan', err);
+      throw err;
+    }
+  }
+
+  async function toggleUserSubscriptionStatus(targetUser: AdminUserItem) {
+    const currentlyPro = isAdminUserProActive(targetUser);
+    if (currentlyPro) {
+      await updateUserSubscriptionStatus(targetUser, {
+        isPro: false,
+        subscriptionPlan: null,
+        subscriptionExpiresAt: null,
+      });
+    } else {
+      const nextMonth = new Date();
+      nextMonth.setMonth(nextMonth.getMonth() + 1);
+      const expIso = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}-${String(nextMonth.getDate()).padStart(2, '0')}`;
+      await updateUserSubscriptionStatus(targetUser, {
+        isPro: true,
+        subscriptionPlan: 'monthly',
+        subscriptionExpiresAt: expIso,
+      });
     }
   }
 
@@ -1122,10 +1311,13 @@ export const useAdminStore = defineStore('admin', () => {
     openAlertsCount,
     activeUsersCount,
     blockedUsersCount,
+    proUsersCount,
     fetchAdminOverview,
     startRealtimeMonitoring,
     stopRealtimeMonitoring,
     toggleUserBlockStatus,
+    updateUserSubscriptionStatus,
+    toggleUserSubscriptionStatus,
     removeUserAccount,
     simulateSuspiciousActivity,
     resolveSecurityAlert,

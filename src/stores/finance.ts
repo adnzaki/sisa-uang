@@ -419,9 +419,7 @@ export const useFinanceStore = defineStore('finance', () => {
       const holders = rawWalletOwners.value.filter(
         (fo) => !fo.deleted && fo.walletId === w.id
       );
-      if (holders.length > 0) {
-        w.balance = holders.reduce((sum, h) => sum + Number(h.balance || 0), 0);
-      }
+      w.balance = holders.reduce((sum, h) => sum + Number(h.balance || 0), 0);
       // Also keep walletName on holders in sync with parent wallet name
       for (const h of holders) {
         if (w.name && h.walletName !== w.name) {
@@ -749,15 +747,43 @@ export const useFinanceStore = defineStore('finance', () => {
     });
     rawTransactions.value = txList;
 
-    const allActiveBudgetDocs = budgetSnap.docs
-      .map((d: any) => ({
-        id: d.id,
-        ...(d.data() as Omit<BudgetItem, 'id'>),
-      }))
-      .filter((b: BudgetItem) => !b.deleted);
+    const allBudgetDocsRaw = budgetSnap.docs.map((d: any) => ({
+      id: d.id,
+      ...(d.data() as Omit<BudgetItem, 'id'>),
+    }));
+
+    // Check if Firestore has an explicit SisaUang Pro marker document for this user
+    const proMarkerDoc = allBudgetDocsRaw.find(
+      (b: BudgetItem) => b.category === '__SISAUANG_PRO__'
+    );
+    if (proMarkerDoc) {
+      const authStore = useAuthStore();
+      if (authStore.user?.uid === uid) {
+        const rawPeriod = String(proMarkerDoc.period || '');
+        let plan: 'monthly' | 'yearly' = 'monthly';
+        let expiresAt: string | null = null;
+        if (rawPeriod.startsWith('Y:')) {
+          plan = 'yearly';
+          expiresAt = rawPeriod.slice(2) || null;
+        } else if (rawPeriod.startsWith('M:')) {
+          plan = 'monthly';
+          expiresAt = rawPeriod.slice(2) || null;
+        }
+        authStore.setExternalSubscriptionStatus(
+          proMarkerDoc.deleted ? 'free' : 'pro',
+          proMarkerDoc.deleted ? null : plan,
+          proMarkerDoc.deleted ? null : expiresAt
+        );
+      }
+    }
+
+    const allActiveBudgetDocs = allBudgetDocsRaw.filter(
+      (b: BudgetItem) => !b.deleted && b.category !== '__SISAUANG_PRO__'
+    );
 
     budgets.value = allActiveBudgetDocs.filter(
-      (b: BudgetItem) => b.category !== BUDGET_PERIOD_MARKER_CATEGORY
+      (b: BudgetItem) =>
+        b.category !== BUDGET_PERIOD_MARKER_CATEGORY && b.category !== '__SISAUANG_PRO__'
     );
 
     const periodSet = new Set<string>(budgetPeriods.value);
@@ -817,6 +843,25 @@ export const useFinanceStore = defineStore('finance', () => {
     lastTokenCheckAt = now;
 
     try {
+      // Also check lightweight local server user status & subscription (0 Firestore reads)
+      try {
+        const res = await fetch(`/api/users/${encodeURIComponent(uid)}/status`);
+        if (res.ok) {
+          const statusData = await res.json();
+          if (statusData.subscriptionStatus === 'pro' || statusData.isPro === true) {
+            authStore.setExternalSubscriptionStatus(
+              'pro',
+              statusData.subscriptionPlan || 'monthly',
+              statusData.subscriptionExpiresAt || null
+            );
+          } else if (statusData.subscriptionStatus === 'free' && statusData.isPro === false) {
+            authStore.setExternalSubscriptionStatus('free', null, null);
+          }
+        }
+      } catch {
+        // Ignore network error
+      }
+
       const canQuery = await ensureFirestoreSessionForUser(uid);
       if (!canQuery) return;
 
@@ -906,7 +951,10 @@ export const useFinanceStore = defineStore('finance', () => {
       if (savedBudgets) {
         const parsedBudgets = JSON.parse(savedBudgets) as BudgetItem[];
         budgets.value = parsedBudgets.filter(
-          (b) => !b.deleted && b.category !== BUDGET_PERIOD_MARKER_CATEGORY
+          (b) =>
+            !b.deleted &&
+            b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
+            b.category !== '__SISAUANG_PRO__'
         );
       }
       const periodSet = new Set<string>();
@@ -944,6 +992,26 @@ export const useFinanceStore = defineStore('finance', () => {
         rawTransactions.value.length > 0;
     } catch {
       // Ignore corrupt cache
+    }
+
+    // Sync latest subscription status from Express registry (0 Firestore reads)
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(uid)}/status`);
+      if (res.ok) {
+        const statusData = await res.json();
+        const authStore = useAuthStore();
+        if (statusData.subscriptionStatus === 'pro' || statusData.isPro === true) {
+          authStore.setExternalSubscriptionStatus(
+            'pro',
+            statusData.subscriptionPlan || 'monthly',
+            statusData.subscriptionExpiresAt || null
+          );
+        } else if (statusData.subscriptionStatus === 'free' && statusData.isPro === false) {
+          authStore.setExternalSubscriptionStatus('free', null, null);
+        }
+      }
+    } catch {
+      // Ignore network error
     }
 
     const canQueryFirestore = await ensureFirestoreSessionForUser(uid);
@@ -1181,14 +1249,40 @@ export const useFinanceStore = defineStore('finance', () => {
     balance: number;
     color: string;
     initialHolderName?: string;
-  }) {
+  }): Promise<boolean> {
     const authStore = useAuthStore();
+    const notify = useNotificationStore();
+
+    if (!authStore.isProUser && wallets.value.length >= 5) {
+      notify.openProModal({
+        featureTitle: 'Batas Maksimal 5 Sumber Dana (Wallet)',
+        featureDescription:
+          'Pengguna paket Free hanya dapat menambahkan maksimal 5 sumber dana (wallet). Berlangganan SisaUang Pro untuk menambahkan sumber dana tanpa batas.',
+        limitSummary: `${wallets.value.length} / 5 Sumber Dana Aktif`,
+      });
+      return false;
+    }
+
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
     const id = sanitizeId(`su_wallet_${Date.now()}`);
     const safeName = sanitizeString(payload.name, MAX_WALLET_NAME_LENGTH, 'Sumber Dana Baru');
     const safeColor = sanitizeString(payload.color, 20, 'emerald');
     const numericBalance = Number(payload.balance) || 0;
     const safeHolderName = sanitizeString(payload.initialHolderName || 'Pribadi', 60, 'Pribadi');
+
+    const normalizedHolder = formatHolderName(safeHolderName).toLowerCase();
+    const isExistingOwnership = ownershipSummary.value.some(
+      (o) => o.displayHolderName.toLowerCase() === normalizedHolder
+    );
+    if (!authStore.isProUser && !isExistingOwnership && ownershipSummary.value.length >= 2) {
+      notify.openProModal({
+        featureTitle: 'Batas Maksimal 2 Kepemilikan Dana',
+        featureDescription:
+          'Pengguna paket Free hanya dapat memiliki maksimal 2 kepemilikan dana. Gunakan nama kepemilikan yang sudah ada atau berlangganan SisaUang Pro untuk menambahkan lebih dari 2 kepemilikan.',
+        limitSummary: `${ownershipSummary.value.length} / 2 Kepemilikan Aktif`,
+      });
+      return false;
+    }
 
     const holderId = sanitizeId(`su_holder_${Date.now()}`);
 
@@ -1256,6 +1350,7 @@ export const useFinanceStore = defineStore('finance', () => {
       'Sumber Dana Ditambahkan',
       `Sumber dana "${safeName}" (Pemilik: ${safeHolderName}) berhasil disimpan ke Firestore.`
     );
+    return true;
   }
 
   async function updateWallet(
@@ -1317,14 +1412,34 @@ export const useFinanceStore = defineStore('finance', () => {
     walletId: string;
     holderName: string;
     balance: number;
-  }) {
+  }): Promise<boolean> {
     const authStore = useAuthStore();
+    const notify = useNotificationStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
     const wallet = wallets.value.find((w) => w.id === payload.walletId);
-    if (!wallet) return;
+    if (!wallet) return false;
+
+    const safeHolderName = sanitizeString(payload.holderName, 60, 'Pemilik Baru');
+    const normalizedHolder = formatHolderName(safeHolderName).toLowerCase();
+    const isExistingOwnership = ownershipSummary.value.some(
+      (o) => o.displayHolderName.toLowerCase() === normalizedHolder
+    );
+    const walletHoldersCount = walletOwners.value.filter((fo) => fo.walletId === wallet.id).length;
+
+    if (
+      !authStore.isProUser &&
+      (ownershipSummary.value.length >= 2 && !isExistingOwnership || walletHoldersCount >= 2)
+    ) {
+      notify.openProModal({
+        featureTitle: 'Batas Maksimal 2 Kepemilikan Dana',
+        featureDescription:
+          'Pengguna paket Free hanya dapat menambahkan maksimal 2 kepemilikan dana. Berlangganan SisaUang Pro untuk mengelola lebih dari 2 kepemilikan dana di seluruh sumber dana Anda.',
+        limitSummary: `${Math.max(ownershipSummary.value.length, walletHoldersCount)} / 2 Kepemilikan Aktif`,
+      });
+      return false;
+    }
 
     const id = sanitizeId(`su_holder_${Date.now()}`);
-    const safeHolderName = sanitizeString(payload.holderName, 60, 'Pemilik Baru');
     const numericBalance = Number(payload.balance) || 0;
     const newWalletTotal =
       walletOwners.value
@@ -1378,6 +1493,7 @@ export const useFinanceStore = defineStore('finance', () => {
       'Pemilik Sumber Dana Ditambahkan',
       `Pemilik dana "${safeHolderName}" berhasil ditambahkan ke ${wallet.name}.`
     );
+    return true;
   }
 
   async function updateWalletOwner(
@@ -1524,6 +1640,77 @@ export const useFinanceStore = defineStore('finance', () => {
     useNotificationStore().notifySuccess(
       'Pemilik Sumber Dana Dihapus',
       `Pemilik dana "${formatHolderName(target.holderName)}" telah diarsipkan (Soft Delete) dari ${target.walletName}.`
+    );
+    return true;
+  }
+
+  async function removeHolderGlobally(rawHolderNameInput: string): Promise<boolean> {
+    const authStore = useAuthStore();
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
+    const cleanTarget = String(rawHolderNameInput || '').trim();
+    if (!cleanTarget) return false;
+
+    const matchingHolders = walletOwners.value.filter(
+      (fo) =>
+        String(fo.holderName).trim() === cleanTarget ||
+        formatHolderName(fo.holderName).toLowerCase() === formatHolderName(cleanTarget).toLowerCase()
+    );
+    if (matchingHolders.length === 0) return false;
+
+    const displayLabel = formatHolderName(cleanTarget);
+    const totalAllocated = matchingHolders.reduce((sum, h) => sum + Number(h.balance || 0), 0);
+    const walletNames = Array.from(new Set(matchingHolders.map((h) => h.walletName))).join(', ');
+
+    const confirmed = await useNotificationStore().requestConfirmation({
+      title: 'Konfirmasi Hapus Kepemilikan Dana',
+      message: `Apakah Anda yakin ingin menghapus kepemilikan dana "${displayLabel}"?`,
+      detail: `Kepemilikan ini terdaftar pada ${matchingHolders.length} sumber dana (${walletNames}) dengan total alokasi saldo Rp ${totalAllocated.toLocaleString('id-ID')}. Saldo dompet terkait akan disesuaikan secara otomatis.`,
+      confirmLabel: 'Ya, Hapus Kepemilikan',
+    });
+    if (!confirmed) return false;
+
+    const matchingIds = new Set(matchingHolders.map((h) => h.id));
+    const affectedWalletIds = new Set(matchingHolders.map((h) => h.walletId));
+
+    await ensureFirestoreSessionForUser(uid);
+    try {
+      const batch = writeBatch(db);
+      for (const h of matchingHolders) {
+        batch.update(doc(db, 'wallet_owners', h.id), {
+          deleted: true,
+          deletedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      for (const wId of affectedWalletIds) {
+        const remainingInWallet = walletOwners.value.filter(
+          (fo) => fo.walletId === wId && !matchingIds.has(fo.id)
+        );
+        const nextWalletBal = remainingInWallet.reduce(
+          (sum, h) => sum + Number(h.balance || 0),
+          0
+        );
+        batch.update(doc(db, 'wallets', wId), {
+          balance: nextWalletBal,
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
+    } catch (err) {
+      useNotificationStore().notifyError('Gagal Menghapus Kepemilikan Dana', err);
+      handleFirestoreError(err, OperationType.UPDATE, 'wallet_owners');
+    }
+
+    rawWalletOwners.value = rawWalletOwners.value.filter((fo) => !matchingIds.has(fo.id));
+    syncWalletTotalBalancesFromHolders();
+    saveLocalSnapshot(uid, true);
+
+    useNotificationStore().notifySuccess(
+      'Kepemilikan Dana Dihapus',
+      `Kepemilikan dana "${displayLabel}" berhasil dihapus dari ${matchingHolders.length} sumber dana.`
     );
     return true;
   }
@@ -2502,6 +2689,16 @@ export const useFinanceStore = defineStore('finance', () => {
       return false;
     }
 
+    if (!authStore.isProUser && cleanPeriod > minAllowedPeriod) {
+      useNotificationStore().openProModal({
+        featureTitle: 'Anggaran Periode Akan Datang',
+        featureDescription:
+          `Pengguna paket Free hanya dapat membuat anggaran pada bulan berjalan (${formatPeriodLabel(minAllowedPeriod)}). Berlangganan SisaUang Pro untuk merencanakan anggaran pada bulan-bulan yang akan datang.`,
+        limitSummary: `Paket Free: Hanya Bulan Ini (${formatPeriodLabel(minAllowedPeriod)})`,
+      });
+      return false;
+    }
+
     const alreadyExists =
       budgetPeriods.value.includes(cleanPeriod) ||
       budgets.value.some((b) => !b.deleted && b.period === cleanPeriod);
@@ -2639,6 +2836,17 @@ export const useFinanceStore = defineStore('finance', () => {
         : selectedPeriod.value && selectedPeriod.value !== 'all'
           ? selectedPeriod.value
           : getCurrentMonthPeriod();
+
+    const currentMonthPeriod = getCurrentMonthPeriod();
+    if (!authStore.isProUser && period > currentMonthPeriod) {
+      useNotificationStore().openProModal({
+        featureTitle: 'Anggaran Periode Akan Datang',
+        featureDescription:
+          `Pengguna paket Free hanya dapat membuat dan mengelola anggaran pada bulan saat ini (${formatPeriodLabel(currentMonthPeriod)}). Berlangganan SisaUang Pro untuk membuat anggaran di periode mendatang.`,
+        limitSummary: `Paket Free: Hanya Bulan Ini (${formatPeriodLabel(currentMonthPeriod)})`,
+      });
+      return false;
+    }
 
     // Match either by explicit editing ID or by (period + category)
     const existing = payload.id
@@ -2812,6 +3020,7 @@ export const useFinanceStore = defineStore('finance', () => {
     addWalletOwner,
     updateWalletOwner,
     renameHolderGlobally,
+    removeHolderGlobally,
     removeWalletOwner,
     removeWallet,
     addCategory,

@@ -12,6 +12,7 @@ import {
   FolderOpen,
   Lock,
   PieChart,
+  Crown,
 } from 'lucide-vue-next';
 import {
   useFinanceStore,
@@ -19,6 +20,7 @@ import {
   getCurrentMonthPeriod,
 } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
+import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
 import AppModal from '../components/AppModal.vue';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
@@ -26,6 +28,7 @@ import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.
 const { t, locale } = useI18n();
 const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
+const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
 
 const now = new Date();
@@ -161,7 +164,7 @@ const allowedAddYearsOptions = computed<SelectOptionItem[]>(() => [
   {
     value: String(nextYearNum),
     label: `${nextYearNum} (Tahun Depan)`,
-    badge: 'Maks. Des',
+    badge: authStore.isProUser ? 'Maks. Des' : 'PRO',
   },
 ]);
 
@@ -169,20 +172,29 @@ const allowedAddMonthsOptions = computed<SelectOptionItem[]>(() => {
   const targetYear = Number(newPeriodYear.value) || currentYearNum;
   const startMonth = targetYear === currentYearNum ? currentMonthNum : 1;
   const loc = locale.value === 'id' ? 'id-ID' : 'en-US';
+  const currentPeriodKey = getCurrentMonthPeriod();
   const list: SelectOptionItem[] = [];
 
   for (let m = startMonth; m <= 12; m++) {
     const mm = String(m).padStart(2, '0');
     const periodKey = `${targetYear}-${mm}`;
     const alreadyAdded = allRegisteredPeriods.value.includes(periodKey);
+    const isFuturePeriod = periodKey > currentPeriodKey;
     const monthName = new Date(targetYear, m - 1, 1).toLocaleDateString(loc, {
       month: 'long',
     });
 
+    let badge: string | undefined;
+    if (alreadyAdded) {
+      badge = 'Terdaftar';
+    } else if (isFuturePeriod && !authStore.isProUser) {
+      badge = 'PRO';
+    }
+
     list.push({
       value: mm,
       label: `${monthName} ${targetYear}${alreadyAdded ? ' (Sudah Ada)' : ''}`,
-      badge: alreadyAdded ? 'Terdaftar' : undefined,
+      badge,
     });
   }
   return list;
@@ -198,6 +210,26 @@ watch(newPeriodYear, () => {
 });
 
 function openAddPeriodModal() {
+  const currentPeriodKey = getCurrentMonthPeriod();
+  const currentMonthAlreadyRegistered = allRegisteredPeriods.value.includes(currentPeriodKey);
+
+  // If Free user already has the current month registered, any new period they add would be a future period
+  if (!authStore.isProUser && currentMonthAlreadyRegistered) {
+    notificationStore.openProModal({
+      featureTitle: 'Anggaran Periode Akan Datang',
+      featureDescription: `Pengguna paket Free hanya mendukung pembuatan anggaran pada bulan saat ini (${formatPeriodLabel(currentPeriodKey)}). Berlangganan SisaUang Pro untuk membuat anggaran pada bulan-bulan yang akan datang.`,
+      limitSummary: `Paket Free: Hanya Bulan Ini (${formatPeriodLabel(currentPeriodKey)})`,
+    });
+    return;
+  }
+
+  if (!authStore.isProUser) {
+    newPeriodYear.value = String(currentYearNum);
+    newPeriodMonth.value = String(currentMonthNum).padStart(2, '0');
+    showAddPeriodModal.value = true;
+    return;
+  }
+
   // Default to selectedYear if it is currentYear or nextYear, otherwise currentYear
   const yNum = Number(selectedYear.value);
   if (yNum === currentYearNum || yNum === nextYearNum) {
@@ -217,6 +249,16 @@ function openAddPeriodModal() {
 
 async function handleCreatePeriod() {
   const periodStr = `${newPeriodYear.value}-${newPeriodMonth.value}`;
+  const currentPeriodKey = getCurrentMonthPeriod();
+  if (!authStore.isProUser && periodStr > currentPeriodKey) {
+    showAddPeriodModal.value = false;
+    notificationStore.openProModal({
+      featureTitle: 'Anggaran Periode Akan Datang',
+      featureDescription: `Pengguna paket Free hanya mendukung pembuatan anggaran pada bulan saat ini (${formatPeriodLabel(currentPeriodKey)}). Berlangganan SisaUang Pro untuk merencanakan anggaran periode mendatang.`,
+      limitSummary: `Paket Free: Hanya Bulan Ini (${formatPeriodLabel(currentPeriodKey)})`,
+    });
+    return;
+  }
   const created = await financeStore.addBudgetPeriod(periodStr);
   if (created) {
     showAddPeriodModal.value = false;
@@ -310,6 +352,15 @@ const expenseCategoryOptions = computed<SelectOptionItem[]>(() =>
 
 function openAddBudgetModal() {
   if (!activeBudgetPeriod.value) return;
+  const currentPeriodKey = getCurrentMonthPeriod();
+  if (!authStore.isProUser && activeBudgetPeriod.value > currentPeriodKey) {
+    notificationStore.openProModal({
+      featureTitle: 'Anggaran Periode Akan Datang',
+      featureDescription: `Pengguna paket Free hanya mendukung pembuatan anggaran pada bulan saat ini (${formatPeriodLabel(currentPeriodKey)}). Berlangganan SisaUang Pro untuk menambahkan kategori anggaran di periode akan datang.`,
+      limitSummary: `Paket Free: Hanya Bulan Ini (${formatPeriodLabel(currentPeriodKey)})`,
+    });
+    return;
+  }
   isEditingBudget.value = false;
   editingBudgetId.value = null;
   category.value = '';
@@ -386,6 +437,13 @@ async function handleDeleteEditingBudget() {
           >
             <Plus class="w-4 h-4 shrink-0" />
             <span>Tambah Periode Bulan</span>
+            <span
+              v-if="!authStore.isProUser && allRegisteredPeriods.includes(getCurrentMonthPeriod())"
+              class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-extrabold uppercase tracking-wider"
+            >
+              <Crown class="w-3 h-3 shrink-0" />
+              <span>PRO</span>
+            </span>
           </button>
         </div>
       </div>
