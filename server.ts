@@ -720,6 +720,90 @@ async function startServer() {
     });
   });
 
+  // Reset Password by Email or Username (Forgot Password on /auth screen)
+  app.post('/api/auth/reset-password', (req: Request, res: Response) => {
+    const identifierRaw = String(req.body?.identifier || '').trim().toLowerCase();
+    const newPassword = String(req.body?.newPassword || '');
+    const targetUidFromClient = req.body?.uid ? String(req.body.uid).trim() : '';
+
+    if (!identifierRaw || newPassword.length < 6) {
+      res.status(400).json({
+        error: 'Email/Username dan kata sandi baru minimal 6 karakter wajib diisi.',
+      });
+      return;
+    }
+
+    let matchedUser: ServerUserRecord | undefined;
+    if (targetUidFromClient && usersStore.has(targetUidFromClient)) {
+      matchedUser = usersStore.get(targetUidFromClient);
+    } else {
+      for (const u of usersStore.values()) {
+        if (
+          u.email.toLowerCase() === identifierRaw ||
+          (u.username && u.username.toLowerCase() === identifierRaw)
+        ) {
+          matchedUser = u;
+          break;
+        }
+      }
+    }
+
+    const newHash = hashPassword(newPassword);
+
+    if (matchedUser) {
+      if (matchedUser.status === 'blocked') {
+        res.status(403).json({
+          error: 'Akses akun Anda sedang diblokir oleh Administrator.',
+        });
+        return;
+      }
+
+      matchedUser.passwordHash = newHash;
+      matchedUser.authProvider = 'password';
+      matchedUser.updatedAt = nowIso();
+      if (
+        matchedUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+        matchedUser.uid === 'admin_vuedevo_01'
+      ) {
+        superAdminPasswordHash = newHash;
+      }
+      savePersistedUsersCache();
+
+      appendLog(
+        matchedUser.uid,
+        matchedUser.email,
+        'password_reset',
+        `Pengguna ${matchedUser.displayName} (@${matchedUser.username}) melakukan reset kata sandi.`,
+        'info'
+      );
+
+      res.json({
+        success: true,
+        uid: matchedUser.uid,
+        email: matchedUser.email,
+        username: matchedUser.username,
+        passwordHash: newHash,
+        updatedAt: matchedUser.updatedAt,
+      });
+      return;
+    }
+
+    // If user is only in Firestore and client passed uid, return the computed hash so client can save to Firestore & sync
+    if (targetUidFromClient) {
+      res.json({
+        success: true,
+        uid: targetUidFromClient,
+        passwordHash: newHash,
+        updatedAt: nowIso(),
+      });
+      return;
+    }
+
+    res.status(404).json({
+      error: 'Akun dengan Email atau Username tersebut tidak ditemukan.',
+    });
+  });
+
   // Verify a password against a stored hash (used when user document is fetched directly from Firestore)
   app.post('/api/auth/verify-hash', (req: Request, res: Response) => {
     const password = String(req.body?.password || '');

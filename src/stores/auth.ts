@@ -1181,6 +1181,95 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  // 3C. Reset Password by Email or Username from Login / Auth Screen
+  async function resetUserPassword(identifierInput: string, newPassword: string): Promise<boolean> {
+    const notify = useNotificationStore();
+    const cleanIdentifier = identifierInput.trim().toLowerCase();
+
+    if (!cleanIdentifier) {
+      notify.notifyError('Validasi Reset Sandi', 'Masukkan alamat email atau username akun Anda.');
+      return false;
+    }
+    if (!newPassword || newPassword.length < 6) {
+      notify.notifyError('Validasi Kata Sandi Gagal', 'Kata sandi baru harus terdiri dari minimal 6 karakter.');
+      return false;
+    }
+
+    isLoading.value = true;
+    error.value = null;
+
+    try {
+      // Check if user exists in Cloud Firestore first (in case server cache hasn't synced this user yet)
+      const firestoreUser = await findMigratedUserInFirestore(cleanIdentifier);
+
+      const { data } = await apiClient.post('/auth/reset-password', {
+        identifier: cleanIdentifier,
+        uid: firestoreUser?.uid,
+        newPassword,
+      });
+
+      const resolvedUid = data?.uid || firestoreUser?.uid;
+      const newPasswordHash: string | undefined = data?.passwordHash;
+
+      if (resolvedUid && newPasswordHash) {
+        // Sync user into backend registry if they were found in Firestore
+        if (firestoreUser) {
+          try {
+            await apiClient.post('/users/sync', {
+              uid: firestoreUser.uid,
+              username: firestoreUser.username,
+              email: firestoreUser.email,
+              displayName: firestoreUser.displayName,
+              authProvider: 'password',
+              passwordHash: newPasswordHash,
+              subscriptionStatus: firestoreUser.subscriptionStatus,
+              isPro: firestoreUser.isPro,
+            });
+          } catch {
+            // Ignore
+          }
+        }
+
+        // Persist updated passwordHash to Cloud Firestore /users/{uid}
+        try {
+          await updateDoc(doc(db, 'users', resolvedUid), {
+            passwordHash: newPasswordHash,
+            authProvider: 'password',
+            updatedAt: serverTimestamp(),
+          });
+        } catch {
+          try {
+            await setDoc(
+              doc(db, 'users', resolvedUid),
+              {
+                passwordHash: newPasswordHash,
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+          } catch {
+            // Ignore if remote Firestore rules restrict passwordHash field
+          }
+        }
+      }
+
+      notify.notifySuccess(
+        'Reset Kata Sandi Berhasil',
+        'Kata sandi baru berhasil disimpan. Silakan masuk menggunakan kata sandi baru Anda.'
+      );
+      return true;
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.error ||
+        (err instanceof Error ? err.message : 'Gagal mereset kata sandi. Pastikan email atau username terdaftar.');
+      error.value = msg;
+      notify.notifyError('Reset Kata Sandi Gagal', err, msg);
+      return false;
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
   // 4. Login / Register with Google Account (Firebase Popup)
   async function loginWithGoogle(): Promise<{ requiresOtp: boolean }> {
     isLoading.value = true;
@@ -1489,6 +1578,7 @@ export const useAuthStore = defineStore('auth', () => {
     registerWithEmail,
     updateUserProfile,
     changeUserPassword,
+    resetUserPassword,
     loginWithGoogle,
     requestSuperAdminOtp,
     verifySuperAdminOtp,
