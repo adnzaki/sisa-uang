@@ -9,12 +9,14 @@ import {
   Rocket,
   Layers,
   Check,
+  RefreshCw,
+  KeyRound,
 } from 'lucide-vue-next';
 import { useNotificationStore } from '../stores/notification';
 import { useAuthStore } from '../stores/auth';
 import AppModal from './AppModal.vue';
 
-const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0_rc_4';
+const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0_rc_4_rev2';
 const RELEASE_VERSION = '1.0.0-rc.4';
 const RELEASE_DATE = 'Oktober 2026';
 
@@ -34,6 +36,26 @@ export interface ChangelogItem {
 }
 
 const changelogItems: ChangelogItem[] = [
+  {
+    id: 'server-cache-sync-fix',
+    category: 'performance',
+    badge: 'CACHE & SERVER',
+    badgeColor: 'sky',
+    title: 'Perbaikan Sistem Cache dan Integrasi Penarikan Data dari Server',
+    summary:
+      'Penyempurnaan sinkronisasi cache lokal dengan registri server serta penarikan data pengguna dan koleksi Cloud Firestore secara menyeluruh agar seluruh data selalu tampil akurat dan konsisten.',
+    icon: RefreshCw,
+  },
+  {
+    id: 'password-reset-feature',
+    category: 'features',
+    badge: 'FITUR KEAMANAN',
+    badgeColor: 'rose',
+    title: 'Penambahan Fitur Reset Password & Visibilitas Kata Sandi',
+    summary:
+      'Kini pengguna dapat memulihkan dan mengatur ulang kata sandi secara langsung menggunakan email atau username terdaftar pada halaman autentikasi, dilengkapi tombol tampilkan/sembunyikan kata sandi (Hide/Show Password).',
+    icon: KeyRound,
+  },
   {
     id: 'periodic-budget',
     category: 'features',
@@ -80,7 +102,7 @@ const filterTabs = [
   { id: 'all' as const, label: 'Semua Pembaruan', count: changelogItems.length },
   {
     id: 'features' as const,
-    label: 'Fitur Anggaran',
+    label: 'Fitur Baru',
     count: changelogItems.filter((i) => i.category === 'features').length,
   },
   {
@@ -181,7 +203,7 @@ watch(
               class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 text-slate-200 text-[11px] font-mono"
             >
               <Layers class="w-3.5 h-3.5 text-emerald-400" />
-              <span>4 Pembaruan Utama</span>
+              <span>{{ changelogItems.length }} Pembaruan Utama</span>
             </span>
           </div>
 
@@ -191,8 +213,9 @@ watch(
             </h3>
             <p class="text-xs sm:text-sm text-slate-300 leading-relaxed">
               Pembaruan versi <strong class="text-emerald-300 font-mono">{{ RELEASE_VERSION }}</strong> menghadirkan
+              perbaikan sistem cache dan integrasi penarikan data dari server, penambahan fitur reset password,
               dukungan anggaran periodik bulanan, penyempurnaan tata letak layar tablet, peningkatan aksesibilitas
-              navigasi tombol TAB pada formulir, serta optimalisasi operasi database dan penggunaan cache.
+              navigasi tombol TAB pada formulir, serta optimalisasi operasi database.
             </p>
           </div>
         </div>
