@@ -22,6 +22,12 @@ export interface ConfirmDialogOptions {
   variant?: 'danger' | 'warning';
 }
 
+export interface ProModalOptions {
+  featureTitle: string;
+  featureDescription: string;
+  limitSummary?: string;
+}
+
 export const useNotificationStore = defineStore('notification', () => {
   const banners = ref<PopupBannerItem[]>([]);
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -33,12 +39,29 @@ export const useNotificationStore = defineStore('notification', () => {
   // Global Official Release Notes / Changelog Modal State (v1.0.0-rc.4)
   const changelogModalOpen = ref(false);
 
+  // Global SisaUang Pro Subscription Prompt Modal State
+  const proModalOptions = ref<ProModalOptions | null>(null);
+
   function openChangelogModal() {
     changelogModalOpen.value = true;
   }
 
   function closeChangelogModal() {
     changelogModalOpen.value = false;
+  }
+
+  function openProModal(options?: Partial<ProModalOptions>) {
+    proModalOptions.value = {
+      featureTitle: options?.featureTitle || 'Fitur Eksklusif SisaUang Pro',
+      featureDescription:
+        options?.featureDescription ||
+        'Fitur ini hanya tersedia untuk pelanggan SisaUang Pro. Berlangganan SisaUang Pro untuk membuka seluruh batasan akun.',
+      limitSummary: options?.limitSummary,
+    };
+  }
+
+  function closeProModal() {
+    proModalOptions.value = null;
   }
 
   function requestConfirmation(options: ConfirmDialogOptions): Promise<boolean> {
@@ -243,6 +266,9 @@ export const useNotificationStore = defineStore('notification', () => {
     changelogModalOpen,
     openChangelogModal,
     closeChangelogModal,
+    proModalOptions,
+    openProModal,
+    closeProModal,
     showPopup,
     notifyQuotaExceeded,
     notifySuccess,

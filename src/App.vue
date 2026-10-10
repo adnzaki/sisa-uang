@@ -28,6 +28,9 @@ import {
   ChevronDown,
   User,
   Sparkles,
+  Crown,
+  Lock,
+  Check,
 } from 'lucide-vue-next';
 import { useAuthStore } from './stores/auth';
 import { useThemeStore, ThemeMode } from './stores/theme';
@@ -666,8 +669,26 @@ async function handleLogout() {
                       <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate font-mono">
                         {{ authStore.user?.email }}
                       </div>
-                      <div class="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                        {{ authStore.isSuperAdmin ? 'Super Administrator' : 'Pengguna Personal' }}
+                      <div class="flex items-center gap-1.5 mt-1">
+                        <span
+                          v-if="authStore.isSuperAdmin"
+                          class="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400"
+                        >
+                          Super Administrator
+                        </span>
+                        <span
+                          v-else-if="authStore.isProUser"
+                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 text-[10px] font-bold uppercase tracking-wider"
+                        >
+                          <Crown class="w-3 h-3 shrink-0" />
+                          <span>SisaUang Pro</span>
+                        </span>
+                        <span
+                          v-else
+                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 text-[10px] font-semibold"
+                        >
+                          Paket Free
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -820,8 +841,26 @@ async function handleLogout() {
                       <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate font-mono">
                         {{ authStore.user?.email }}
                       </div>
-                      <div class="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                        {{ authStore.isSuperAdmin ? 'Super Administrator' : 'Pengguna Personal' }}
+                      <div class="flex items-center gap-1.5 mt-1">
+                        <span
+                          v-if="authStore.isSuperAdmin"
+                          class="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400"
+                        >
+                          Super Administrator
+                        </span>
+                        <span
+                          v-else-if="authStore.isProUser"
+                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 text-[10px] font-bold uppercase tracking-wider"
+                        >
+                          <Crown class="w-3 h-3 shrink-0" />
+                          <span>SisaUang Pro</span>
+                        </span>
+                        <span
+                          v-else
+                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 text-[10px] font-semibold"
+                        >
+                          Paket Free
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -1246,6 +1285,102 @@ async function handleLogout() {
 
     <!-- Global Official Release Notes & Changelog Modal (v1.0.0-rc.4) -->
     <ReleaseNotesModal />
+
+    <!-- Global SisaUang Pro Subscription Lock Modal -->
+    <AppModal
+      :open="!!notificationStore.proModalOptions"
+      title="Fitur Eksklusif SisaUang Pro"
+      subtitle="Tingkatkan akun Anda ke SisaUang Pro untuk membuka seluruh fitur lanjutan tanpa batas."
+      max-width="md"
+      @close="notificationStore.closeProModal()"
+    >
+      <div v-if="notificationStore.proModalOptions" class="space-y-4">
+        <!-- Feature Locked Banner -->
+        <div class="rounded-2xl border border-amber-200/90 dark:border-amber-900/60 bg-amber-50/80 dark:bg-amber-950/30 p-4 flex items-start gap-3.5">
+          <div class="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+            <Crown class="w-5 h-5" />
+          </div>
+          <div class="min-w-0 flex-1 space-y-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <h4 class="text-xs sm:text-sm font-bold text-amber-950 dark:text-amber-200">
+                {{ notificationStore.proModalOptions.featureTitle }}
+              </h4>
+              <span
+                v-if="notificationStore.proModalOptions.limitSummary"
+                class="px-2 py-0.5 rounded-md bg-amber-200/80 dark:bg-amber-900/70 text-amber-900 dark:text-amber-200 text-[10px] font-mono font-bold"
+              >
+                {{ notificationStore.proModalOptions.limitSummary }}
+              </span>
+            </div>
+            <p class="text-xs text-amber-900/90 dark:text-amber-200/90 leading-relaxed">
+              {{ notificationStore.proModalOptions.featureDescription }}
+            </p>
+          </div>
+        </div>
+
+        <!-- SisaUang Pro Benefits List -->
+        <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 p-4 space-y-3">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+              Keuntungan Pelanggan SisaUang Pro
+            </span>
+            <span class="px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold">
+              PRO UNLIMITED
+            </span>
+          </div>
+
+          <ul class="space-y-2 text-xs text-slate-600 dark:text-slate-300">
+            <li class="flex items-start gap-2.5">
+              <div class="w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                <Check class="w-2.5 h-2.5 stroke-[3]" />
+              </div>
+              <span>
+                <strong>Perencanaan Anggaran Masa Depan:</strong> Buat anggaran untuk periode bulan-bulan mendatang hingga akhir tahun depan.
+              </span>
+            </li>
+            <li class="flex items-start gap-2.5">
+              <div class="w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                <Check class="w-2.5 h-2.5 stroke-[3]" />
+              </div>
+              <span>
+                <strong>Laporan PDF Resmi &amp; Rekonsiliasi:</strong> Unduh Laporan Kas Umum, Rekonsiliasi Kas, dan Realisasi Anggaran di halaman Analitik.
+              </span>
+            </li>
+            <li class="flex items-start gap-2.5">
+              <div class="w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                <Check class="w-2.5 h-2.5 stroke-[3]" />
+              </div>
+              <span>
+                <strong>Lebih dari 5 Sumber Dana (Wallet):</strong> Tambahkan rekening bank, e-wallet, kas tunai, dan investasi tanpa batas.
+              </span>
+            </li>
+            <li class="flex items-start gap-2.5">
+              <div class="w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                <Check class="w-2.5 h-2.5 stroke-[3]" />
+              </div>
+              <span>
+                <strong>Lebih dari 2 Kepemilikan Dana:</strong> Pisahkan alokasi kepemilikan dana keluarga atau bisnis di setiap dompet tanpa batas.
+              </span>
+            </li>
+          </ul>
+        </div>
+
+        <p class="text-[11px] text-slate-500 dark:text-slate-400 text-center leading-relaxed">
+          Silakan berlangganan <strong>SisaUang Pro</strong> atau hubungi Administrator untuk mengaktifkan status langganan akun Anda.
+        </p>
+
+        <div class="pt-1">
+          <button
+            type="button"
+            class="w-full min-h-[46px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shadow-xs cursor-pointer"
+            @click="notificationStore.closeProModal()"
+          >
+            <Crown class="w-4 h-4 shrink-0" />
+            <span>Mengerti, Tutup Pemberitahuan</span>
+          </button>
+        </div>
+      </div>
+    </AppModal>
 
     <!-- Global Delete Confirmation Modal -->
     <AppModal

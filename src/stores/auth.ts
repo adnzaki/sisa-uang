@@ -49,7 +49,31 @@ export interface AppUser {
   status: 'active' | 'blocked';
   authProvider: 'password' | 'google';
   currency: 'IDR' | 'USD';
+  subscriptionStatus?: 'free' | 'pro';
+  isPro?: boolean;
+  subscriptionPlan?: 'monthly' | 'yearly' | null;
+  subscriptionExpiresAt?: string | null;
   isFirebaseBacked?: boolean;
+}
+
+export function isSubscriptionActiveByDate(
+  status?: 'free' | 'pro',
+  isProFlag?: boolean,
+  expiresAt?: string | null
+): boolean {
+  const markedPro = status === 'pro' || isProFlag === true;
+  if (!markedPro) return false;
+  if (expiresAt) {
+    const cleanDate = String(expiresAt).slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) {
+      const now = new Date();
+      const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      if (cleanDate < todayIso) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 export interface OtpDispatchInfo {
@@ -89,6 +113,16 @@ export const useAuthStore = defineStore('auth', () => {
         user.value.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
         user.value.username?.toLowerCase() === SUPER_ADMIN_USERNAME ||
         user.value.username?.toLowerCase() === 'dark.notes')
+  );
+  const isProUser = computed(
+    () =>
+      !!user.value &&
+      (isSuperAdmin.value ||
+        isSubscriptionActiveByDate(
+          user.value.subscriptionStatus,
+          user.value.isPro,
+          user.value.subscriptionExpiresAt
+        ))
   );
   const canAccessControlPanel = computed(() => {
     if (!isAuthenticated.value || !isSuperAdmin.value) return false;
@@ -157,10 +191,67 @@ export const useAuthStore = defineStore('auth', () => {
           error.value = null;
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
         }
+
+        if (data.subscriptionStatus === 'pro' || data.subscriptionStatus === 'free') {
+          const nextIsPro = isSubscriptionActiveByDate(
+            data.subscriptionStatus,
+            data.isPro,
+            data.subscriptionExpiresAt
+          );
+          const nextPlan = nextIsPro ? data.subscriptionPlan || 'monthly' : null;
+          const nextExp = nextIsPro ? data.subscriptionExpiresAt || null : null;
+          const prevIsPro = isSubscriptionActiveByDate(
+            user.value.subscriptionStatus,
+            user.value.isPro,
+            user.value.subscriptionExpiresAt
+          );
+          if (
+            nextIsPro !== prevIsPro ||
+            user.value.subscriptionPlan !== nextPlan ||
+            user.value.subscriptionExpiresAt !== nextExp
+          ) {
+            user.value = {
+              ...user.value,
+              subscriptionStatus: nextIsPro ? 'pro' : 'free',
+              isPro: nextIsPro,
+              subscriptionPlan: nextPlan,
+              subscriptionExpiresAt: nextExp,
+            };
+            localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+          }
+        }
       } catch {
         // Ignore poll error
       }
     }, 15000);
+  }
+
+  function setExternalSubscriptionStatus(
+    nextStatus: 'free' | 'pro',
+    plan?: 'monthly' | 'yearly' | null,
+    expiresAt?: string | null
+  ) {
+    if (!user.value) return;
+    const isPro = isSubscriptionActiveByDate(nextStatus, nextStatus === 'pro', expiresAt);
+    const resolvedStatus: 'free' | 'pro' = isPro ? 'pro' : 'free';
+    const resolvedPlan = isPro ? plan || user.value.subscriptionPlan || 'monthly' : null;
+    const resolvedExpires = isPro ? expiresAt ?? user.value.subscriptionExpiresAt ?? null : null;
+
+    if (
+      user.value.subscriptionStatus !== resolvedStatus ||
+      user.value.isPro !== isPro ||
+      user.value.subscriptionPlan !== resolvedPlan ||
+      user.value.subscriptionExpiresAt !== resolvedExpires
+    ) {
+      user.value = {
+        ...user.value,
+        subscriptionStatus: resolvedStatus,
+        isPro,
+        subscriptionPlan: resolvedPlan,
+        subscriptionExpiresAt: resolvedExpires,
+      };
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+    }
   }
 
   async function ensureFirestoreUserDocument(
@@ -232,6 +323,8 @@ export const useAuthStore = defineStore('auth', () => {
 
         if (migratedSnapDoc) {
           const existingData = migratedSnapDoc.data();
+          const isPro =
+            existingData.subscriptionStatus === 'pro' || existingData.isPro === true;
           profile = {
             uid: migratedSnapDoc.id,
             username: existingData.username || defaultUsername,
@@ -241,6 +334,8 @@ export const useAuthStore = defineStore('auth', () => {
             status: existingData.status === 'blocked' ? 'blocked' : 'active',
             authProvider: existingData.authProvider === 'google' ? 'google' : authProvider,
             currency: existingData.currency === 'USD' ? 'USD' : 'IDR',
+            subscriptionStatus: isPro ? 'pro' : 'free',
+            isPro,
             isFirebaseBacked: true,
           };
         } else {
@@ -279,6 +374,8 @@ export const useAuthStore = defineStore('auth', () => {
         }
       } else {
         const existingData = snap.data();
+        const isPro =
+          existingData.subscriptionStatus === 'pro' || existingData.isPro === true;
         profile = {
           uid: safeUid,
           username: existingData.username || defaultUsername,
@@ -288,6 +385,8 @@ export const useAuthStore = defineStore('auth', () => {
           status: existingData.status === 'blocked' ? 'blocked' : 'active',
           authProvider: existingData.authProvider === 'google' ? 'google' : 'password',
           currency: existingData.currency === 'USD' ? 'USD' : 'IDR',
+          subscriptionStatus: isPro ? 'pro' : 'free',
+          isPro,
           isFirebaseBacked: true,
         };
       }
@@ -303,9 +402,15 @@ export const useAuthStore = defineStore('auth', () => {
         email: profile.email,
         displayName: profile.displayName,
         authProvider: profile.authProvider,
+        subscriptionStatus: profile.subscriptionStatus,
+        isPro: profile.isPro,
       });
       if (data?.user?.status) {
         profile.status = data.user.status;
+      }
+      if (data?.user?.subscriptionStatus === 'pro' || data?.user?.isPro === true) {
+        profile.subscriptionStatus = 'pro';
+        profile.isPro = true;
       }
     } catch {
       // Ignore
@@ -351,7 +456,8 @@ export const useAuthStore = defineStore('auth', () => {
         }
         try {
           const profile = await ensureFirestoreUserDocument(fbUser);
-          if (!user.value || user.value.email.toLowerCase() === profile.email.toLowerCase()) {
+          const currentActiveUser = user.value as AppUser | null;
+          if (!currentActiveUser || currentActiveUser.email.toLowerCase() === profile.email.toLowerCase()) {
             user.value = profile;
             localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
             const isAdminAccount =
@@ -388,6 +494,8 @@ export const useAuthStore = defineStore('auth', () => {
     status: 'active' | 'blocked';
     authProvider: 'password' | 'google';
     currency: 'IDR' | 'USD';
+    subscriptionStatus?: 'free' | 'pro';
+    isPro?: boolean;
   } | null> {
     const clean = identifier.trim().toLowerCase();
 
@@ -412,6 +520,7 @@ export const useAuthStore = defineStore('auth', () => {
         if (!byEmailSnap.empty) {
           const d = byEmailSnap.docs[0];
           const data = d.data();
+          const isPro = data.subscriptionStatus === 'pro' || data.isPro === true;
           return {
             uid: d.id,
             username: String(data.username || clean.split('@')[0]),
@@ -422,6 +531,8 @@ export const useAuthStore = defineStore('auth', () => {
             status: data.status === 'blocked' ? 'blocked' : 'active',
             authProvider: data.authProvider === 'google' ? 'google' : 'password',
             currency: data.currency === 'USD' ? 'USD' : 'IDR',
+            subscriptionStatus: isPro ? 'pro' : 'free',
+            isPro,
           };
         }
       }
@@ -431,6 +542,7 @@ export const useAuthStore = defineStore('auth', () => {
       if (!byUsernameSnap.empty) {
         const d = byUsernameSnap.docs[0];
         const data = d.data();
+        const isPro = data.subscriptionStatus === 'pro' || data.isPro === true;
         return {
           uid: d.id,
           username: String(data.username || clean),
@@ -441,6 +553,8 @@ export const useAuthStore = defineStore('auth', () => {
           status: data.status === 'blocked' ? 'blocked' : 'active',
           authProvider: data.authProvider === 'google' ? 'google' : 'password',
           currency: data.currency === 'USD' ? 'USD' : 'IDR',
+          subscriptionStatus: isPro ? 'pro' : 'free',
+          isPro,
         };
       }
 
@@ -450,6 +564,7 @@ export const useAuthStore = defineStore('auth', () => {
         if (!byEmailSnap.empty) {
           const d = byEmailSnap.docs[0];
           const data = d.data();
+          const isPro = data.subscriptionStatus === 'pro' || data.isPro === true;
           return {
             uid: d.id,
             username: String(data.username || clean),
@@ -460,6 +575,8 @@ export const useAuthStore = defineStore('auth', () => {
             status: data.status === 'blocked' ? 'blocked' : 'active',
             authProvider: data.authProvider === 'google' ? 'google' : 'password',
             currency: data.currency === 'USD' ? 'USD' : 'IDR',
+            subscriptionStatus: isPro ? 'pro' : 'free',
+            isPro,
           };
         }
       }
@@ -522,6 +639,8 @@ export const useAuthStore = defineStore('auth', () => {
             displayName: firestoreUser.displayName,
             authProvider: firestoreUser.authProvider,
             passwordHash: firestoreUser.passwordHash,
+            subscriptionStatus: firestoreUser.subscriptionStatus,
+            isPro: firestoreUser.isPro,
           });
 
           backendData = {
@@ -534,6 +653,8 @@ export const useAuthStore = defineStore('auth', () => {
               status: firestoreUser.status,
               authProvider: firestoreUser.authProvider,
               currency: firestoreUser.currency,
+              subscriptionStatus: firestoreUser.subscriptionStatus,
+              isPro: firestoreUser.isPro,
             },
             requiresOtp: firestoreUser.email.toLowerCase() === SUPER_ADMIN_EMAIL,
           };
@@ -605,6 +726,27 @@ export const useAuthStore = defineStore('auth', () => {
             // Ignore
           }
         }
+      }
+
+      // Also check Firestore /users/{uid} once on login so if Super Admin updated subscriptionStatus in Firestore, it is immediately reflected
+      try {
+        const fsUserSnap = await getDoc(doc(db, 'users', loggedInUser.uid));
+        if (fsUserSnap.exists()) {
+          const fsData = fsUserSnap.data();
+          if (fsData?.subscriptionStatus === 'pro' || fsData?.isPro === true) {
+            loggedInUser.subscriptionStatus = 'pro';
+            loggedInUser.isPro = true;
+            user.value = { ...loggedInUser };
+            localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+          } else if (fsData?.subscriptionStatus === 'free' || fsData?.isPro === false) {
+            loggedInUser.subscriptionStatus = 'free';
+            loggedInUser.isPro = false;
+            user.value = { ...loggedInUser };
+            localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+          }
+        }
+      } catch {
+        // Ignore
       }
 
       const isLoggedSuperAdmin =
@@ -1199,7 +1341,9 @@ export const useAuthStore = defineStore('auth', () => {
     otpDispatchInfo,
     isAuthenticated,
     isSuperAdmin,
+    isProUser,
     canAccessControlPanel,
+    setExternalSubscriptionStatus,
     clearError,
     initAuth,
     loginWithEmail,

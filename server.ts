@@ -56,9 +56,34 @@ export interface ServerUserRecord {
   status: 'active' | 'blocked';
   authProvider: 'password' | 'google';
   currency: 'IDR' | 'USD';
+  subscriptionStatus?: 'free' | 'pro';
+  isPro?: boolean;
+  subscriptionPlan?: 'monthly' | 'yearly' | null;
+  subscriptionExpiresAt?: string | null;
   passwordHash?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+function getTodayLocalIso(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function isUserSubscriptionActive(u?: Partial<ServerUserRecord> | null): boolean {
+  if (!u) return false;
+  const markedPro = u.subscriptionStatus === 'pro' || u.isPro === true;
+  if (!markedPro) return false;
+  if (u.subscriptionExpiresAt) {
+    const expDate = String(u.subscriptionExpiresAt).slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(expDate) && expDate < getTodayLocalIso()) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export interface ServerActivityLog {
@@ -903,11 +928,28 @@ async function startServer() {
     }
 
     const isSuperAdmin = email === SUPER_ADMIN_EMAIL || email === WORKSPACE_ADMIN_EMAIL;
+    const incomingSubStatus =
+      req.body?.subscriptionStatus === 'pro' || req.body?.isPro === true ? 'pro' : undefined;
+    const incomingPlan: 'monthly' | 'yearly' | null =
+      req.body?.subscriptionPlan === 'yearly'
+        ? 'yearly'
+        : req.body?.subscriptionPlan === 'monthly'
+          ? 'monthly'
+          : null;
+    const incomingExpiresAt: string | null = req.body?.subscriptionExpiresAt
+      ? String(req.body.subscriptionExpiresAt).slice(0, 10)
+      : null;
 
     if (existing) {
       existing.displayName = displayName.slice(0, 80);
       if (rawUsername) {
         existing.username = username;
+      }
+      if (incomingSubStatus) {
+        existing.subscriptionStatus = 'pro';
+        existing.isPro = true;
+        if (incomingPlan) existing.subscriptionPlan = incomingPlan;
+        if (incomingExpiresAt) existing.subscriptionExpiresAt = incomingExpiresAt;
       }
       if (passwordHash) {
         existing.passwordHash = passwordHash;
@@ -933,6 +975,10 @@ async function startServer() {
       status: 'active',
       authProvider,
       currency: 'IDR',
+      subscriptionStatus: incomingSubStatus || 'free',
+      isPro: incomingSubStatus === 'pro',
+      subscriptionPlan: incomingSubStatus === 'pro' ? incomingPlan : null,
+      subscriptionExpiresAt: incomingSubStatus === 'pro' ? incomingExpiresAt : null,
       passwordHash,
       createdAt: nowIso(),
       updatedAt: nowIso(),
@@ -1075,13 +1121,25 @@ async function startServer() {
     }
 
     if (!user) {
-      res.json({ status: 'active', role: 'user' });
+      res.json({
+        status: 'active',
+        role: 'user',
+        subscriptionStatus: 'free',
+        isPro: false,
+        subscriptionPlan: null,
+        subscriptionExpiresAt: null,
+      });
       return;
     }
 
+    const isPro = isUserSubscriptionActive(user);
     res.json({
       status: user.status,
       role: user.role,
+      subscriptionStatus: isPro ? 'pro' : 'free',
+      isPro,
+      subscriptionPlan: isPro ? user.subscriptionPlan || 'monthly' : null,
+      subscriptionExpiresAt: isPro ? user.subscriptionExpiresAt || null : null,
       updatedAt: user.updatedAt,
     });
   });
@@ -1157,6 +1215,7 @@ async function startServer() {
 
     targetUser.status = newStatus;
     targetUser.updatedAt = nowIso();
+    savePersistedUsersCache();
 
     const log = appendLog(
       'admin_vuedevo_01',
@@ -1164,6 +1223,53 @@ async function startServer() {
       newStatus === 'blocked' ? 'user_blocked' : 'user_unblocked',
       `Super Admin mengubah status akses ${targetUser.email} menjadi ${newStatus.toUpperCase()}.`,
       newStatus === 'blocked' ? 'warning' : 'info'
+    );
+
+    res.json({
+      user: sanitizeUser(targetUser),
+      log,
+    });
+  });
+
+  // Activate or Deactivate SisaUang Pro subscription manually by Super Admin with Billing Plan & Active Period
+  app.patch('/api/admin/users/:uid/subscription', requireAdminMiddleware, (req: Request, res: Response) => {
+    const targetUid = String(req.params.uid || '');
+    const isPro =
+      req.body?.subscriptionStatus === 'pro' || req.body?.isPro === true;
+    const newSubStatus: 'free' | 'pro' = isPro ? 'pro' : 'free';
+    const plan: 'monthly' | 'yearly' | null = isPro
+      ? req.body?.subscriptionPlan === 'yearly'
+        ? 'yearly'
+        : 'monthly'
+      : null;
+    const rawExpires = req.body?.subscriptionExpiresAt
+      ? String(req.body.subscriptionExpiresAt).slice(0, 10)
+      : '';
+    const expiresAt: string | null =
+      isPro && /^\d{4}-\d{2}-\d{2}$/.test(rawExpires) ? rawExpires : null;
+
+    const targetUser = usersStore.get(targetUid);
+    if (!targetUser) {
+      res.status(404).json({ error: 'Pengguna tidak ditemukan.' });
+      return;
+    }
+
+    targetUser.subscriptionStatus = newSubStatus;
+    targetUser.isPro = isPro;
+    targetUser.subscriptionPlan = plan;
+    targetUser.subscriptionExpiresAt = expiresAt;
+    targetUser.updatedAt = nowIso();
+    savePersistedUsersCache();
+
+    const planLabel = plan === 'yearly' ? 'Tahunan' : 'Bulanan';
+    const log = appendLog(
+      'admin_vuedevo_01',
+      SUPER_ADMIN_EMAIL,
+      isPro ? 'user_pro_activated' : 'user_pro_deactivated',
+      isPro
+        ? `Super Admin mengaktifkan langganan SisaUang Pro (${planLabel}, aktif s/d ${expiresAt || '-'}) untuk ${targetUser.displayName} (${targetUser.email}).`
+        : `Super Admin menonaktifkan langganan SisaUang Pro untuk pengguna ${targetUser.displayName} (${targetUser.email}).`,
+      'info'
     );
 
     res.json({
@@ -1277,6 +1383,20 @@ async function startServer() {
         .replace(/\s+/g, '_')
         .slice(0, 60);
 
+      const isPro =
+        u.subscriptionStatus === 'pro' ||
+        u.isPro === true ||
+        existing?.subscriptionStatus === 'pro' ||
+        existing?.isPro === true;
+      const subscriptionPlan: 'monthly' | 'yearly' | null = isPro
+        ? u.subscriptionPlan === 'yearly' || existing?.subscriptionPlan === 'yearly'
+          ? 'yearly'
+          : 'monthly'
+        : null;
+      const subscriptionExpiresAt: string | null = isPro
+        ? u.subscriptionExpiresAt || existing?.subscriptionExpiresAt || null
+        : null;
+
       const record: ServerUserRecord = {
         uid: isSuper ? 'admin_vuedevo_01' : uid,
         username: isSuper ? SUPER_ADMIN_USERNAME : username,
@@ -1286,6 +1406,10 @@ async function startServer() {
         status: !isSuper && u.status === 'blocked' ? 'blocked' : 'active',
         authProvider: u.authProvider === 'google' ? 'google' : 'password',
         currency: u.currency === 'USD' ? 'USD' : 'IDR',
+        subscriptionStatus: isPro ? 'pro' : 'free',
+        isPro,
+        subscriptionPlan,
+        subscriptionExpiresAt,
         passwordHash: isSuper
           ? superAdminPasswordHash
           : u.passwordHash

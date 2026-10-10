@@ -83,6 +83,15 @@
           "description": "Preferred display currency",
           "enum": ["IDR", "USD"]
         },
+        "subscriptionStatus": {
+          "type": "string",
+          "description": "SisaUang Pro subscription tier status",
+          "enum": ["free", "pro"]
+        },
+        "isPro": {
+          "type": "boolean",
+          "description": "Whether the user has an active SisaUang Pro subscription"
+        },
         "deleted": {
           "type": "boolean",
           "description": "Soft-delete flag preserving historical records"

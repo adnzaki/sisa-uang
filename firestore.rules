@@ -79,6 +79,8 @@ service cloud.firestore {
           'status',
           'authProvider',
           'currency',
+          'subscriptionStatus',
+          'isPro',
           'deleted',
           'deletedAt',
           'createdAt',
@@ -93,6 +95,8 @@ service cloud.firestore {
         data.status is string && (data.status == 'active' || data.status == 'blocked') &&
         data.authProvider is string && (data.authProvider == 'password' || data.authProvider == 'google') &&
         data.currency is string && (data.currency == 'IDR' || data.currency == 'USD') &&
+        (!('subscriptionStatus' in data) || (data.subscriptionStatus is string && (data.subscriptionStatus == 'free' || data.subscriptionStatus == 'pro'))) &&
+        (!('isPro' in data) || data.isPro is bool) &&
         isValidSoftDelete(data) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -259,7 +263,9 @@ service cloud.firestore {
           (
             isOwner(userId) &&
             incoming().status == 'active' &&
-            incoming().role == 'user'
+            incoming().role == 'user' &&
+            (!('subscriptionStatus' in incoming()) || incoming().subscriptionStatus == 'free') &&
+            (!('isPro' in incoming()) || incoming().isPro == false)
           ) ||
           isAdmin()
         );
@@ -287,6 +293,8 @@ service cloud.firestore {
               'status',
               'authProvider',
               'currency',
+              'subscriptionStatus',
+              'isPro',
               'deleted',
               'deletedAt',
               'createdAt',

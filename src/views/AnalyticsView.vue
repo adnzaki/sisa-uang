@@ -15,6 +15,7 @@ import {
   Scale,
   PieChart,
   Check,
+  Crown,
 } from 'lucide-vue-next';
 import {
   useFinanceStore,
@@ -99,6 +100,15 @@ const pdfReportTypeCards: {
 ];
 
 function openPdfGeneratorModal() {
+  if (!authStore.isProUser) {
+    notificationStore.openProModal({
+      featureTitle: 'Generate Laporan PDF Analitik',
+      featureDescription:
+        'Fitur cetak & unduh Laporan PDF resmi (Laporan Kas Umum, Laporan Rekonsiliasi Kas, dan Realisasi / Serapan Anggaran) hanya tersedia untuk pelanggan SisaUang Pro.',
+      limitSummary: 'Fitur Khusus SisaUang Pro',
+    });
+    return;
+  }
   pdfSelectedWallet.value = selectedWallet.value;
   pdfSelectedOwner.value = selectedOwner.value;
   pdfModalOpen.value = true;
@@ -611,6 +621,16 @@ const pdfPreviewSummary = computed(() =>
 );
 
 function handleDownloadPdfReport() {
+  if (!authStore.isProUser) {
+    pdfModalOpen.value = false;
+    notificationStore.openProModal({
+      featureTitle: 'Generate Laporan PDF Analitik',
+      featureDescription:
+        'Fitur cetak & unduh Laporan PDF resmi di halaman Analitik hanya tersedia untuk pelanggan SisaUang Pro.',
+      limitSummary: 'Fitur Khusus SisaUang Pro',
+    });
+    return;
+  }
   isGeneratingPdf.value = true;
   try {
     const fileName = generateAnalyticsPdfDocument({
@@ -665,6 +685,13 @@ function handleDownloadPdfReport() {
       >
         <FileDown class="w-4 h-4 shrink-0" />
         <span>Generate Laporan PDF</span>
+        <span
+          v-if="!authStore.isProUser"
+          class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-extrabold uppercase tracking-wider"
+        >
+          <Crown class="w-3 h-3 shrink-0" />
+          <span>PRO</span>
+        </span>
       </button>
     </div>
 
