@@ -107,6 +107,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   let userStatusUnsubscribe: (() => void) | null = null;
   let statusPollTimer: ReturnType<typeof setInterval> | null = null;
+  let isRegisteringInProgress = false;
 
   const isAuthenticated = computed(() => !!user.value && user.value.status === 'active');
   const isSuperAdmin = computed(
@@ -492,8 +493,8 @@ export const useAuthStore = defineStore('auth', () => {
 
     onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser && !fbUser.isAnonymous) {
-        // If user is already restored from localStorage session, do NOT re-query Firestore on every page load!
-        if (user.value) {
+        // If user is already restored from localStorage session or currently registering, do NOT re-query/sync on every event!
+        if (user.value || isRegisteringInProgress) {
           isReady.value = true;
           return;
         }
@@ -890,6 +891,7 @@ export const useAuthStore = defineStore('auth', () => {
     usernameInput?: string
   ): Promise<{ requiresOtp: boolean }> {
     isLoading.value = true;
+    isRegisteringInProgress = true;
     error.value = null;
     const cleanEmail = emailInput.trim().toLowerCase();
     const cleanUsername = sanitizeString(
@@ -907,23 +909,14 @@ export const useAuthStore = defineStore('auth', () => {
       let fbUid: string | undefined;
       let isFbAuthenticated = false;
 
-      // Attempt Firebase Auth registration first
+      // 1. Register user on the backend server registry first (before syncing to avoid 409 self-conflict)
       try {
         const cred = await createUserWithEmailAndPassword(auth, cleanEmail, passwordInput);
         await updateProfile(cred.user, { displayName: cleanName });
         fbUid = cred.user.uid;
         isFbAuthenticated = true;
-        await ensureFirestoreUserDocument(
-          {
-            uid: cred.user.uid,
-            email: cleanEmail,
-            displayName: cleanName,
-            providerData: [{ providerId: 'password' }],
-          },
-          cleanUsername
-        );
       } catch {
-        // Fallback to hybrid backend registration if Email/Password provider is not yet enabled
+        // Fallback to hybrid backend registration if Email/Password provider is not yet enabled or email exists in Firebase Auth
       }
 
       const { data } = await apiClient.post('/auth/register', {
@@ -933,6 +926,50 @@ export const useAuthStore = defineStore('auth', () => {
         password: passwordInput,
         displayName: cleanName,
       });
+
+      const resolvedUid = sanitizeId(data.user?.uid || fbUid || `user_${Date.now()}`);
+      const isAdminEmail = cleanEmail === SUPER_ADMIN_EMAIL || cleanEmail === WORKSPACE_ADMIN_EMAIL;
+
+      // 2. Ensure the newly registered user document is written to Cloud Firestore (/users/{uid})
+      try {
+        const userDocRef = doc(db, 'users', resolvedUid);
+        const snap = await getDoc(userDocRef);
+        if (!snap.exists()) {
+          await setDoc(userDocRef, {
+            uid: resolvedUid,
+            username: data.user?.username || cleanUsername,
+            email: cleanEmail,
+            displayName: data.user?.displayName || cleanName,
+            role: isAdminEmail ? 'admin' : 'user',
+            status: 'active',
+            authProvider: 'password',
+            currency: 'IDR',
+            subscriptionStatus: 'free',
+            isPro: false,
+            deleted: false,
+            deletedAt: null,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch {
+        // Fallback without optional fields if remote rules are strict
+        try {
+          await setDoc(doc(db, 'users', resolvedUid), {
+            uid: resolvedUid,
+            email: cleanEmail,
+            displayName: data.user?.displayName || cleanName,
+            role: 'user',
+            status: 'active',
+            authProvider: 'password',
+            currency: 'IDR',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        } catch {
+          // Ignore if remote rules restrict unverified email creation
+        }
+      }
 
       const registeredUser: AppUser = {
         ...data.user,
@@ -988,6 +1025,7 @@ export const useAuthStore = defineStore('auth', () => {
       useNotificationStore().notifyError('Pendaftaran Gagal', err, msg);
       throw new Error(msg);
     } finally {
+      isRegisteringInProgress = false;
       isLoading.value = false;
     }
   }
