@@ -1730,16 +1730,20 @@ async function startServer() {
         .replace(/\s+/g, '_')
         .slice(0, 60);
 
+      const isPending =
+        u.subscriptionStatus === 'pending' || existing?.subscriptionStatus === 'pending';
       const isPro =
-        u.subscriptionStatus === 'pro' ||
-        u.isPro === true ||
-        existing?.subscriptionStatus === 'pro' ||
-        existing?.isPro === true;
-      const subscriptionPlan: 'monthly' | 'yearly' | null = isPro
-        ? u.subscriptionPlan === 'yearly' || existing?.subscriptionPlan === 'yearly'
-          ? 'yearly'
-          : 'monthly'
-        : null;
+        !isPending &&
+        (u.subscriptionStatus === 'pro' ||
+          u.isPro === true ||
+          existing?.subscriptionStatus === 'pro' ||
+          existing?.isPro === true);
+      const subscriptionPlan: 'monthly' | 'yearly' | null =
+        isPro || isPending
+          ? u.subscriptionPlan === 'yearly' || existing?.subscriptionPlan === 'yearly'
+            ? 'yearly'
+            : 'monthly'
+          : null;
       const subscriptionExpiresAt: string | null = isPro
         ? u.subscriptionExpiresAt || existing?.subscriptionExpiresAt || null
         : null;
@@ -1753,17 +1757,23 @@ async function startServer() {
         status: !isSuper && u.status === 'blocked' ? 'blocked' : 'active',
         authProvider: u.authProvider === 'google' ? 'google' : 'password',
         currency: u.currency === 'USD' ? 'USD' : 'IDR',
-        subscriptionStatus: isPro ? 'pro' : 'free',
+        subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
         isPro,
         subscriptionPlan,
         subscriptionExpiresAt,
+        subscriptionPaymentMethod: existing?.subscriptionPaymentMethod || u.subscriptionPaymentMethod || null,
+        subscriptionProofDataUrl: existing?.subscriptionProofDataUrl || u.subscriptionProofDataUrl || null,
+        subscriptionProofFileName: existing?.subscriptionProofFileName || u.subscriptionProofFileName || null,
+        subscriptionRequestedAt: existing?.subscriptionRequestedAt || u.subscriptionRequestedAt || null,
+        subscriptionSenderName: existing?.subscriptionSenderName || u.subscriptionSenderName || null,
+        subscriptionTransferNote: existing?.subscriptionTransferNote || u.subscriptionTransferNote || null,
         passwordHash: isSuper
           ? superAdminPasswordHash
           : u.passwordHash
           ? String(u.passwordHash)
           : existing?.passwordHash || hashPassword('ShieldUser2026!'),
-        createdAt: String(u.createdAt || nowIso()),
-        updatedAt: nowIso(),
+        createdAt: String(u.createdAt || existing?.createdAt || nowIso()),
+        updatedAt: String(u.updatedAt || existing?.updatedAt || nowIso()),
       };
 
       usersStore.set(record.uid, record);
