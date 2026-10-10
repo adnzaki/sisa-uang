@@ -5,6 +5,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  setDoc,
   getCountFromServer,
   query,
   where,
@@ -333,8 +334,46 @@ export const useFinanceStore = defineStore('finance', () => {
    * Piggybacks `updatedAt: serverTimestamp()` onto `/users/{uid}` inside the same atomic WriteBatch
    * whenever any financial mutation happens, so other devices can detect changes with just 1 document read.
    */
+  const confirmedUserDocsInFirestore = new Set<string>();
+
+  async function ensureUserDocExistsForSyncToken(uid: string) {
+    if (!uid || uid === 'guest' || confirmedUserDocsInFirestore.has(uid)) return;
+    try {
+      const authStore = useAuthStore();
+      const uRef = doc(db, 'users', uid);
+      const snap = await getDoc(uRef);
+      if (snap.exists()) {
+        confirmedUserDocsInFirestore.add(uid);
+        return;
+      }
+      const activeUser = authStore.user;
+      if (activeUser && activeUser.uid === uid) {
+        await setDoc(uRef, {
+          uid,
+          username: sanitizeString(activeUser.username || activeUser.email.split('@')[0] || 'user', 60, 'user'),
+          email: sanitizeString(activeUser.email || 'user@sisa-uang.id', 120, 'user@sisa-uang.id'),
+          displayName: sanitizeString(activeUser.displayName || activeUser.username || 'Pengguna', 80, 'Pengguna'),
+          role: activeUser.role === 'admin' ? 'admin' : 'user',
+          status: 'active',
+          authProvider: activeUser.authProvider === 'google' ? 'google' : 'password',
+          currency: activeUser.currency === 'USD' ? 'USD' : 'IDR',
+          subscriptionStatus: activeUser.subscriptionStatus === 'pro' ? 'pro' : 'free',
+          isPro: Boolean(activeUser.isPro),
+          deleted: false,
+          deletedAt: null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        confirmedUserDocsInFirestore.add(uid);
+      }
+    } catch {
+      // Ignore if creation is not needed or handled by bridge session
+    }
+  }
+
   function touchUserSyncTokenInBatch(batch: WriteBatch, uid: string) {
     if (!uid || uid === 'guest') return;
+    if (!confirmedUserDocsInFirestore.has(uid)) return;
     batch.update(doc(db, 'users', uid), {
       updatedAt: serverTimestamp(),
     });
@@ -401,9 +440,11 @@ export const useFinanceStore = defineStore('finance', () => {
 
     if (current && !current.isAnonymous) {
       if (!isMigratedId && current.uid === uid) {
+        await ensureUserDocExistsForSyncToken(uid);
         return true;
       }
       if (current.email?.toLowerCase() === 'vuedevo@gmail.com') {
+        await ensureUserDocExistsForSyncToken(uid);
         return true;
       }
     }
@@ -411,9 +452,13 @@ export const useFinanceStore = defineStore('finance', () => {
     // Authenticate bridge session for migrated users or when currentUser is null
     try {
       await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
+      await ensureUserDocExistsForSyncToken(uid);
       return true;
     } catch {
-      if (auth.currentUser) return true;
+      if (auth.currentUser) {
+        await ensureUserDocExistsForSyncToken(uid);
+        return true;
+      }
       try {
         await signInAnonymously(auth);
         return true;
@@ -2127,35 +2172,48 @@ export const useFinanceStore = defineStore('finance', () => {
     const holderId = sanitizeId(`su_holder_${Date.now()}`);
 
     await ensureFirestoreSessionForUser(uid);
+    const walletDocData = {
+      ownerId: uid,
+      name: safeName,
+      type: payload.type,
+      balance: numericBalance,
+      color: safeColor,
+      deleted: false,
+      deletedAt: null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    const holderDocData = {
+      ownerId: uid,
+      walletId: id,
+      walletName: safeName,
+      holderName: safeHolderName,
+      balance: numericBalance,
+      deleted: false,
+      deletedAt: null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
     try {
       const batch = writeBatch(db);
-      batch.set(doc(db, 'wallets', id), {
-        ownerId: uid,
-        name: safeName,
-        type: payload.type,
-        balance: numericBalance,
-        color: safeColor,
-        deleted: false,
-        deletedAt: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      batch.set(doc(db, 'wallet_owners', holderId), {
-        ownerId: uid,
-        walletId: id,
-        walletName: safeName,
-        holderName: safeHolderName,
-        balance: numericBalance,
-        deleted: false,
-        deletedAt: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      batch.set(doc(db, 'wallets', id), walletDocData);
+      batch.set(doc(db, 'wallet_owners', holderId), holderDocData);
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
-    } catch (err) {
-      useNotificationStore().notifyError('Gagal Menyimpan Sumber Dana', err);
-      handleFirestoreError(err, OperationType.CREATE, `wallets/${id}`);
+    } catch {
+      // Fallback: if live Firestore rules evaluate exists(/wallets/{walletId}) before batch commit,
+      // create the parent wallet document first so it exists, then create its initial wallet_owners document!
+      try {
+        await setDoc(doc(db, 'wallets', id), walletDocData);
+        const secondBatch = writeBatch(db);
+        secondBatch.set(doc(db, 'wallet_owners', holderId), holderDocData);
+        touchUserSyncTokenInBatch(secondBatch, uid);
+        await secondBatch.commit();
+      } catch (err) {
+        useNotificationStore().notifyError('Gagal Menyimpan Sumber Dana', err);
+        handleFirestoreError(err, OperationType.CREATE, `wallets/${id}`);
+      }
     }
 
     // Update local state optimistically (0 extra Firestore reads)

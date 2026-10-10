@@ -357,8 +357,16 @@ service cloud.firestore {
           (
             incoming().ownerId == request.auth.uid &&
             isNotBlocked() &&
-            exists(/databases/$(database)/documents/wallets/$(incoming().walletId)) &&
-            get(/databases/$(database)/documents/wallets/$(incoming().walletId)).data.ownerId == request.auth.uid
+            (
+              (
+                exists(/databases/$(database)/documents/wallets/$(incoming().walletId)) &&
+                get(/databases/$(database)/documents/wallets/$(incoming().walletId)).data.ownerId == request.auth.uid
+              ) ||
+              (
+                existsAfter(/databases/$(database)/documents/wallets/$(incoming().walletId)) &&
+                getAfter(/databases/$(database)/documents/wallets/$(incoming().walletId)).data.ownerId == request.auth.uid
+              )
+            )
           ) ||
           isAdmin()
         );

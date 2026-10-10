@@ -522,16 +522,28 @@ async function startServer() {
       return;
     }
 
-    // Find user by email OR username
-    let matchedUser: ServerUserRecord | undefined;
-    for (const u of usersStore.values()) {
-      if (
-        u.email.toLowerCase() === identifierRaw ||
-        (u.username && u.username.toLowerCase() === identifierRaw)
-      ) {
-        matchedUser = u;
-        break;
+    // Find user by email OR username (with fallback reload from persisted cache if not yet in memory)
+    const normalizedIdentifier = identifierRaw.replace(/\s+/g, '_').replace(/^@+/, '');
+    const findMatchingUserInStore = (): ServerUserRecord | undefined => {
+      for (const u of usersStore.values()) {
+        const uEmail = String(u.email || '').trim().toLowerCase();
+        const uUsername = String(u.username || '').trim().toLowerCase().replace(/^@+/, '');
+        const uEmailLocal = uEmail.split('@')[0];
+        if (
+          uEmail === identifierRaw ||
+          (uUsername && (uUsername === identifierRaw || uUsername === normalizedIdentifier)) ||
+          (!identifierRaw.includes('@') && uEmailLocal === identifierRaw)
+        ) {
+          return u;
+        }
       }
+      return undefined;
+    };
+
+    let matchedUser: ServerUserRecord | undefined = findMatchingUserInStore();
+    if (!matchedUser) {
+      loadPersistedUsersCache();
+      matchedUser = findMatchingUserInStore();
     }
 
     const incomingHash = hashPassword(password);
@@ -1154,7 +1166,9 @@ async function startServer() {
 
     if (existing) {
       existing.displayName = displayName.slice(0, 80);
-      if (rawUsername) {
+      const emailPrefix = email.split('@')[0];
+      // Do not overwrite an existing customized username with the default email local-part during auto-sync
+      if (rawUsername && (!existing.username || rawUsername !== emailPrefix || existing.username === emailPrefix)) {
         existing.username = username;
       }
       if (incomingSubStatus === 'pro' && existing.subscriptionStatus !== 'pending') {
