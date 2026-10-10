@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import {
   Search,
@@ -17,6 +17,7 @@ import {
 } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
 import AppModal from '../components/AppModal.vue';
+import AppPagination from '../components/AppPagination.vue';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 
 const { t, locale } = useI18n();
@@ -24,13 +25,52 @@ const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
 
 const showFilterModal = ref(false);
+// Default period on Transactions page is 'all' (Semua Periode)
+const txSelectedPeriod = ref<string>('all');
 const typeFilter = ref<'all' | 'income' | 'expense' | 'transfer'>('all');
 const selectedCategoryFilter = ref<string>('all');
 const searchQuery = ref('');
 const selectedWalletId = ref<string>('all');
 const selectedHolderFilter = ref<string>('all');
 
+// Server-side Pagination state when 'all' (Semua Periode) is active: 25 transactions per page
+const TX_PAGE_SIZE = 25;
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function triggerServerTransactionsFetch(targetPage: number, silent = false) {
+  void financeStore.fetchTransactionsServerPage(
+    {
+      page: targetPage,
+      limit: TX_PAGE_SIZE,
+      period: txSelectedPeriod.value,
+      type: typeFilter.value,
+      category: selectedCategoryFilter.value,
+      walletId: selectedWalletId.value,
+      holder: selectedHolderFilter.value,
+      search: searchQuery.value.trim(),
+    },
+    silent
+  );
+}
+
+onMounted(() => {
+  triggerServerTransactionsFetch(1);
+});
+
+watch(
+  () => financeStore.isSyncedWithFirestore,
+  (synced) => {
+    if (synced) {
+      triggerServerTransactionsFetch(financeStore.txServerPage, true);
+    }
+  }
+);
+
 const periodFilterOptions = computed<SelectOptionItem[]>(() => [
+  {
+    value: 'all',
+    label: 'Semua Periode',
+  },
   ...financeStore.availablePeriods.map((p) => ({
     value: p,
     label: formatPeriodLabel(p, locale.value === 'id' ? 'id-ID' : 'en-US'),
@@ -119,60 +159,51 @@ const activeFilterCount = computed(() => {
 });
 
 const activePeriodLabel = computed(() => {
-  if (financeStore.selectedPeriod === 'all') return 'Semua Periode';
+  if (txSelectedPeriod.value === 'all') return 'Semua Periode';
   return formatPeriodLabel(
-    financeStore.selectedPeriod,
+    txSelectedPeriod.value,
     locale.value === 'id' ? 'id-ID' : 'en-US'
   );
 });
 
 function resetFilters() {
-  financeStore.selectedPeriod = financeStore.currentMonthKey;
+  txSelectedPeriod.value = 'all';
   typeFilter.value = 'all';
   selectedCategoryFilter.value = 'all';
   selectedWalletId.value = 'all';
   selectedHolderFilter.value = 'all';
+  triggerServerTransactionsFetch(1);
 }
 
-const filteredTransactions = computed(() => {
-  return financeStore.periodTransactions.filter((tx) => {
-    if (typeFilter.value !== 'all' && tx.type !== typeFilter.value) {
-      return false;
-    }
-    if (
-      selectedCategoryFilter.value !== 'all' &&
-      tx.category !== selectedCategoryFilter.value
-    ) {
-      return false;
-    }
-    if (
-      selectedWalletId.value !== 'all' &&
-      tx.walletId !== selectedWalletId.value &&
-      tx.toWalletId !== selectedWalletId.value
-    ) {
-      return false;
-    }
-    if (
-      selectedHolderFilter.value !== 'all' &&
-      tx.fundOwnerName !== selectedHolderFilter.value &&
-      tx.toFundOwnerName !== selectedHolderFilter.value
-    ) {
-      return false;
-    }
-    if (searchQuery.value.trim()) {
-      const q = searchQuery.value.toLowerCase();
-      return (
-        tx.note.toLowerCase().includes(q) ||
-        tx.category.toLowerCase().includes(q) ||
-        tx.walletName.toLowerCase().includes(q) ||
-        String(tx.toWalletName || '').toLowerCase().includes(q) ||
-        String(tx.fundOwnerName || '').toLowerCase().includes(q) ||
-        String(tx.toFundOwnerName || '').toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
+watch(
+  [
+    txSelectedPeriod,
+    typeFilter,
+    selectedCategoryFilter,
+    selectedWalletId,
+    selectedHolderFilter,
+  ],
+  () => {
+    triggerServerTransactionsFetch(1);
+  }
+);
+
+watch(searchQuery, () => {
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer);
+  }
+  searchDebounceTimer = setTimeout(() => {
+    triggerServerTransactionsFetch(1);
+  }, 250);
 });
+
+function handleTxPageChange(newPage: number) {
+  triggerServerTransactionsFetch(newPage);
+}
+
+// Server-side items returned for the current page (25 items when 'all', or full month when 'YYYY-MM')
+const displayedTransactions = computed(() => financeStore.serverPaginatedTransactions);
+const totalFilteredTransactions = computed(() => financeStore.txServerTotalFiltered);
 
 function getDateBadge(dateStr: string) {
   return formatTransactionDateBadge(dateStr, locale.value === 'id' ? 'id-ID' : 'en-US');
@@ -252,9 +283,17 @@ function getDateBadge(dateStr: string) {
       </div>
     </div>
 
+    <!-- Loading State on Initial Server Page Load -->
+    <div
+      v-if="financeStore.isTxServerPageLoading && displayedTransactions.length === 0"
+      class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-8 sm:p-10 text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400"
+    >
+      Memuat halaman transaksi dari server...
+    </div>
+
     <!-- Empty State -->
     <div
-      v-if="filteredTransactions.length === 0"
+      v-else-if="displayedTransactions.length === 0"
       class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-8 sm:p-10 text-center space-y-3"
     >
       <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
@@ -262,18 +301,15 @@ function getDateBadge(dateStr: string) {
       </p>
       <div class="flex flex-wrap items-center justify-center gap-2">
         <button
-          v-if="activeFilterCount > 0 || financeStore.selectedPeriod !== 'all'"
+          v-if="activeFilterCount > 0 || txSelectedPeriod !== 'all' || searchQuery"
           type="button"
           class="min-h-[42px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-emerald-600 transition-colors"
           @click="
-            financeStore.selectedPeriod = 'all';
-            typeFilter = 'all';
-            selectedCategoryFilter = 'all';
-            selectedWalletId = 'all';
-            selectedHolderFilter = 'all';
+            resetFilters();
+            searchQuery = '';
           "
         >
-          Reset Semua Filter ({{ financeStore.transactions.length }})
+          Reset Semua Filter
         </button>
         <button
           type="button"
@@ -286,99 +322,136 @@ function getDateBadge(dateStr: string) {
     </div>
 
     <!-- Clean Mobile-First Transaction Cards (Tap anywhere on card to View/Edit, enlarged Delete button on right) -->
-    <div v-else class="space-y-2.5">
+    <div v-else class="space-y-3">
       <div
-        v-for="tx in filteredTransactions"
-        :key="tx.id"
-        role="button"
-        tabindex="0"
-        class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-4 flex items-center justify-between gap-3 hover:border-emerald-500/50 hover:shadow-xs active:scale-[0.995] transition-all cursor-pointer"
-        @click="financeStore.openEditTransactionModal(tx)"
-        @keydown.enter="financeStore.openEditTransactionModal(tx)"
+        class="space-y-2.5"
+        :class="financeStore.isTxServerPageLoading ? 'opacity-60 pointer-events-none transition-opacity' : ''"
       >
-        <div class="flex items-center gap-3 sm:gap-3.5 min-w-0 flex-1">
-          <!-- Date Badge Box -->
-          <div
-            class="w-14 h-14 sm:w-15 sm:h-15 rounded-2xl flex flex-col items-center justify-center shrink-0 border"
-            :class="
-              tx.type === 'income'
-                ? 'bg-emerald-50/90 dark:bg-emerald-950/40 border-emerald-200/60 dark:border-emerald-900/50 text-emerald-600 dark:text-emerald-400'
-                : tx.type === 'transfer'
-                ? 'bg-indigo-50/90 dark:bg-indigo-950/40 border-indigo-200/60 dark:border-indigo-900/50 text-indigo-600 dark:text-indigo-400'
-                : 'bg-rose-50/90 dark:bg-rose-950/40 border-rose-200/60 dark:border-rose-900/50 text-rose-600 dark:text-rose-400'
-            "
+        <div
+          v-for="tx in displayedTransactions"
+          :key="tx.id"
+          role="button"
+          tabindex="0"
+          class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-4 flex items-center justify-between gap-3 hover:border-emerald-500/50 hover:shadow-xs active:scale-[0.995] transition-all cursor-pointer"
+          @click="financeStore.openEditTransactionModal(tx)"
+          @keydown.enter="financeStore.openEditTransactionModal(tx)"
+        >
+          <div class="flex items-center gap-3 sm:gap-3.5 min-w-0 flex-1">
+            <!-- Date Badge Box -->
+            <div
+              class="w-14 h-14 sm:w-15 sm:h-15 rounded-2xl flex flex-col items-center justify-center shrink-0 border"
+              :class="
+                tx.type === 'income'
+                  ? 'bg-emerald-50/90 dark:bg-emerald-950/40 border-emerald-200/60 dark:border-emerald-900/50 text-emerald-600 dark:text-emerald-400'
+                  : tx.type === 'transfer'
+                  ? 'bg-indigo-50/90 dark:bg-indigo-950/40 border-indigo-200/60 dark:border-indigo-900/50 text-indigo-600 dark:text-indigo-400'
+                  : 'bg-rose-50/90 dark:bg-rose-950/40 border-rose-200/60 dark:border-rose-900/50 text-rose-600 dark:text-rose-400'
+              "
+            >
+              <span class="text-base sm:text-lg font-bold font-money leading-none">
+                {{ getDateBadge(tx.date).day }}
+              </span>
+              <span class="text-[10px] font-semibold leading-tight mt-1 text-center px-0.5 truncate max-w-full">
+                {{ getDateBadge(tx.date).monthYear }}
+              </span>
+            </div>
+
+            <!-- Transaction Details -->
+            <div class="min-w-0 flex-1">
+              <!-- Category Badge + Wallet & Holder -->
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span
+                  class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold shrink-0"
+                  :class="
+                    tx.type === 'income'
+                      ? 'bg-emerald-100/80 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300'
+                      : tx.type === 'transfer'
+                      ? 'bg-indigo-100/80 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300'
+                      : 'bg-rose-100/80 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300'
+                  "
+                >
+                  {{ tx.category }}
+                </span>
+                <span class="text-xs text-slate-500 dark:text-slate-400 truncate">
+                  <template v-if="tx.type === 'transfer'">
+                    {{ tx.walletName }} · {{ tx.fundOwnerName || 'Pribadi' }} → {{ tx.toWalletName || tx.walletName }} · {{ tx.toFundOwnerName || 'Pribadi' }}
+                  </template>
+                  <template v-else>
+                    {{ tx.walletName }} · {{ tx.fundOwnerName || 'Pribadi' }}
+                  </template>
+                </span>
+              </div>
+
+              <!-- Note / Title -->
+              <div class="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 truncate mt-1">
+                {{ tx.note }}
+              </div>
+
+              <!-- Amount + Optional Admin Fee Badge -->
+              <div class="flex flex-wrap items-center gap-2 mt-0.5">
+                <span
+                  class="text-sm sm:text-base font-money font-bold"
+                  :class="
+                    tx.type === 'income'
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : tx.type === 'transfer'
+                      ? 'text-indigo-600 dark:text-indigo-400'
+                      : 'text-rose-600 dark:text-rose-400'
+                  "
+                >
+                  {{ tx.type === 'income' ? '+' : tx.type === 'transfer' ? '⇄ ' : '-' }}{{ themeStore.formatMoney(tx.amount) }}
+                </span>
+                <span
+                  v-if="tx.type === 'transfer' && Number(tx.adminFee || 0) > 0"
+                  class="px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 text-[10px] font-money font-semibold"
+                >
+                  +Biaya Admin {{ themeStore.formatMoney(Number(tx.adminFee)) }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Enlarged Delete Button -->
+          <button
+            type="button"
+            class="w-11 h-11 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl border border-rose-200/70 dark:border-rose-900/50 bg-rose-50/70 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 shrink-0 transition-colors"
+            :title="t('transactions.delete')"
+            @click.stop="financeStore.removeTransaction(tx.id)"
           >
-            <span class="text-base sm:text-lg font-bold font-money leading-none">
-              {{ getDateBadge(tx.date).day }}
-            </span>
-            <span class="text-[10px] font-semibold leading-tight mt-1 text-center px-0.5 truncate max-w-full">
-              {{ getDateBadge(tx.date).monthYear }}
-            </span>
-          </div>
-
-          <!-- Transaction Details -->
-          <div class="min-w-0 flex-1">
-            <!-- Category Badge + Wallet & Holder -->
-            <div class="flex flex-wrap items-center gap-1.5">
-              <span
-                class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold shrink-0"
-                :class="
-                  tx.type === 'income'
-                    ? 'bg-emerald-100/80 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300'
-                    : tx.type === 'transfer'
-                    ? 'bg-indigo-100/80 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300'
-                    : 'bg-rose-100/80 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300'
-                "
-              >
-                {{ tx.category }}
-              </span>
-              <span class="text-xs text-slate-500 dark:text-slate-400 truncate">
-                <template v-if="tx.type === 'transfer'">
-                  {{ tx.walletName }} · {{ tx.fundOwnerName || 'Pribadi' }} → {{ tx.toWalletName || tx.walletName }} · {{ tx.toFundOwnerName || 'Pribadi' }}
-                </template>
-                <template v-else>
-                  {{ tx.walletName }} · {{ tx.fundOwnerName || 'Pribadi' }}
-                </template>
-              </span>
-            </div>
-
-            <!-- Note / Title -->
-            <div class="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 truncate mt-1">
-              {{ tx.note }}
-            </div>
-
-            <!-- Amount + Optional Admin Fee Badge -->
-            <div class="flex flex-wrap items-center gap-2 mt-0.5">
-              <span
-                class="text-sm sm:text-base font-money font-bold"
-                :class="
-                  tx.type === 'income'
-                    ? 'text-emerald-600 dark:text-emerald-400'
-                    : tx.type === 'transfer'
-                    ? 'text-indigo-600 dark:text-indigo-400'
-                    : 'text-rose-600 dark:text-rose-400'
-                "
-              >
-                {{ tx.type === 'income' ? '+' : tx.type === 'transfer' ? '⇄ ' : '-' }}{{ themeStore.formatMoney(tx.amount) }}
-              </span>
-              <span
-                v-if="tx.type === 'transfer' && Number(tx.adminFee || 0) > 0"
-                class="px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 text-[10px] font-money font-semibold"
-              >
-                +Biaya Admin {{ themeStore.formatMoney(Number(tx.adminFee)) }}
-              </span>
-            </div>
-          </div>
+            <Trash2 class="w-5 h-5" />
+          </button>
         </div>
+      </div>
 
-        <!-- Enlarged Delete Button -->
+      <!-- Server-Side Pagination (25 transactions per page) when 'all' (Semua Periode) is active -->
+      <AppPagination
+        v-if="txSelectedPeriod === 'all'"
+        :current-page="financeStore.txServerPage"
+        :total-items="totalFilteredTransactions"
+        :page-size="TX_PAGE_SIZE"
+        item-label="transaksi"
+        @update:current-page="handleTxPageChange"
+      />
+
+      <!-- Monthly Period Summary Footer when a specific month is selected -->
+      <div
+        v-else
+        class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 text-xs text-slate-600 dark:text-slate-400 flex flex-col sm:flex-row items-center justify-between gap-2"
+      >
+        <span>
+          Menampilkan seluruh
+          <strong class="font-mono font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
+            {{ totalFilteredTransactions }}
+          </strong>
+          transaksi pada periode
+          <strong class="text-slate-900 dark:text-slate-100">{{ activePeriodLabel }}</strong>
+        </span>
         <button
           type="button"
-          class="w-11 h-11 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl border border-rose-200/70 dark:border-rose-900/50 bg-rose-50/70 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 shrink-0 transition-colors"
-          :title="t('transactions.delete')"
-          @click.stop="financeStore.removeTransaction(tx.id)"
+          class="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+          @click="txSelectedPeriod = 'all'"
         >
-          <Trash2 class="w-5 h-5" />
+          Tampilkan Semua Periode
         </button>
       </div>
     </div>
@@ -392,7 +465,7 @@ function getDateBadge(dateStr: string) {
     >
       <div class="space-y-3.5">
         <CustomSelect
-          v-model="financeStore.selectedPeriod"
+          v-model="txSelectedPeriod"
           :options="periodFilterOptions"
           placeholder="Periode Bulan"
           aria-label="Pilih Periode Bulan"
@@ -451,7 +524,7 @@ function getDateBadge(dateStr: string) {
             @click="showFilterModal = false"
           >
             <Check class="w-4 h-4 shrink-0" />
-            <span>Terapkan ({{ filteredTransactions.length }})</span>
+            <span>Terapkan ({{ totalFilteredTransactions }})</span>
           </button>
         </div>
       </template>

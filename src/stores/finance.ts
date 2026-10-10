@@ -1,15 +1,22 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import {
   collection,
   doc,
   getDoc,
   getDocs,
+  getCountFromServer,
   query,
   where,
+  orderBy,
+  limit,
+  startAfter,
+  documentId,
   serverTimestamp,
   writeBatch,
   type WriteBatch,
+  type DocumentSnapshot,
+  type QueryConstraint,
 } from 'firebase/firestore';
 import {
   signInWithEmailAndPassword,
@@ -294,6 +301,12 @@ export const useFinanceStore = defineStore('finance', () => {
   const selectedPeriod = ref<string>(getCurrentMonthPeriod());
   const hasAutoSelectedPeriod = ref(false);
 
+  watch(selectedPeriod, (newPeriod) => {
+    if (newPeriod && newPeriod !== 'all' && /^\d{4}-\d{2}$/.test(newPeriod)) {
+      void ensureTransactionsForDateRange(`${newPeriod}-01`, `${newPeriod}-31`);
+    }
+  });
+
   // Extract millisecond timestamp from Firestore Timestamp, serialized object, or ISO string
   function extractTimestampMillis(val: any): number {
     if (!val) return 0;
@@ -350,10 +363,10 @@ export const useFinanceStore = defineStore('finance', () => {
       if (defaultCategories.value.length > 0) {
         localStorage.setItem('sisa_uang_real_default_categories', JSON.stringify(defaultCategories.value));
       }
-      // Cache up to 5,000 transactions in localStorage so complete user history is available offline and without re-reading
+      // Only cache the most recent 100 transactions locally so we don't bloat memory or localStorage
       localStorage.setItem(
         storageKey('transactions', uid),
-        JSON.stringify(rawTransactions.value.slice(0, 5000))
+        JSON.stringify(rawTransactions.value.slice(0, 100))
       );
       if (markSyncedNow) {
         const tokenMs = remoteSyncTokenMs && remoteSyncTokenMs > 0 ? remoteSyncTokenMs : Date.now();
@@ -459,13 +472,7 @@ export const useFinanceStore = defineStore('finance', () => {
     return merged;
   });
 
-  /**
-   * Enrich & normalize transactions from Firestore:
-   * - Resolves `walletName` from `wallets` if needed
-   * - Resolves `toWalletName` on `transfer` transactions (fixes raw numeric `toWalletName` like "42" -> "GoPay", "3" -> "Mandiri")
-   * - Resolves `fundOwnerName` & `toFundOwnerName` from `walletOwners` and formats numeric IDs ("1" -> "Pemilik #1")
-   */
-  const transactions = computed<TransactionItem[]>(() => {
+  function enrichTransactionItem(tx: TransactionItem): TransactionItem {
     const walletMap = new Map<string, WalletItem>();
     for (const w of wallets.value) {
       walletMap.set(w.id, w);
@@ -476,189 +483,903 @@ export const useFinanceStore = defineStore('finance', () => {
       holderByIdMap.set(h.id, h);
     }
 
-    return rawTransactions.value.map((tx) => {
-      const sourceWallet = walletMap.get(tx.walletId);
-      const resolvedWalletName =
-        sourceWallet?.name ||
-        (tx.walletName && !/^\d+$/.test(tx.walletName) ? tx.walletName : 'Sumber Dana');
+    const sourceWallet = walletMap.get(tx.walletId);
+    const resolvedWalletName =
+      sourceWallet?.name ||
+      (tx.walletName && !/^\d+$/.test(tx.walletName) ? tx.walletName : 'Sumber Dana');
 
-      // Find matching holder inside this wallet
-      let matchedHolder = tx.fundOwnerId ? holderByIdMap.get(tx.fundOwnerId) : undefined;
-      if (matchedHolder && matchedHolder.walletId !== tx.walletId) {
-        // In some migrated rows, tx.fundOwnerId used wallet_id index; match by walletId + holderName instead
-        const byWalletAndName = walletOwners.value.find(
-          (h) =>
-            h.walletId === tx.walletId &&
-            (h.holderName === tx.fundOwnerName ||
-              formatHolderName(h.holderName) === formatHolderName(tx.fundOwnerName))
+    // Find matching holder inside this wallet
+    let matchedHolder = tx.fundOwnerId ? holderByIdMap.get(tx.fundOwnerId) : undefined;
+    if (matchedHolder && matchedHolder.walletId !== tx.walletId) {
+      // In some migrated rows, tx.fundOwnerId used wallet_id index; match by walletId + holderName instead
+      const byWalletAndName = walletOwners.value.find(
+        (h) =>
+          h.walletId === tx.walletId &&
+          (h.holderName === tx.fundOwnerName ||
+            formatHolderName(h.holderName) === formatHolderName(tx.fundOwnerName))
+      );
+      matchedHolder =
+        byWalletAndName || walletOwners.value.find((h) => h.walletId === tx.walletId);
+    }
+
+    const rawHolderName = matchedHolder?.holderName || tx.fundOwnerName || 'Pribadi';
+    const resolvedFundOwnerName = formatHolderName(rawHolderName);
+
+    let resolvedToWalletId = tx.toWalletId;
+    let resolvedToWalletName = tx.toWalletName;
+    let resolvedToFundOwnerName = tx.toFundOwnerName
+      ? formatHolderName(tx.toFundOwnerName)
+      : undefined;
+
+    if (tx.type === 'transfer') {
+      const txNum = Number(String(tx.id || '').replace(/\D/g, ''));
+      const isMigratedCi4Tx = /^su_tx_\d+$/.test(String(tx.id || '')) && txNum < 100000;
+      const rawToFundOwnerNum = String(tx.toFundOwnerId || '').replace(/\D/g, '');
+
+      // Detect migrated CI4 transfer records where `toFundOwnerId` (`su_holder_{N}`) stored the destination wallet ID (`N`)
+      const migratedTargetWalletId =
+        isMigratedCi4Tx && rawToFundOwnerNum ? `su_wallet_${rawToFundOwnerNum}` : undefined;
+
+      const isBrokenLegacyDest =
+        migratedTargetWalletId &&
+        walletMap.has(migratedTargetWalletId) &&
+        (tx.toWalletId !== migratedTargetWalletId ||
+          (tx.toWalletId === tx.walletId && tx.toFundOwnerId === tx.fundOwnerId) ||
+          tx.toFundOwnerId === 'su_holder_31' ||
+          tx.toFundOwnerId === 'su_holder_42');
+
+      if (isBrokenLegacyDest && migratedTargetWalletId) {
+        resolvedToWalletId = migratedTargetWalletId;
+        const destWallet = walletMap.get(resolvedToWalletId);
+        resolvedToWalletName = destWallet?.name || resolvedWalletName;
+
+        const activeDestHolders = walletOwners.value.filter(
+          (h) => h.walletId === resolvedToWalletId
         );
-        matchedHolder =
-          byWalletAndName || walletOwners.value.find((h) => h.walletId === tx.walletId);
+        const allDestHolders = rawWalletOwners.value.filter(
+          (h) => h.walletId === resolvedToWalletId
+        );
+        const candidates = activeDestHolders.length > 0 ? activeDestHolders : allDestHolders;
+        const noteLower = String(tx.note || '').toLowerCase();
+
+        let resolvedDestHolder: WalletOwnerItem | undefined;
+
+        if (resolvedToWalletId === tx.walletId) {
+          // Same-wallet transfer (e.g. Pindah alokasi / Pindah owner / Normalisasi saldo inside the same wallet)
+          if (noteLower.includes('tabungan')) {
+            resolvedDestHolder = candidates.find(
+              (h) => formatHolderName(h.holderName) === 'Tabungan'
+            );
+          } else if (noteLower.includes('sekolah')) {
+            resolvedDestHolder = candidates.find(
+              (h) => formatHolderName(h.holderName) === 'Sekolah'
+            );
+          } else if (noteLower.includes('pribadi')) {
+            resolvedDestHolder = candidates.find(
+              (h) => formatHolderName(h.holderName) === 'Pribadi'
+            );
+          }
+          if (!resolvedDestHolder) {
+            resolvedDestHolder =
+              candidates.find(
+                (h) =>
+                  h.id !== matchedHolder?.id &&
+                  formatHolderName(h.holderName) !== resolvedFundOwnerName
+              ) ||
+              candidates.find((h) => h.id !== matchedHolder?.id) ||
+              candidates[0];
+          }
+        } else {
+          // Cross-wallet transfer (e.g. Tarik tunai, Setor tunai, Top up Flip/OVO/GoPay, Isi tabungan)
+          if (noteLower.includes('tabungan')) {
+            resolvedDestHolder = candidates.find(
+              (h) => formatHolderName(h.holderName) === 'Tabungan'
+            );
+          } else if (noteLower.includes('sekolah') && !noteLower.includes('ganti')) {
+            resolvedDestHolder = candidates.find(
+              (h) => formatHolderName(h.holderName) === 'Sekolah'
+            );
+          }
+          if (!resolvedDestHolder) {
+            resolvedDestHolder =
+              candidates.find(
+                (h) => formatHolderName(h.holderName) === resolvedFundOwnerName
+              ) ||
+              candidates.find((h) => formatHolderName(h.holderName) === 'Pribadi') ||
+              candidates[0];
+          }
+        }
+
+        if (resolvedDestHolder) {
+          resolvedToFundOwnerName = formatHolderName(resolvedDestHolder.holderName);
+        } else {
+          resolvedToFundOwnerName = resolvedFundOwnerName;
+        }
+
+        return {
+          ...tx,
+          walletName: resolvedWalletName,
+          fundOwnerId: matchedHolder?.id || tx.fundOwnerId,
+          fundOwnerName: resolvedFundOwnerName,
+          toWalletId: resolvedToWalletId,
+          toWalletName: resolvedToWalletName,
+          toFundOwnerId: resolvedDestHolder?.id || tx.toFundOwnerId,
+          toFundOwnerName: resolvedToFundOwnerName,
+        };
       }
 
-      const rawHolderName = matchedHolder?.holderName || tx.fundOwnerName || 'Pribadi';
-      const resolvedFundOwnerName = formatHolderName(rawHolderName);
-
-      let resolvedToWalletId = tx.toWalletId;
-      let resolvedToWalletName = tx.toWalletName;
-      let resolvedToFundOwnerName = tx.toFundOwnerName
-        ? formatHolderName(tx.toFundOwnerName)
-        : undefined;
-
-      if (tx.type === 'transfer') {
-        const txNum = Number(String(tx.id || '').replace(/\D/g, ''));
-        const isMigratedCi4Tx = /^su_tx_\d+$/.test(String(tx.id || '')) && txNum < 100000;
-        const rawToFundOwnerNum = String(tx.toFundOwnerId || '').replace(/\D/g, '');
-
-        // Detect migrated CI4 transfer records where `toFundOwnerId` (`su_holder_{N}`) stored the destination wallet ID (`N`)
-        const migratedTargetWalletId =
-          isMigratedCi4Tx && rawToFundOwnerNum ? `su_wallet_${rawToFundOwnerNum}` : undefined;
-
-        const isBrokenLegacyDest =
-          migratedTargetWalletId &&
-          walletMap.has(migratedTargetWalletId) &&
-          (tx.toWalletId !== migratedTargetWalletId ||
-            (tx.toWalletId === tx.walletId && tx.toFundOwnerId === tx.fundOwnerId) ||
-            tx.toFundOwnerId === 'su_holder_31' ||
-            tx.toFundOwnerId === 'su_holder_42');
-
-        if (isBrokenLegacyDest && migratedTargetWalletId) {
-          resolvedToWalletId = migratedTargetWalletId;
-          const destWallet = walletMap.get(resolvedToWalletId);
-          resolvedToWalletName = destWallet?.name || resolvedWalletName;
-
-          const activeDestHolders = walletOwners.value.filter(
-            (h) => h.walletId === resolvedToWalletId
-          );
-          const allDestHolders = rawWalletOwners.value.filter(
-            (h) => h.walletId === resolvedToWalletId
-          );
-          const candidates = activeDestHolders.length > 0 ? activeDestHolders : allDestHolders;
-          const noteLower = String(tx.note || '').toLowerCase();
-
-          let resolvedDestHolder: WalletOwnerItem | undefined;
-
-          if (resolvedToWalletId === tx.walletId) {
-            // Same-wallet transfer (e.g. Pindah alokasi / Pindah owner / Normalisasi saldo inside the same wallet)
-            if (noteLower.includes('tabungan')) {
-              resolvedDestHolder = candidates.find(
-                (h) => formatHolderName(h.holderName) === 'Tabungan'
-              );
-            } else if (noteLower.includes('sekolah')) {
-              resolvedDestHolder = candidates.find(
-                (h) => formatHolderName(h.holderName) === 'Sekolah'
-              );
-            } else if (noteLower.includes('pribadi')) {
-              resolvedDestHolder = candidates.find(
-                (h) => formatHolderName(h.holderName) === 'Pribadi'
-              );
-            }
-            if (!resolvedDestHolder) {
-              resolvedDestHolder =
-                candidates.find(
-                  (h) =>
-                    h.id !== matchedHolder?.id &&
-                    formatHolderName(h.holderName) !== resolvedFundOwnerName
-                ) ||
-                candidates.find((h) => h.id !== matchedHolder?.id) ||
-                candidates[0];
-            }
-          } else {
-            // Cross-wallet transfer (e.g. Tarik tunai, Setor tunai, Top up Flip/OVO/GoPay, Isi tabungan)
-            if (noteLower.includes('tabungan')) {
-              resolvedDestHolder = candidates.find(
-                (h) => formatHolderName(h.holderName) === 'Tabungan'
-              );
-            } else if (noteLower.includes('sekolah') && !noteLower.includes('ganti')) {
-              resolvedDestHolder = candidates.find(
-                (h) => formatHolderName(h.holderName) === 'Sekolah'
-              );
-            }
-            if (!resolvedDestHolder) {
-              resolvedDestHolder =
-                candidates.find(
-                  (h) => formatHolderName(h.holderName) === resolvedFundOwnerName
-                ) ||
-                candidates.find((h) => formatHolderName(h.holderName) === 'Pribadi') ||
-                candidates[0];
-            }
-          }
-
-          if (resolvedDestHolder) {
-            resolvedToFundOwnerName = formatHolderName(resolvedDestHolder.holderName);
-          } else {
-            resolvedToFundOwnerName = resolvedFundOwnerName;
-          }
-
-          return {
-            ...tx,
-            walletName: resolvedWalletName,
-            fundOwnerId: matchedHolder?.id || tx.fundOwnerId,
-            fundOwnerName: resolvedFundOwnerName,
-            toWalletId: resolvedToWalletId,
-            toWalletName: resolvedToWalletName,
-            toFundOwnerId: resolvedDestHolder?.id || tx.toFundOwnerId,
-            toFundOwnerName: resolvedToFundOwnerName,
-          };
-        }
-
-        if (!resolvedToWalletId && tx.toWalletName && /^\d+$/.test(tx.toWalletName)) {
-          resolvedToWalletId = `su_wallet_${tx.toWalletName}`;
-        }
-        const destWallet = resolvedToWalletId ? walletMap.get(resolvedToWalletId) : undefined;
-        if (destWallet) {
-          resolvedToWalletName = destWallet.name;
-        } else if (!resolvedToWalletName || /^\d+$/.test(resolvedToWalletName)) {
-          resolvedToWalletName = resolvedWalletName;
-        }
-
-        const destHolder = tx.toFundOwnerId ? holderByIdMap.get(tx.toFundOwnerId) : undefined;
-        if (destHolder) {
-          resolvedToFundOwnerName = formatHolderName(destHolder.holderName);
-        } else if (!resolvedToFundOwnerName || resolvedToFundOwnerName === 'Istri') {
-          // Check if destination wallet has a holder
-          const destWalletHolders = resolvedToWalletId
-            ? walletOwners.value.filter((h) => h.walletId === resolvedToWalletId)
-            : [];
-          if (destWalletHolders.length > 0) {
-            const diffHolder =
-              destWalletHolders.find((h) => h.id !== matchedHolder?.id) || destWalletHolders[0];
-            resolvedToFundOwnerName = formatHolderName(diffHolder.holderName);
-          } else {
-            resolvedToFundOwnerName = resolvedToFundOwnerName || resolvedFundOwnerName;
-          }
-        }
+      if (!resolvedToWalletId && tx.toWalletName && /^\d+$/.test(tx.toWalletName)) {
+        resolvedToWalletId = `su_wallet_${tx.toWalletName}`;
+      }
+      const destWallet = resolvedToWalletId ? walletMap.get(resolvedToWalletId) : undefined;
+      if (destWallet) {
+        resolvedToWalletName = destWallet.name;
+      } else if (!resolvedToWalletName || /^\d+$/.test(resolvedToWalletName)) {
+        resolvedToWalletName = resolvedWalletName;
       }
 
-      return {
-        ...tx,
-        walletName: resolvedWalletName,
-        fundOwnerId: matchedHolder?.id || tx.fundOwnerId,
-        fundOwnerName: resolvedFundOwnerName,
-        toWalletId: resolvedToWalletId,
-        toWalletName: resolvedToWalletName,
-        toFundOwnerName: resolvedToFundOwnerName,
-      };
-    });
-  });
+      const destHolder = tx.toFundOwnerId ? holderByIdMap.get(tx.toFundOwnerId) : undefined;
+      if (destHolder) {
+        resolvedToFundOwnerName = formatHolderName(destHolder.holderName);
+      } else if (!resolvedToFundOwnerName || resolvedToFundOwnerName === 'Istri') {
+        // Check if destination wallet has a holder
+        const destWalletHolders = resolvedToWalletId
+          ? walletOwners.value.filter((h) => h.walletId === resolvedToWalletId)
+          : [];
+        if (destWalletHolders.length > 0) {
+          const diffHolder =
+            destWalletHolders.find((h) => h.id !== matchedHolder?.id) || destWalletHolders[0];
+          resolvedToFundOwnerName = formatHolderName(diffHolder.holderName);
+        } else {
+          resolvedToFundOwnerName = resolvedToFundOwnerName || resolvedFundOwnerName;
+        }
+      }
+    }
+
+    return {
+      ...tx,
+      walletName: resolvedWalletName,
+      fundOwnerId: matchedHolder?.id || tx.fundOwnerId,
+      fundOwnerName: resolvedFundOwnerName,
+      toWalletId: resolvedToWalletId,
+      toWalletName: resolvedToWalletName,
+      toFundOwnerName: resolvedToFundOwnerName,
+    };
+  }
 
   /**
-   * Available `YYYY-MM` periods extracted from the user's real Firestore transactions + current month
+   * Enrich & normalize transactions from Firestore:
+   */
+  const transactions = computed<TransactionItem[]>(() =>
+    rawTransactions.value.map((tx) => enrichTransactionItem(tx))
+  );
+
+  // =========================================================================
+  // Server-Side Paginated Transactions State + 1-Sync Read Token Cache
+  // =========================================================================
+  interface CachedTxServerPageEntry {
+    items: TransactionItem[];
+    page: number;
+    pageSize: number;
+    totalFiltered: number;
+    totalPages: number;
+    syncToken: number;
+    cachedAt: number;
+  }
+
+  const rawServerPaginatedTransactions = ref<TransactionItem[]>([]);
+  const serverPaginatedTransactions = computed<TransactionItem[]>(() =>
+    rawServerPaginatedTransactions.value.map((tx) => enrichTransactionItem(tx))
+  );
+  const txServerPage = ref(1);
+  const txServerPageSize = ref(25);
+  const txServerTotalFiltered = ref(0);
+  const txServerTotalPages = ref(1);
+  const isTxServerPageLoading = ref(false);
+  const loadedTransactionPeriods = new Set<string>();
+  const txCursorByFilterKey = new Map<string, Map<number, DocumentSnapshot>>();
+  const txServerPageMemoryCache = new Map<string, CachedTxServerPageEntry>();
+  const txFilteredPoolMemoryCache = new Map<
+    string,
+    { items: TransactionItem[]; syncToken: number }
+  >();
+  const txCountCacheByFilterKey = new Map<string, { count: number; syncToken: number }>();
+
+  let currentTxServerFilter = {
+    page: 1,
+    limit: 25,
+    period: 'all',
+    type: 'all',
+    category: 'all',
+    walletId: 'all',
+    holder: 'all',
+    search: '',
+  };
+
+  function getSavedUserSyncToken(uid: string): number {
+    if (!uid) return 0;
+    const raw =
+      localStorage.getItem(storageKey('sync_token', uid)) ||
+      localStorage.getItem(storageKey('last_sync_at', uid));
+    return Number(raw) || 0;
+  }
+
+  function buildTxPageCacheKey(uid: string, filter = currentTxServerFilter): string {
+    const cleanSearch = String(filter.search || '').trim().toLowerCase();
+    return `${uid}|p:${filter.period}|pg:${filter.page}|lim:${filter.limit}|t:${filter.type}|c:${filter.category}|w:${filter.walletId}|h:${filter.holder}|q:${cleanSearch}`;
+  }
+
+  function buildTxSubFilterPoolKey(uid: string, filter = currentTxServerFilter): string {
+    return `${uid}|pool|t:${filter.type}|c:${filter.category}|w:${filter.walletId}`;
+  }
+
+  function restorePersistedTxPageCache(uid: string, expectedSyncToken: number) {
+    if (!uid || expectedSyncToken <= 0) return;
+    try {
+      const raw = localStorage.getItem(storageKey('tx_page_cache_v1', uid));
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Record<string, CachedTxServerPageEntry>;
+      if (!parsed || typeof parsed !== 'object') return;
+      for (const [k, entry] of Object.entries(parsed)) {
+        if (entry && Math.abs((entry.syncToken || 0) - expectedSyncToken) <= 2000) {
+          txServerPageMemoryCache.set(k, entry);
+        }
+      }
+    } catch {
+      // Ignore corrupt cache
+    }
+  }
+
+  function persistTxPageCacheToStorage(uid: string) {
+    if (!uid) return;
+    try {
+      // Persist up to 25 recently visited pages in localStorage so page reload is also 0-query after 1-sync check
+      const entries = Array.from(txServerPageMemoryCache.entries())
+        .filter(([k]) => k.startsWith(`${uid}|`))
+        .sort((a, b) => (b[1].cachedAt || 0) - (a[1].cachedAt || 0))
+        .slice(0, 25);
+      const obj: Record<string, CachedTxServerPageEntry> = {};
+      for (const [k, v] of entries) {
+        // Only persist 25-per-page slices or bounded monthly slices (<= 150 items) to keep localStorage lightweight
+        if (Array.isArray(v.items) && v.items.length <= 150) {
+          obj[k] = v;
+        }
+      }
+      localStorage.setItem(storageKey('tx_page_cache_v1', uid), JSON.stringify(obj));
+    } catch {
+      // Ignore storage quota
+    }
+  }
+
+  function saveTxServerPageToCache(
+    uid: string,
+    cacheKey: string,
+    payload: {
+      items: TransactionItem[];
+      page: number;
+      pageSize: number;
+      totalFiltered: number;
+      totalPages: number;
+      syncToken: number;
+    }
+  ) {
+    txServerPageMemoryCache.set(cacheKey, {
+      ...payload,
+      cachedAt: Date.now(),
+    });
+    persistTxPageCacheToStorage(uid);
+  }
+
+  function invalidateServerPaginationCaches(uid?: string) {
+    txCursorByFilterKey.clear();
+    txServerPageMemoryCache.clear();
+    txFilteredPoolMemoryCache.clear();
+    txCountCacheByFilterKey.clear();
+    loadedTransactionPeriods.clear();
+    if (uid) {
+      try {
+        localStorage.removeItem(storageKey('tx_page_cache_v1', uid));
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
+  /**
+   * Available `YYYY-MM` periods extracted from user's transactions, budgets, and recent 24 months
+   * so the user can select any month on demand without downloading all historical transactions upfront.
    */
   const availablePeriods = computed<string[]>(() => {
     const set = new Set<string>();
-    const currentMonth = getCurrentMonthPeriod();
+    const now = new Date();
+    // Always include the last 24 months so historical periods are selectable for on-demand server query
+    for (let i = 0; i < 24; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      set.add(ym);
+    }
+    for (const p of budgetPeriods.value) {
+      if (/^\d{4}-\d{2}$/.test(p)) set.add(p);
+    }
     for (const tx of rawTransactions.value) {
       const m = String(tx.date || '').slice(0, 7);
       if (/^\d{4}-\d{2}$/.test(m)) {
         set.add(m);
       }
     }
-    if (set.size === 0) {
-      set.add(currentMonth);
+    for (const tx of rawServerPaginatedTransactions.value) {
+      const m = String(tx.date || '').slice(0, 7);
+      if (/^\d{4}-\d{2}$/.test(m)) {
+        set.add(m);
+      }
     }
     return Array.from(set).sort((a, b) => b.localeCompare(a));
   });
+
+  function mergeFetchedTransactionsIntoCache(incomingList: TransactionItem[]) {
+    if (incomingList.length === 0) return;
+    const map = new Map<string, TransactionItem>();
+    for (const existing of rawTransactions.value) {
+      if (!existing.deleted) {
+        map.set(existing.id, existing);
+      }
+    }
+    for (const item of incomingList) {
+      if (!item.deleted) {
+        map.set(item.id, item);
+      } else {
+        map.delete(item.id);
+      }
+    }
+    const merged = Array.from(map.values());
+    merged.sort((a, b) => {
+      const cmp = String(b.date || '').localeCompare(String(a.date || ''));
+      if (cmp !== 0) return cmp;
+      return String(b.id || '').localeCompare(String(a.id || ''));
+    });
+    rawTransactions.value = merged;
+  }
+
+  /**
+   * Ensure transactions for a specific YYYY-MM period (or date range) are fetched from Firestore on-demand.
+   * Performs a 1-sync read token check first; if already cached for this range and no remote changes occurred,
+   * reuses the cached data without re-querying Firestore!
+   */
+  async function ensureTransactionsForDateRange(startIso: string, endIso: string) {
+    const authStore = useAuthStore();
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || '');
+    if (!uid || uid === 'guest') return;
+
+    // 1. Always accompany user activity with 1-sync read token check
+    await checkAndSyncIfRemoteChanged(uid);
+
+    const rangeKey = `${uid}:${startIso}:${endIso}`;
+    if (loadedTransactionPeriods.has(rangeKey)) return;
+
+    const canQuery = await ensureFirestoreSessionForUser(uid);
+    if (!canQuery) return;
+
+    try {
+      const q = query(
+        collection(db, 'transactions'),
+        where('ownerId', '==', uid),
+        where('date', '>=', startIso),
+        where('date', '<=', `${endIso}\uf8ff`)
+      );
+      const snap = await getDocs(q);
+      const fetched: TransactionItem[] = snap.docs
+        .map((d: any) => ({
+          id: d.id,
+          ...(d.data() as Omit<TransactionItem, 'id'>),
+        }))
+        .filter((t: TransactionItem) => !t.deleted);
+
+      loadedTransactionPeriods.add(rangeKey);
+      mergeFetchedTransactionsIntoCache(fetched);
+      saveLocalSnapshot(uid, false);
+    } catch {
+      // Fallback: if composite index on (ownerId, date) is not built, query by period or latest batch
+    }
+  }
+
+  /**
+   * Server-Side Paginated Transaction Loader for `/transactions` with 1-Sync Read Token Cache:
+   * - On every user activity (switching page, changing period/filter), checks the 1-read sync token (`/users/{uid}`).
+   * - If the requested page/filter is already in cache AND the sync token has not changed, immediately serves
+   *   the cached 25 items with 0 extra collection queries!
+   * - If the page is not cached yet OR the sync token changed in Firestore, loads only the required page from Firestore
+   *   and stores it in cache for subsequent visits.
+   */
+  async function fetchTransactionsServerPage(
+    params?: {
+      page?: number;
+      limit?: number;
+      period?: string;
+      type?: string;
+      category?: string;
+      walletId?: string;
+      holder?: string;
+      search?: string;
+    },
+    silent = false,
+    forceServerReload = false
+  ) {
+    if (params) {
+      currentTxServerFilter = {
+        page: params.page ?? currentTxServerFilter.page,
+        limit: params.limit ?? currentTxServerFilter.limit,
+        period: params.period ?? currentTxServerFilter.period,
+        type: params.type ?? currentTxServerFilter.type,
+        category: params.category ?? currentTxServerFilter.category,
+        walletId: params.walletId ?? currentTxServerFilter.walletId,
+        holder: params.holder ?? currentTxServerFilter.holder,
+        search: params.search ?? currentTxServerFilter.search,
+      };
+    }
+
+    const authStore = useAuthStore();
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || '');
+    if (!uid || uid === 'guest') return;
+
+    const targetPeriod = currentTxServerFilter.period || 'all';
+    const targetPage = Math.max(1, currentTxServerFilter.page || 1);
+    const pageSize = Math.max(1, currentTxServerFilter.limit || 25);
+    const hasClientSubFilters =
+      currentTxServerFilter.type !== 'all' ||
+      currentTxServerFilter.category !== 'all' ||
+      currentTxServerFilter.walletId !== 'all' ||
+      currentTxServerFilter.holder !== 'all' ||
+      Boolean(currentTxServerFilter.search.trim());
+
+    // 1. Check if we already have this exact page in cache so we can render it immediately without UI flicker
+    const initialSyncToken = getSavedUserSyncToken(uid);
+    if (txServerPageMemoryCache.size === 0 && initialSyncToken > 0) {
+      restorePersistedTxPageCache(uid, initialSyncToken);
+    }
+
+    const cacheKey = buildTxPageCacheKey(uid, currentTxServerFilter);
+    const preCachedEntry = !forceServerReload ? txServerPageMemoryCache.get(cacheKey) : undefined;
+
+    if (
+      preCachedEntry &&
+      initialSyncToken > 0 &&
+      Math.abs(preCachedEntry.syncToken - initialSyncToken) <= 2000
+    ) {
+      // Serve immediately from cache so UI is instant
+      rawServerPaginatedTransactions.value = preCachedEntry.items;
+      txServerPage.value = preCachedEntry.page;
+      txServerPageSize.value = preCachedEntry.pageSize;
+      txServerTotalFiltered.value = preCachedEntry.totalFiltered;
+      txServerTotalPages.value = preCachedEntry.totalPages;
+
+      // Accompany user activity with 1-sync read token check in background/foreground:
+      // If remote data did NOT change, we return immediately and keep using the cached 25 items!
+      // If remote data DID change, `checkAndSyncIfRemoteChanged` invalidates the cache and we reload from server below.
+      const remoteChanged = await checkAndSyncIfRemoteChanged(uid);
+      if (!remoteChanged && txServerPageMemoryCache.has(cacheKey)) {
+        return;
+      }
+    } else {
+      // Page not yet in cache: still verify 1-sync read token first so our cache token is fresh
+      if (!silent) isTxServerPageLoading.value = true;
+      await checkAndSyncIfRemoteChanged(uid);
+      // Re-check cache in case checkAndSyncIfRemoteChanged or initial load populated it
+      const freshTokenAfterCheck = getSavedUserSyncToken(uid);
+      const cachedAfterCheck = !forceServerReload
+        ? txServerPageMemoryCache.get(cacheKey)
+        : undefined;
+      if (
+        cachedAfterCheck &&
+        freshTokenAfterCheck > 0 &&
+        Math.abs(cachedAfterCheck.syncToken - freshTokenAfterCheck) <= 2000
+      ) {
+        rawServerPaginatedTransactions.value = cachedAfterCheck.items;
+        txServerPage.value = cachedAfterCheck.page;
+        txServerPageSize.value = cachedAfterCheck.pageSize;
+        txServerTotalFiltered.value = cachedAfterCheck.totalFiltered;
+        txServerTotalPages.value = cachedAfterCheck.totalPages;
+        if (!silent) isTxServerPageLoading.value = false;
+        return;
+      }
+    }
+
+    if (!silent) isTxServerPageLoading.value = true;
+
+    try {
+      const canQuery = await ensureFirestoreSessionForUser(uid);
+      const activeSyncToken = getSavedUserSyncToken(uid) || Date.now();
+
+      // CASE 1: Specific Monthly Period ('YYYY-MM') -> Fetch ONLY that month's transactions from Firestore & cache
+      if (targetPeriod !== 'all' && /^\d{4}-\d{2}$/.test(targetPeriod)) {
+        const startIso = `${targetPeriod}-01`;
+        const endIso = `${targetPeriod}-31`;
+        const rangeKey = `${uid}:${startIso}:${endIso}`;
+
+        // If this month was already loaded during the current sync token, filter from cached month docs (0 extra reads!)
+        if (loadedTransactionPeriods.has(rangeKey) && !forceServerReload) {
+          const cachedMonthDocs = rawTransactions.value
+            .filter((tx) => !tx.deleted && String(tx.date || '').slice(0, 7) === targetPeriod)
+            .map((tx) => enrichTransactionItem(tx))
+            .filter((tx) => matchesClientSubFilters(tx));
+
+          rawServerPaginatedTransactions.value = cachedMonthDocs;
+          txServerPage.value = 1;
+          txServerPageSize.value = Math.max(1, cachedMonthDocs.length);
+          txServerTotalFiltered.value = cachedMonthDocs.length;
+          txServerTotalPages.value = 1;
+
+          saveTxServerPageToCache(uid, cacheKey, {
+            items: cachedMonthDocs,
+            page: 1,
+            pageSize: Math.max(1, cachedMonthDocs.length),
+            totalFiltered: cachedMonthDocs.length,
+            totalPages: 1,
+            syncToken: activeSyncToken,
+          });
+          return;
+        }
+
+        if (canQuery) {
+          try {
+            const monthQuery = query(
+              collection(db, 'transactions'),
+              where('ownerId', '==', uid),
+              where('date', '>=', startIso),
+              where('date', '<=', `${endIso}\uf8ff`),
+              orderBy('date', 'desc')
+            );
+            const snap = await getDocs(monthQuery);
+            const monthDocs: TransactionItem[] = snap.docs
+              .map((d: any) => ({
+                id: d.id,
+                ...(d.data() as Omit<TransactionItem, 'id'>),
+              }))
+              .filter((t: TransactionItem) => !t.deleted);
+
+            monthDocs.sort((a, b) => {
+              const cmp = String(b.date || '').localeCompare(String(a.date || ''));
+              if (cmp !== 0) return cmp;
+              return String(b.id || '').localeCompare(String(a.id || ''));
+            });
+
+            loadedTransactionPeriods.add(rangeKey);
+            mergeFetchedTransactionsIntoCache(monthDocs);
+
+            const enrichedAndFiltered = monthDocs
+              .map((tx) => enrichTransactionItem(tx))
+              .filter((tx) => matchesClientSubFilters(tx));
+
+            rawServerPaginatedTransactions.value = enrichedAndFiltered;
+            txServerPage.value = 1;
+            txServerPageSize.value = Math.max(1, enrichedAndFiltered.length);
+            txServerTotalFiltered.value = enrichedAndFiltered.length;
+            txServerTotalPages.value = 1;
+
+            saveTxServerPageToCache(uid, cacheKey, {
+              items: enrichedAndFiltered,
+              page: 1,
+              pageSize: Math.max(1, enrichedAndFiltered.length),
+              totalFiltered: enrichedAndFiltered.length,
+              totalPages: 1,
+              syncToken: activeSyncToken,
+            });
+            return;
+          } catch {
+            // Fallback to cached period filter if index is building
+          }
+        }
+
+        const fallbackMonth = rawTransactions.value
+          .filter((tx) => !tx.deleted && String(tx.date || '').slice(0, 7) === targetPeriod)
+          .map((tx) => enrichTransactionItem(tx))
+          .filter((tx) => matchesClientSubFilters(tx));
+
+        rawServerPaginatedTransactions.value = fallbackMonth;
+        txServerPage.value = 1;
+        txServerPageSize.value = Math.max(1, fallbackMonth.length);
+        txServerTotalFiltered.value = fallbackMonth.length;
+        txServerTotalPages.value = 1;
+        return;
+      }
+
+      // CASE 2: 'all' (Semua Periode) with NO extra text/dropdown subfilters -> Pure Firestore Server-Side Cursor Pagination (25 per page) + Page Cache
+      if (!hasClientSubFilters && canQuery) {
+        const filterKey = `${uid}:all`;
+        if (!txCursorByFilterKey.has(filterKey)) {
+          txCursorByFilterKey.set(filterKey, new Map());
+        }
+        const cursorMap = txCursorByFilterKey.get(filterKey)!;
+
+        try {
+          // 1. Get exact server count from cache if syncToken matches, or from Firestore (1 aggregation read)
+          let totalServerCount = 0;
+          const cachedCountObj = txCountCacheByFilterKey.get(filterKey);
+          if (
+            !forceServerReload &&
+            cachedCountObj &&
+            Math.abs(cachedCountObj.syncToken - activeSyncToken) <= 2000
+          ) {
+            totalServerCount = cachedCountObj.count;
+          } else {
+            const baseCountQuery = query(
+              collection(db, 'transactions'),
+              where('ownerId', '==', uid),
+              where('deleted', '==', false)
+            );
+            try {
+              const countSnap = await getCountFromServer(baseCountQuery);
+              totalServerCount = countSnap.data().count;
+            } catch {
+              const fallbackCountSnap = await getCountFromServer(
+                query(collection(db, 'transactions'), where('ownerId', '==', uid))
+              );
+              totalServerCount = fallbackCountSnap.data().count;
+            }
+            txCountCacheByFilterKey.set(filterKey, {
+              count: totalServerCount,
+              syncToken: activeSyncToken,
+            });
+          }
+
+          const totalPages = Math.max(1, Math.ceil(totalServerCount / pageSize));
+          const safePage = Math.min(targetPage, totalPages);
+          const safePageCacheKey = buildTxPageCacheKey(uid, {
+            ...currentTxServerFilter,
+            page: safePage,
+          });
+
+          // Check if `safePage` is already in cache for the current syncToken
+          const safePageCached = !forceServerReload
+            ? txServerPageMemoryCache.get(safePageCacheKey)
+            : undefined;
+          if (
+            safePageCached &&
+            Math.abs(safePageCached.syncToken - activeSyncToken) <= 2000
+          ) {
+            rawServerPaginatedTransactions.value = safePageCached.items;
+            txServerPage.value = safePageCached.page;
+            txServerPageSize.value = safePageCached.pageSize;
+            txServerTotalFiltered.value = safePageCached.totalFiltered;
+            txServerTotalPages.value = safePageCached.totalPages;
+            return;
+          }
+
+          // 2. Ensure cursor for (safePage - 1) is available, or walk forward using lightweight limit queries
+          let startAfterDoc: DocumentSnapshot | undefined =
+            safePage > 1 ? cursorMap.get(safePage - 1) : undefined;
+
+          if (safePage > 1 && !startAfterDoc) {
+            // Find the highest cached cursor page < safePage
+            let latestCachedPage = 0;
+            for (const [p, cur] of cursorMap.entries()) {
+              if (p < safePage && p > latestCachedPage) {
+                latestCachedPage = p;
+                startAfterDoc = cur;
+              }
+            }
+            const docsToSkip = (safePage - 1 - latestCachedPage) * pageSize;
+            if (docsToSkip > 0) {
+              const skipConstraints: QueryConstraint[] = [
+                where('ownerId', '==', uid),
+                orderBy('date', 'desc'),
+              ];
+              if (startAfterDoc) {
+                skipConstraints.push(startAfter(startAfterDoc));
+              }
+              skipConstraints.push(limit(docsToSkip));
+              const skipSnap = await getDocs(
+                query(collection(db, 'transactions'), ...skipConstraints)
+              );
+              if (skipSnap.docs.length > 0) {
+                // Also save intermediate page cursors every `pageSize` docs so jumping back to intermediate pages is instant!
+                for (let idx = pageSize - 1; idx < skipSnap.docs.length; idx += pageSize) {
+                  const pageNum = latestCachedPage + Math.floor((idx + 1) / pageSize);
+                  cursorMap.set(pageNum, skipSnap.docs[idx]);
+                }
+                startAfterDoc = skipSnap.docs[skipSnap.docs.length - 1];
+                cursorMap.set(safePage - 1, startAfterDoc);
+              }
+            }
+          }
+
+          // 3. Fetch ONLY `pageSize` (25) documents for the current page from Firestore!
+          const pageConstraints: QueryConstraint[] = [
+            where('ownerId', '==', uid),
+            orderBy('date', 'desc'),
+          ];
+          if (startAfterDoc) {
+            pageConstraints.push(startAfter(startAfterDoc));
+          }
+          pageConstraints.push(limit(pageSize));
+
+          const pageSnap = await getDocs(
+            query(collection(db, 'transactions'), ...pageConstraints)
+          );
+
+          if (pageSnap.docs.length > 0) {
+            cursorMap.set(safePage, pageSnap.docs[pageSnap.docs.length - 1]);
+          }
+
+          const pageItems: TransactionItem[] = pageSnap.docs
+            .map((d: any) => ({
+              id: d.id,
+              ...(d.data() as Omit<TransactionItem, 'id'>),
+            }))
+            .filter((t: TransactionItem) => !t.deleted);
+
+          mergeFetchedTransactionsIntoCache(pageItems);
+
+          const finalTotalFiltered = Math.max(totalServerCount, pageItems.length);
+          const finalTotalPages = Math.max(1, Math.ceil(finalTotalFiltered / pageSize));
+
+          rawServerPaginatedTransactions.value = pageItems;
+          txServerPage.value = safePage;
+          txServerPageSize.value = pageSize;
+          txServerTotalFiltered.value = finalTotalFiltered;
+          txServerTotalPages.value = finalTotalPages;
+
+          // Save this 25-item page to cache bound to `activeSyncToken`
+          saveTxServerPageToCache(uid, safePageCacheKey, {
+            items: pageItems,
+            page: safePage,
+            pageSize,
+            totalFiltered: finalTotalFiltered,
+            totalPages: finalTotalPages,
+            syncToken: activeSyncToken,
+          });
+          return;
+        } catch {
+          // If Firestore composite index (ownerId + date desc) is not built on this project,
+          // fall through to bounded query below
+        }
+      }
+
+      // CASE 3: Filtered search / category / wallet / holder across 'all' periods, or index fallback
+      if (canQuery) {
+        const poolKey = buildTxSubFilterPoolKey(uid, currentTxServerFilter);
+        const cachedPool = !forceServerReload ? txFilteredPoolMemoryCache.get(poolKey) : undefined;
+        let matchedDocs: TransactionItem[];
+
+        if (cachedPool && Math.abs(cachedPool.syncToken - activeSyncToken) <= 2000) {
+          matchedDocs = cachedPool.items;
+        } else {
+          const constraints: QueryConstraint[] = [where('ownerId', '==', uid)];
+          if (currentTxServerFilter.type !== 'all') {
+            constraints.push(where('type', '==', currentTxServerFilter.type));
+          }
+          if (currentTxServerFilter.category !== 'all') {
+            constraints.push(where('category', '==', currentTxServerFilter.category));
+          }
+          if (
+            currentTxServerFilter.walletId !== 'all' &&
+            currentTxServerFilter.type !== 'transfer'
+          ) {
+            constraints.push(where('walletId', '==', currentTxServerFilter.walletId));
+          }
+
+          const snap = await getDocs(query(collection(db, 'transactions'), ...constraints));
+          matchedDocs = snap.docs
+            .map((d: any) => ({
+              id: d.id,
+              ...(d.data() as Omit<TransactionItem, 'id'>),
+            }))
+            .filter((t: TransactionItem) => !t.deleted);
+
+          matchedDocs.sort((a, b) => {
+            const cmp = String(b.date || '').localeCompare(String(a.date || ''));
+            if (cmp !== 0) return cmp;
+            return String(b.id || '').localeCompare(String(a.id || ''));
+          });
+
+          txFilteredPoolMemoryCache.set(poolKey, {
+            items: matchedDocs,
+            syncToken: activeSyncToken,
+          });
+          mergeFetchedTransactionsIntoCache(matchedDocs);
+        }
+
+        const postFiltered = matchedDocs
+          .map((tx) => enrichTransactionItem(tx))
+          .filter((tx) => matchesClientSubFilters(tx));
+
+        const totalFiltered = postFiltered.length;
+        const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
+        const safePage = Math.min(targetPage, totalPages);
+        const start = (safePage - 1) * pageSize;
+        const pageSlice = postFiltered.slice(start, start + pageSize);
+
+        rawServerPaginatedTransactions.value = pageSlice;
+        txServerPage.value = safePage;
+        txServerPageSize.value = pageSize;
+        txServerTotalFiltered.value = totalFiltered;
+        txServerTotalPages.value = totalPages;
+
+        const safePageCacheKey = buildTxPageCacheKey(uid, {
+          ...currentTxServerFilter,
+          page: safePage,
+        });
+        saveTxServerPageToCache(uid, safePageCacheKey, {
+          items: pageSlice,
+          page: safePage,
+          pageSize,
+          totalFiltered,
+          totalPages,
+          syncToken: activeSyncToken,
+        });
+        return;
+      }
+
+      // Offline cache fallback
+      const offlineFiltered = rawTransactions.value
+        .filter((tx) => !tx.deleted)
+        .map((tx) => enrichTransactionItem(tx))
+        .filter((tx) => matchesClientSubFilters(tx));
+
+      const totalFiltered = offlineFiltered.length;
+      const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
+      const safePage = Math.min(targetPage, totalPages);
+      const start = (safePage - 1) * pageSize;
+
+      rawServerPaginatedTransactions.value = offlineFiltered.slice(start, start + pageSize);
+      txServerPage.value = safePage;
+      txServerPageSize.value = pageSize;
+      txServerTotalFiltered.value = totalFiltered;
+      txServerTotalPages.value = totalPages;
+    } catch (err) {
+      if (isFirestoreQuotaError(err)) {
+        useNotificationStore().notifyQuotaExceeded();
+      }
+    } finally {
+      if (!silent) isTxServerPageLoading.value = false;
+    }
+  }
+
+  function matchesClientSubFilters(tx: TransactionItem): boolean {
+    if (
+      currentTxServerFilter.period !== 'all' &&
+      String(tx.date || '').slice(0, 7) !== currentTxServerFilter.period
+    ) {
+      return false;
+    }
+    if (
+      currentTxServerFilter.type !== 'all' &&
+      tx.type !== currentTxServerFilter.type
+    ) {
+      return false;
+    }
+    if (
+      currentTxServerFilter.category !== 'all' &&
+      tx.category !== currentTxServerFilter.category
+    ) {
+      return false;
+    }
+    if (
+      currentTxServerFilter.walletId !== 'all' &&
+      tx.walletId !== currentTxServerFilter.walletId &&
+      tx.toWalletId !== currentTxServerFilter.walletId
+    ) {
+      return false;
+    }
+    if (
+      currentTxServerFilter.holder !== 'all' &&
+      tx.fundOwnerName !== currentTxServerFilter.holder &&
+      tx.toFundOwnerName !== currentTxServerFilter.holder
+    ) {
+      return false;
+    }
+    if (currentTxServerFilter.search.trim()) {
+      const q = currentTxServerFilter.search.trim().toLowerCase();
+      return (
+        String(tx.note || '').toLowerCase().includes(q) ||
+        String(tx.category || '').toLowerCase().includes(q) ||
+        String(tx.walletName || '').toLowerCase().includes(q) ||
+        String(tx.toWalletName || '').toLowerCase().includes(q) ||
+        String(tx.fundOwnerName || '').toLowerCase().includes(q) ||
+        String(tx.toFundOwnerName || '').toLowerCase().includes(q)
+      );
+    }
+    return true;
+  }
 
   /**
    * Transactions filtered by `selectedPeriod` ('all' or 'YYYY-MM')
@@ -674,14 +1395,77 @@ export const useFinanceStore = defineStore('finance', () => {
 
   let isCheckingSyncToken = false;
   let lastTokenCheckAt = 0;
-  const TOKEN_CHECK_COOLDOWN_MS = 10 * 1000; // 10s debounce so rapid clicks/navigations don't spam reads
+  const TOKEN_CHECK_COOLDOWN_MS = 1500; // 1.5s dedup window so simultaneous watchers on the same click share 1 read
 
   async function fetchAllCollectionsFromFirestore(uid: string, remoteSyncToken = 0) {
+    const currentMonth = getCurrentMonthPeriod();
+    const monthStartIso = `${currentMonth}-01`;
+    const monthEndIso = `${currentMonth}-31`;
+    const effectiveSyncToken = remoteSyncToken > 0 ? remoteSyncToken : Date.now();
+
+    // Clear stale pagination caches before loading fresh server state
+    invalidateServerPaginationCaches(uid);
+
+    // Build bounded transaction query: ONLY fetch current month's transactions + latest 25 transactions (server-side pagination)
+    // Never load the entire transactions collection at startup!
+    let initialPage1Items: TransactionItem[] = [];
+    const fetchInitialBoundedTransactions = async () => {
+      const combinedMap = new Map<string, any>();
+      try {
+        const [monthSnap, page1Snap] = await Promise.all([
+          getDocs(
+            query(
+              collection(db, 'transactions'),
+              where('ownerId', '==', uid),
+              where('date', '>=', monthStartIso),
+              where('date', '<=', `${monthEndIso}\uf8ff`)
+            )
+          ),
+          getDocs(
+            query(
+              collection(db, 'transactions'),
+              where('ownerId', '==', uid),
+              orderBy('date', 'desc'),
+              limit(25)
+            )
+          ),
+        ]);
+        monthSnap.docs.forEach((d) => combinedMap.set(d.id, d));
+        page1Snap.docs.forEach((d) => combinedMap.set(d.id, d));
+
+        loadedTransactionPeriods.add(`${uid}:${monthStartIso}:${monthEndIso}`);
+
+        if (page1Snap.docs.length > 0) {
+          const filterKey = `${uid}:all`;
+          if (!txCursorByFilterKey.has(filterKey)) {
+            txCursorByFilterKey.set(filterKey, new Map());
+          }
+          txCursorByFilterKey
+            .get(filterKey)!
+            .set(1, page1Snap.docs[page1Snap.docs.length - 1]);
+
+          initialPage1Items = page1Snap.docs
+            .map((d: any) => ({
+              id: d.id,
+              ...(d.data() as Omit<TransactionItem, 'id'>),
+            }))
+            .filter((t: TransactionItem) => !t.deleted);
+        }
+        return { docs: Array.from(combinedMap.values()) };
+      } catch {
+        // Fallback if composite index on (ownerId, date) is not yet available
+        const boundedSnap = await getDocs(
+          query(collection(db, 'transactions'), where('ownerId', '==', uid), limit(50))
+        );
+        return boundedSnap;
+      }
+    };
+
     const queries: Promise<any>[] = [
       getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
       getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
       getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid))),
-      getDocs(query(collection(db, 'transactions'), where('ownerId', '==', uid))),
+      fetchInitialBoundedTransactions(),
       getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid))),
     ];
 
@@ -760,20 +1544,30 @@ export const useFinanceStore = defineStore('finance', () => {
       const authStore = useAuthStore();
       if (authStore.user?.uid === uid) {
         const rawPeriod = String(proMarkerDoc.period || '');
-        let plan: 'monthly' | 'yearly' = 'monthly';
-        let expiresAt: string | null = null;
-        if (rawPeriod.startsWith('Y:')) {
-          plan = 'yearly';
-          expiresAt = rawPeriod.slice(2) || null;
-        } else if (rawPeriod.startsWith('M:')) {
-          plan = 'monthly';
-          expiresAt = rawPeriod.slice(2) || null;
+        if (rawPeriod.startsWith('P:')) {
+          const planCode = rawPeriod.slice(2, 3);
+          const plan: 'monthly' | 'yearly' = planCode === 'Y' ? 'yearly' : 'monthly';
+          authStore.setExternalSubscriptionStatus(
+            proMarkerDoc.deleted ? 'free' : 'pending',
+            proMarkerDoc.deleted ? null : plan,
+            null
+          );
+        } else {
+          let plan: 'monthly' | 'yearly' = 'monthly';
+          let expiresAt: string | null = null;
+          if (rawPeriod.startsWith('Y:')) {
+            plan = 'yearly';
+            expiresAt = rawPeriod.slice(2) || null;
+          } else if (rawPeriod.startsWith('M:')) {
+            plan = 'monthly';
+            expiresAt = rawPeriod.slice(2) || null;
+          }
+          authStore.setExternalSubscriptionStatus(
+            proMarkerDoc.deleted ? 'free' : 'pro',
+            proMarkerDoc.deleted ? null : plan,
+            proMarkerDoc.deleted ? null : expiresAt
+          );
         }
-        authStore.setExternalSubscriptionStatus(
-          proMarkerDoc.deleted ? 'free' : 'pro',
-          proMarkerDoc.deleted ? null : plan,
-          proMarkerDoc.deleted ? null : expiresAt
-        );
       }
     }
 
@@ -813,31 +1607,62 @@ export const useFinanceStore = defineStore('finance', () => {
     }
 
     isSyncedWithFirestore.value = true;
-    saveLocalSnapshot(uid, true, Math.max(remoteSyncToken, Date.now()));
+    saveLocalSnapshot(uid, true, effectiveSyncToken);
+
+    // If initialPage1Items were fetched, also pre-populate Page 1 cache if total count <= 24
+    if (initialPage1Items.length > 0 && initialPage1Items.length < 25) {
+      const defaultPage1Key = buildTxPageCacheKey(uid, {
+        page: 1,
+        limit: 25,
+        period: 'all',
+        type: 'all',
+        category: 'all',
+        walletId: 'all',
+        holder: 'all',
+        search: '',
+      });
+      txCountCacheByFilterKey.set(`${uid}:all`, {
+        count: initialPage1Items.length,
+        syncToken: effectiveSyncToken,
+      });
+      saveTxServerPageToCache(uid, defaultPage1Key, {
+        items: initialPage1Items,
+        page: 1,
+        pageSize: 25,
+        totalFiltered: initialPage1Items.length,
+        totalPages: 1,
+        syncToken: effectiveSyncToken,
+      });
+    }
   }
 
   /**
-   * Background 1-Read Sync Check triggered on in-app user activities
-   * (switching pages/menus, returning to app tab/window focus, changing period, opening modals).
-   * Costs ONLY 1 document read (`/users/{uid}`) and silently updates state in-place if another device made changes.
+   * 1-Sync Read Token Check triggered on every user activity
+   * (switching pages/pagination, switching menus, returning to app tab/window focus, changing period, opening modals).
+   * Costs ONLY 1 document read (`/users/{uid}`).
+   * - If remote `updatedAt` has NOT changed: returns `false` and keeps all cached pages & collections intact (0 collection reads!).
+   * - If remote `updatedAt` HAS changed: invalidates caches, reloads fresh data from server, stores in cache again, and returns `true`.
    */
-  async function checkAndSyncIfRemoteChanged(uidInput?: string, bypassCooldown = false) {
+  async function checkAndSyncIfRemoteChanged(
+    uidInput?: string,
+    bypassCooldown = false
+  ): Promise<boolean> {
     const authStore = useAuthStore();
-    if (!authStore.isAuthenticated || authStore.isSuperAdmin) return;
+    if (!authStore.isAuthenticated || authStore.isSuperAdmin) return false;
 
     const uid = sanitizeId(uidInput || authStore.user?.uid || activeOwnerUid.value || '');
-    if (!uid || uid === 'guest') return;
+    if (!uid || uid === 'guest') return false;
 
     // If initial load hasn't completed yet, let initFinanceData handle it
     if (isLoading.value || !isSyncedWithFirestore.value || activeOwnerUid.value !== uid) {
-      return;
+      return false;
     }
 
     const now = Date.now();
     if (!bypassCooldown && now - lastTokenCheckAt < TOKEN_CHECK_COOLDOWN_MS) {
-      return;
+      return false;
     }
-    if (isCheckingSyncToken) return;
+    if (isCheckingSyncToken) return false;
 
     isCheckingSyncToken = true;
     lastTokenCheckAt = now;
@@ -854,6 +1679,12 @@ export const useFinanceStore = defineStore('finance', () => {
               statusData.subscriptionPlan || 'monthly',
               statusData.subscriptionExpiresAt || null
             );
+          } else if (statusData.subscriptionStatus === 'pending') {
+            authStore.setExternalSubscriptionStatus(
+              'pending',
+              statusData.subscriptionPlan || 'monthly',
+              null
+            );
           } else if (statusData.subscriptionStatus === 'free' && statusData.isPro === false) {
             authStore.setExternalSubscriptionStatus('free', null, null);
           }
@@ -863,27 +1694,29 @@ export const useFinanceStore = defineStore('finance', () => {
       }
 
       const canQuery = await ensureFirestoreSessionForUser(uid);
-      if (!canQuery) return;
+      if (!canQuery) return false;
 
-      const savedSyncToken =
-        localStorage.getItem(storageKey('sync_token', uid)) ||
-        localStorage.getItem(storageKey('last_sync_at', uid));
-      const localSyncToken = Number(savedSyncToken) || 0;
+      const localSyncToken = getSavedUserSyncToken(uid);
 
       const userSnap = await getDoc(doc(db, 'users', uid));
-      if (!userSnap.exists()) return;
+      if (!userSnap.exists()) return false;
 
       const uData = userSnap.data();
       const remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
 
-      // If remote document has a newer timestamp (> 2s tolerance), silently pull fresh collections in-place
+      // If remote document has a newer timestamp (> 2s tolerance), invalidate page caches and pull fresh data from server
       if (remoteSyncToken > 0 && remoteSyncToken > localSyncToken + 2000) {
+        invalidateServerPaginationCaches(uid);
         await fetchAllCollectionsFromFirestore(uid, remoteSyncToken);
+        await fetchTransactionsServerPage(undefined, true, true);
+        return true;
       }
+      return false;
     } catch (err) {
       if (isFirestoreQuotaError(err)) {
         useNotificationStore().notifyQuotaExceeded();
       }
+      return false;
     } finally {
       isCheckingSyncToken = false;
     }
@@ -1006,6 +1839,12 @@ export const useFinanceStore = defineStore('finance', () => {
             statusData.subscriptionPlan || 'monthly',
             statusData.subscriptionExpiresAt || null
           );
+        } else if (statusData.subscriptionStatus === 'pending') {
+          authStore.setExternalSubscriptionStatus(
+            'pending',
+            statusData.subscriptionPlan || 'monthly',
+            null
+          );
         } else if (statusData.subscriptionStatus === 'free' && statusData.isPro === false) {
           authStore.setExternalSubscriptionStatus('free', null, null);
         }
@@ -1044,6 +1883,7 @@ export const useFinanceStore = defineStore('finance', () => {
           localSyncToken > 0 &&
           (remoteSyncToken === 0 || remoteSyncToken <= localSyncToken + 2000)
         ) {
+          restorePersistedTxPageCache(uid, localSyncToken);
           isSyncedWithFirestore.value = true;
           isLoading.value = false;
           return;
@@ -2272,6 +3112,9 @@ export const useFinanceStore = defineStore('finance', () => {
     syncWalletTotalBalancesFromHolders();
     saveLocalSnapshot(uid, true);
 
+    invalidateServerPaginationCaches(uid);
+    void fetchTransactionsServerPage(undefined, true, true);
+
     // Ensure selectedPeriod shows the month of the newly added transaction
     const txMonth = safeDate.slice(0, 7);
     if (selectedPeriod.value !== 'all' && /^\d{4}-\d{2}$/.test(txMonth)) {
@@ -2501,6 +3344,9 @@ export const useFinanceStore = defineStore('finance', () => {
     syncWalletTotalBalancesFromHolders();
     saveLocalSnapshot(uid, true);
 
+    invalidateServerPaginationCaches(uid);
+    void fetchTransactionsServerPage(undefined, true, true);
+
     const txMonth = safeDate.slice(0, 7);
     if (selectedPeriod.value !== 'all' && /^\d{4}-\d{2}$/.test(txMonth)) {
       selectedPeriod.value = txMonth;
@@ -2626,6 +3472,11 @@ export const useFinanceStore = defineStore('finance', () => {
     }
 
     rawTransactions.value = rawTransactions.value.filter((t) => t.id !== txId);
+    rawServerPaginatedTransactions.value = rawServerPaginatedTransactions.value.filter(
+      (t) => t.id !== txId
+    );
+    invalidateServerPaginationCaches(uid);
+    void fetchTransactionsServerPage(undefined, true, true);
     if (tx.type === 'income' && sourceHolder) {
       const rawSrc = rawWalletOwners.value.find((h) => h.id === sourceHolder.id);
       if (rawSrc) rawSrc.balance = Number(rawSrc.balance || 0) - tx.amount;
@@ -2984,6 +3835,14 @@ export const useFinanceStore = defineStore('finance', () => {
     rawTransactions,
     transactions,
     periodTransactions,
+    serverPaginatedTransactions,
+    txServerPage,
+    txServerPageSize,
+    txServerTotalFiltered,
+    txServerTotalPages,
+    isTxServerPageLoading,
+    fetchTransactionsServerPage,
+    ensureTransactionsForDateRange,
     availablePeriods,
     selectedPeriod,
     budgets,

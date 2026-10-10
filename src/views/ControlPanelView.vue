@@ -17,14 +17,18 @@ import {
   Sparkles,
   Calendar,
   Check,
+  Clock,
+  Image as ImageIcon,
 } from 'lucide-vue-next';
 import {
   useAdminStore,
   isAdminUserProActive,
+  isAdminUserProPending,
   type AdminUserItem,
 } from '../stores/admin';
 import { useAuthStore } from '../stores/auth';
 import AppModal from '../components/AppModal.vue';
+import AppPagination from '../components/AppPagination.vue';
 import MaterialDatePicker from '../components/MaterialDatePicker.vue';
 
 const { t } = useI18n();
@@ -42,7 +46,7 @@ const activeSection = ref<'users' | 'logs' | 'alerts'>(
 );
 const userSearch = ref('');
 const userStatusFilter = ref<'all' | 'active' | 'blocked'>('all');
-const userPlanFilter = ref<'all' | 'pro' | 'free'>('all');
+const userPlanFilter = ref<'all' | 'pro' | 'pending' | 'free'>('all');
 const logSeverityFilter = ref<'all' | 'info' | 'warning' | 'critical'>('all');
 const logSearch = ref('');
 
@@ -93,6 +97,10 @@ function openSubscriptionModal(targetUser: AdminUserItem) {
       targetUser.subscriptionExpiresAt && /^\d{4}-\d{2}-\d{2}$/.test(targetUser.subscriptionExpiresAt.slice(0, 10))
         ? targetUser.subscriptionExpiresAt.slice(0, 10)
         : computeDefaultExpiryForPlan(selectedSubPlan.value);
+  } else if (isUserPending(targetUser)) {
+    selectedSubPlan.value =
+      targetUser.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly';
+    selectedSubExpiresAt.value = computeDefaultExpiryForPlan(selectedSubPlan.value);
   } else {
     selectedSubPlan.value = 'monthly';
     selectedSubExpiresAt.value = computeDefaultExpiryForPlan('monthly');
@@ -137,6 +145,10 @@ function isUserPro(u: AdminUserItem): boolean {
   return isAdminUserProActive(u);
 }
 
+function isUserPending(u: AdminUserItem): boolean {
+  return isAdminUserProPending(u);
+}
+
 function formatExpiryDateLabel(isoDate?: string | null): string {
   if (!isoDate) return 'Tanpa Batas';
   const clean = String(isoDate).slice(0, 10);
@@ -167,29 +179,43 @@ onMounted(() => {
   adminStore.startRealtimeMonitoring();
 });
 
-const filteredUsers = computed(() => {
-  return adminStore.users.filter((u) => {
-    if (userStatusFilter.value !== 'all' && u.status !== userStatusFilter.value) {
-      return false;
-    }
-    if (userPlanFilter.value === 'pro' && !isUserPro(u)) {
-      return false;
-    }
-    if (userPlanFilter.value === 'free' && isUserPro(u)) {
-      return false;
-    }
-    if (userSearch.value.trim()) {
-      const q = userSearch.value.toLowerCase();
-      return (
-        u.displayName.toLowerCase().includes(q) ||
-        (u.username && u.username.toLowerCase().includes(q)) ||
-        u.email.toLowerCase().includes(q) ||
-        u.role.toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
+// Server-side Pagination for User Management (25 users per page)
+const USERS_PAGE_SIZE = 25;
+const usersCurrentPage = ref(1);
+let userSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function triggerServerUsersFetch(targetPage: number, silent = false) {
+  usersCurrentPage.value = targetPage;
+  void adminStore.fetchAdminUsersPage(
+    {
+      page: targetPage,
+      limit: USERS_PAGE_SIZE,
+      status: userStatusFilter.value,
+      plan: userPlanFilter.value,
+      search: userSearch.value.trim(),
+    },
+    silent
+  );
+}
+
+watch([userStatusFilter, userPlanFilter], () => {
+  triggerServerUsersFetch(1);
 });
+
+watch(userSearch, () => {
+  if (userSearchDebounceTimer) {
+    clearTimeout(userSearchDebounceTimer);
+  }
+  userSearchDebounceTimer = setTimeout(() => {
+    triggerServerUsersFetch(1);
+  }, 250);
+});
+
+function handleUsersPageChange(newPage: number) {
+  triggerServerUsersFetch(newPage);
+}
+
+const paginatedUsers = computed(() => adminStore.paginatedUsers);
 
 const filteredLogs = computed(() => {
   return adminStore.logs.filter((l) => {
@@ -270,7 +296,7 @@ function formatTimestamp(iso: string): string {
           {{ t('admin.totalUsers') }}
         </div>
         <div class="text-2xl font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
-          {{ adminStore.users.length }}
+          {{ adminStore.totalUsersCount }}
         </div>
       </div>
 
@@ -288,8 +314,16 @@ function formatTimestamp(iso: string): string {
           <Crown class="w-3.5 h-3.5 shrink-0" />
           <span>Pelanggan SisaUang Pro</span>
         </div>
-        <div class="text-2xl font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-          {{ adminStore.proUsersCount }}
+        <div class="flex items-baseline justify-between gap-2">
+          <div class="text-2xl font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+            {{ adminStore.proUsersCount }}
+          </div>
+          <span
+            v-if="adminStore.pendingProUsersCount > 0"
+            class="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 text-[11px] font-mono font-bold"
+          >
+            {{ adminStore.pendingProUsersCount }} Pending
+          </span>
         </div>
       </div>
 
@@ -325,7 +359,7 @@ function formatTimestamp(iso: string): string {
         @click="selectSection('users')"
       >
         <Users class="w-4 h-4" />
-        <span>{{ t('admin.userManagement') }} ({{ adminStore.users.length }})</span>
+        <span>{{ t('admin.userManagement') }} ({{ adminStore.totalUsersCount }})</span>
       </button>
 
       <button
@@ -401,11 +435,11 @@ function formatTimestamp(iso: string): string {
             </button>
           </div>
 
-          <!-- Subscription Tier Filter (Free vs SisaUang Pro) -->
-          <div class="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-xl self-start">
+          <!-- Subscription Tier Filter (Free vs Pending vs SisaUang Pro) -->
+          <div class="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-xl self-start overflow-x-auto max-w-full">
             <button
               type="button"
-              class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+              class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
               :class="
                 userPlanFilter === 'all'
                   ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
@@ -417,7 +451,20 @@ function formatTimestamp(iso: string): string {
             </button>
             <button
               type="button"
-              class="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+              class="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors whitespace-nowrap"
+              :class="
+                userPlanFilter === 'pending'
+                  ? 'bg-white dark:bg-slate-900 text-amber-600 dark:text-amber-400 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400'
+              "
+              @click="userPlanFilter = 'pending'"
+            >
+              <Clock class="w-3.5 h-3.5" />
+              <span>Pending ({{ adminStore.pendingProUsersCount }})</span>
+            </button>
+            <button
+              type="button"
+              class="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors whitespace-nowrap"
               :class="
                 userPlanFilter === 'pro'
                   ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
@@ -430,7 +477,7 @@ function formatTimestamp(iso: string): string {
             </button>
             <button
               type="button"
-              class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+              class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
               :class="
                 userPlanFilter === 'free'
                   ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
@@ -438,7 +485,7 @@ function formatTimestamp(iso: string): string {
               "
               @click="userPlanFilter = 'free'"
             >
-              Free ({{ adminStore.users.length - adminStore.proUsersCount }})
+              Free ({{ Math.max(0, adminStore.totalUsersCount - adminStore.proUsersCount - adminStore.pendingProUsersCount) }})
             </button>
           </div>
         </div>
@@ -456,10 +503,26 @@ function formatTimestamp(iso: string): string {
       </div>
 
       <div
+        v-if="adminStore.isUsersPageLoading && paginatedUsers.length === 0"
+        class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-8 text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400"
+      >
+        Memuat halaman data pengguna dari server...
+      </div>
+
+      <div
+        v-else-if="paginatedUsers.length === 0"
+        class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-8 text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400"
+      >
+        Tidak ada pengguna yang cocok dengan filter atau pencarian Anda.
+      </div>
+
+      <div
+        v-else
         class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-100 dark:divide-slate-800/80"
+        :class="adminStore.isUsersPageLoading ? 'opacity-60 pointer-events-none transition-opacity' : ''"
       >
         <div
-          v-for="u in filteredUsers"
+          v-for="u in paginatedUsers"
           :key="u.uid"
           class="p-4 sm:px-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 hover:bg-slate-50/60 dark:hover:bg-slate-800/30 transition-colors"
         >
@@ -477,6 +540,15 @@ function formatTimestamp(iso: string): string {
                 <Crown class="w-3 h-3 shrink-0" />
                 <span>
                   SisaUang Pro · {{ u.subscriptionPlan === 'yearly' ? 'Tahunan' : 'Bulanan' }}
+                </span>
+              </span>
+              <span
+                v-else-if="isUserPending(u)"
+                class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300/80 dark:border-amber-800/60"
+              >
+                <Clock class="w-3 h-3 shrink-0" />
+                <span>
+                  Pending Verifikasi · {{ u.subscriptionPlan === 'yearly' ? 'Tahunan' : 'Bulanan' }}
                 </span>
               </span>
               <span
@@ -513,13 +585,17 @@ function formatTimestamp(iso: string): string {
                   :class="
                     isUserPro(u)
                       ? 'text-emerald-600 dark:text-emerald-400'
-                      : 'text-slate-700 dark:text-slate-300'
+                      : isUserPending(u)
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-slate-700 dark:text-slate-300'
                   "
                 >
                   {{
                     isUserPro(u)
                       ? `SisaUang Pro (${u.subscriptionPlan === 'yearly' ? 'Tahunan' : 'Bulanan'} · Aktif s/d ${formatExpiryDateLabel(u.subscriptionExpiresAt)})`
-                      : 'Free (Reguler)'
+                      : isUserPending(u)
+                        ? `PENDING (${u.subscriptionPlan === 'yearly' ? 'Tahunan' : 'Bulanan'} via ${u.subscriptionPaymentMethod === 'bank_transfer' ? 'Transfer Bank' : 'QRIS'} · Menunggu Persetujuan)`
+                        : 'Free (Reguler)'
                   }}
                 </strong>
               </span>
@@ -535,29 +611,39 @@ function formatTimestamp(iso: string): string {
             v-if="u.email.toLowerCase() !== 'vuedevo@gmail.com'"
             class="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-end shrink-0"
           >
-            <!-- Open SisaUang Pro Subscription Period Modal -->
+            <!-- Open SisaUang Pro Subscription Period / Approval Modal -->
             <button
               type="button"
               class="flex-1 sm:flex-initial min-h-[44px] px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
               :class="
                 isUserPro(u)
                   ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/60'
-                  : 'border-emerald-500/60 bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                  : isUserPending(u)
+                    ? 'border-amber-400 bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs'
+                    : 'border-emerald-500/60 bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
               "
               @click="openSubscriptionModal(u)"
             >
               <Crown class="w-4 h-4 shrink-0" />
-              <span>{{ isUserPro(u) ? 'Atur Masa Aktif Pro' : 'Aktifkan SisaUang Pro' }}</span>
+              <span>
+                {{
+                  isUserPro(u)
+                    ? 'Atur Masa Aktif Pro'
+                    : isUserPending(u)
+                      ? 'Verifikasi & Setujui Pro'
+                      : 'Aktifkan SisaUang Pro'
+                }}
+              </span>
             </button>
 
-            <!-- Direct Deactivate Pro Button when already Pro -->
+            <!-- Direct Deactivate / Reject Pro Button when Pro or Pending -->
             <button
-              v-if="isUserPro(u)"
+              v-if="isUserPro(u) || isUserPending(u)"
               type="button"
               class="flex-1 sm:flex-initial min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-100/80 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
               @click="handleDeactivateProSubscription(u)"
             >
-              <span>Nonaktifkan Pro</span>
+              <span>{{ isUserPending(u) ? 'Tolak Pengajuan' : 'Nonaktifkan Pro' }}</span>
             </button>
 
             <button
@@ -589,6 +675,15 @@ function formatTimestamp(iso: string): string {
           </div>
         </div>
       </div>
+
+      <!-- Server-Side Pagination Control for Super Admin User List (25 data per page) -->
+      <AppPagination
+        :current-page="adminStore.usersPage"
+        :total-items="adminStore.usersTotalFiltered"
+        :page-size="USERS_PAGE_SIZE"
+        item-label="pengguna"
+        @update:current-page="handleUsersPageChange"
+      />
     </section>
 
     <!-- MODULE 2: Real-Time Activity Logs -->
@@ -772,11 +867,58 @@ function formatTimestamp(iso: string): string {
             :class="
               isUserPro(selectedSubUser)
                 ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300'
-                : 'bg-slate-200/80 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                : isUserPending(selectedSubUser)
+                  ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300'
+                  : 'bg-slate-200/80 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
             "
           >
-            {{ isUserPro(selectedSubUser) ? 'PRO AKTIF' : 'PAKET FREE' }}
+            {{
+              isUserPro(selectedSubUser)
+                ? 'PRO AKTIF'
+                : isUserPending(selectedSubUser)
+                  ? 'PENDING VERIFIKASI'
+                  : 'PAKET FREE'
+            }}
           </span>
+        </div>
+
+        <!-- Payment Proof Review Card (if user uploaded payment proof) -->
+        <div
+          v-if="selectedSubUser.subscriptionProofDataUrl || isUserPending(selectedSubUser)"
+          class="rounded-2xl border border-amber-200/90 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/25 p-3.5 space-y-2.5"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+              <ImageIcon class="w-4 h-4 shrink-0" />
+              <span>Bukti Pembayaran Pengguna</span>
+            </span>
+            <span class="px-2 py-0.5 rounded-md bg-amber-200/80 dark:bg-amber-900/70 text-amber-950 dark:text-amber-200 text-[10px] font-mono font-bold uppercase">
+              {{ selectedSubUser.subscriptionPaymentMethod === 'bank_transfer' ? 'Transfer Bank' : 'QRIS' }}
+            </span>
+          </div>
+
+          <div class="text-xs text-slate-700 dark:text-slate-300 space-y-1">
+            <div>
+              Paket Diminta:
+              <strong class="text-emerald-700 dark:text-emerald-300">
+                {{ selectedSubUser.subscriptionPlan === 'yearly' ? 'Tahunan (Rp 249.000)' : 'Bulanan (Rp 25.000)' }}
+              </strong>
+            </div>
+            <div v-if="selectedSubUser.subscriptionSenderName">
+              Nama Pengirim: <strong>{{ selectedSubUser.subscriptionSenderName }}</strong>
+              <span v-if="selectedSubUser.subscriptionTransferNote">
+                ({{ selectedSubUser.subscriptionTransferNote }})
+              </span>
+            </div>
+          </div>
+
+          <div v-if="selectedSubUser.subscriptionProofDataUrl" class="pt-1">
+            <img
+              :src="selectedSubUser.subscriptionProofDataUrl"
+              alt="Bukti Transfer Pengguna"
+              class="max-h-56 w-full rounded-xl border border-amber-200 dark:border-amber-800/70 bg-white dark:bg-slate-900 object-contain p-1"
+            />
+          </div>
         </div>
 
         <!-- Pilihan Paket Langganan: Bulanan vs Tahunan -->
@@ -907,13 +1049,13 @@ function formatTimestamp(iso: string): string {
       <template #footer>
         <div v-if="selectedSubUser" class="flex flex-wrap items-center justify-between gap-2 w-full">
           <button
-            v-if="isUserPro(selectedSubUser)"
+            v-if="isUserPro(selectedSubUser) || isUserPending(selectedSubUser)"
             type="button"
             :disabled="isSavingSubscription"
             class="min-h-[46px] px-4 py-2.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0 cursor-pointer disabled:opacity-50"
             @click="handleDeactivateProSubscription()"
           >
-            <span>Nonaktifkan Pro</span>
+            <span>{{ isUserPending(selectedSubUser) ? 'Tolak Pengajuan' : 'Nonaktifkan Pro' }}</span>
           </button>
           <div v-else></div>
 
@@ -925,7 +1067,13 @@ function formatTimestamp(iso: string): string {
           >
             <Crown class="w-4 h-4 shrink-0" />
             <span>
-              {{ isUserPro(selectedSubUser) ? 'Simpan Masa Aktif Pro' : 'Aktifkan SisaUang Pro' }}
+              {{
+                isUserPro(selectedSubUser)
+                  ? 'Simpan Masa Aktif Pro'
+                  : isUserPending(selectedSubUser)
+                    ? 'Setujui & Aktifkan SisaUang Pro'
+                    : 'Aktifkan SisaUang Pro'
+              }}
             </span>
           </button>
         </div>

@@ -131,6 +131,12 @@ const activePeriodBudgets = computed(() => {
   return financeStore.getEnrichedBudgetsByPeriod(activeBudgetPeriod.value);
 });
 
+watch(activeBudgetPeriod, (period) => {
+  if (period && /^\d{4}-\d{2}$/.test(period)) {
+    void financeStore.ensureTransactionsForDateRange(`${period}-01`, `${period}-31`);
+  }
+});
+
 const activePeriodSummary = computed(() => {
   const items = activePeriodBudgets.value;
   const totalLimit = items.reduce((sum, b) => sum + Number(b.limitAmount || 0), 0);
