@@ -33,6 +33,72 @@ const editingHolder = ref<{ holder: WalletOwnerItem; walletName: string } | null
 const editHolderName = ref('');
 const editHolderBalance = ref<number | ''>(0);
 
+function formatNominalDisplay(val: number | string | ''): string {
+  if (val === '' || val === null || val === undefined) return '';
+  const str = String(val).trim();
+  if (str === '0') return '0';
+  const digits = str.replace(/\D/g, '').replace(/^0+/, '');
+  if (!digits) return str.includes('0') ? '0' : '';
+  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+const newHolderBalanceDisplay = computed(() => formatNominalDisplay(newHolderBalance.value));
+const editHolderBalanceDisplay = computed(() => formatNominalDisplay(editHolderBalance.value));
+
+function applyFormattedNominalInput(
+  event: Event,
+  targetRef: { value: number | '' }
+) {
+  const input = event.target as HTMLInputElement;
+  const rawValue = input.value;
+  const selectionStart = input.selectionStart ?? rawValue.length;
+  const rawSlice = rawValue.slice(0, selectionStart);
+  const digitsBeforeCursor =
+    rawSlice.replace(/\D/g, '') === '0'
+      ? 1
+      : rawSlice.replace(/\D/g, '').replace(/^0+/, '').length;
+
+  const allDigits = rawValue.replace(/\D/g, '');
+  if (!allDigits) {
+    targetRef.value = '';
+    input.value = '';
+    return;
+  }
+
+  const cleanDigits = allDigits.replace(/^0+/, '');
+  targetRef.value = cleanDigits ? Number(cleanDigits) : 0;
+
+  const formatted = cleanDigits
+    ? cleanDigits.replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+    : '0';
+  input.value = formatted;
+
+  if (document.activeElement === input) {
+    let newCursorPos = 0;
+    if (digitsBeforeCursor > 0) {
+      let seenDigits = 0;
+      for (let i = 0; i < formatted.length; i++) {
+        if (/\d/.test(formatted[i])) {
+          seenDigits++;
+          if (seenDigits === digitsBeforeCursor) {
+            newCursorPos = i + 1;
+            break;
+          }
+        }
+      }
+    }
+    input.setSelectionRange(newCursorPos, newCursorPos);
+  }
+}
+
+function handleNewHolderBalanceInput(event: Event) {
+  applyFormattedNominalInput(event, newHolderBalance);
+}
+
+function handleEditHolderBalanceInput(event: Event) {
+  applyFormattedNominalInput(event, editHolderBalance);
+}
+
 const isEditHolderOpen = computed({
   get: () => editingHolder.value !== null,
   set: (val: boolean) => {
@@ -349,12 +415,14 @@ async function handleDeleteGlobalOwner() {
         />
 
         <input
-          v-model.number="newHolderBalance"
-          type="number"
-          step="any"
+          :value="newHolderBalanceDisplay"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
           required
           placeholder="Saldo Kepemilikan (Rp)"
           class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+          @input="handleNewHolderBalanceInput"
         />
       </form>
 
@@ -395,12 +463,14 @@ async function handleDeleteGlobalOwner() {
         />
 
         <input
-          v-model.number="editHolderBalance"
-          type="number"
-          step="any"
+          :value="editHolderBalanceDisplay"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
           required
           placeholder="Saldo Saat Ini (Rp)"
           class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+          @input="handleEditHolderBalanceInput"
         />
       </form>
 
