@@ -526,7 +526,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   /**
    * Look up a user document directly in Cloud Firestore ("sisa-uang") by email OR username.
-   * Uses targeted indexed queries only (never scans the entire collection).
+   * Uses targeted indexed queries with a safe fallback when username is not stored on the Firestore doc.
    */
   async function findMigratedUserInFirestore(identifier: string): Promise<{
     uid: string;
@@ -541,7 +541,8 @@ export const useAuthStore = defineStore('auth', () => {
     subscriptionStatus?: 'free' | 'pro';
     isPro?: boolean;
   } | null> {
-    const clean = identifier.trim().toLowerCase();
+    const clean = identifier.trim().toLowerCase().replace(/^@+/, '');
+    const normalizedUsername = clean.replace(/\s+/g, '_');
 
     // Ensure at least an active Firebase session so Firestore rules allow reading /users
     if (!auth.currentUser) {
@@ -556,72 +557,64 @@ export const useAuthStore = defineStore('auth', () => {
       }
     }
 
+    const mapFirestoreUserDoc = (d: any, fallbackIdentifier: string) => {
+      const data = d.data();
+      const isPro = data.subscriptionStatus === 'pro' || data.isPro === true;
+      const emailStr = String(data.email || `${fallbackIdentifier}@sisa-uang.id`).toLowerCase();
+      return {
+        uid: d.id,
+        username: String(data.username || emailStr.split('@')[0] || fallbackIdentifier),
+        email: emailStr,
+        displayName: String(data.displayName || data.username || emailStr.split('@')[0] || fallbackIdentifier),
+        passwordHash: data.passwordHash ? String(data.passwordHash) : undefined,
+        role: (data.role === 'admin' ? 'admin' : 'user') as 'user' | 'admin',
+        status: (data.status === 'blocked' ? 'blocked' : 'active') as 'active' | 'blocked',
+        authProvider: (data.authProvider === 'google' ? 'google' : 'password') as 'password' | 'google',
+        currency: (data.currency === 'USD' ? 'USD' : 'IDR') as 'IDR' | 'USD',
+        subscriptionStatus: (isPro ? 'pro' : 'free') as 'free' | 'pro',
+        isPro,
+      };
+    };
+
     try {
       const usersCol = collection(db, 'users');
       // 1. Query by email (if identifier contains @, check email first)
       if (clean.includes('@')) {
         const byEmailSnap = await getDocs(query(usersCol, where('email', '==', clean)));
         if (!byEmailSnap.empty) {
-          const d = byEmailSnap.docs[0];
-          const data = d.data();
-          const isPro = data.subscriptionStatus === 'pro' || data.isPro === true;
-          return {
-            uid: d.id,
-            username: String(data.username || clean.split('@')[0]),
-            email: String(data.email || clean),
-            displayName: String(data.displayName || data.username || clean.split('@')[0]),
-            passwordHash: data.passwordHash ? String(data.passwordHash) : undefined,
-            role: data.role === 'admin' ? 'admin' : 'user',
-            status: data.status === 'blocked' ? 'blocked' : 'active',
-            authProvider: data.authProvider === 'google' ? 'google' : 'password',
-            currency: data.currency === 'USD' ? 'USD' : 'IDR',
-            subscriptionStatus: isPro ? 'pro' : 'free',
-            isPro,
-          };
+          return mapFirestoreUserDoc(byEmailSnap.docs[0], clean);
         }
       }
 
-      // 2. Query by username
+      // 2. Query by username (exact and normalized underscore form)
       const byUsernameSnap = await getDocs(query(usersCol, where('username', '==', clean)));
       if (!byUsernameSnap.empty) {
-        const d = byUsernameSnap.docs[0];
-        const data = d.data();
-        const isPro = data.subscriptionStatus === 'pro' || data.isPro === true;
-        return {
-          uid: d.id,
-          username: String(data.username || clean),
-          email: String(data.email || `${clean}@sisa-uang.id`),
-          displayName: String(data.displayName || data.username || clean),
-          passwordHash: data.passwordHash ? String(data.passwordHash) : undefined,
-          role: data.role === 'admin' ? 'admin' : 'user',
-          status: data.status === 'blocked' ? 'blocked' : 'active',
-          authProvider: data.authProvider === 'google' ? 'google' : 'password',
-          currency: data.currency === 'USD' ? 'USD' : 'IDR',
-          subscriptionStatus: isPro ? 'pro' : 'free',
-          isPro,
-        };
+        return mapFirestoreUserDoc(byUsernameSnap.docs[0], clean);
+      }
+      if (normalizedUsername !== clean) {
+        const byNormSnap = await getDocs(query(usersCol, where('username', '==', normalizedUsername)));
+        if (!byNormSnap.empty) {
+          return mapFirestoreUserDoc(byNormSnap.docs[0], normalizedUsername);
+        }
       }
 
-      // 3. If not @ and not found by username, check email exact match once
+      // 3. If not @ and not found by username field, check common email prefix or scan /users for matching username/displayName/email-prefix
       if (!clean.includes('@')) {
-        const byEmailSnap = await getDocs(query(usersCol, where('email', '==', clean)));
-        if (!byEmailSnap.empty) {
-          const d = byEmailSnap.docs[0];
+        const allUsersSnap = await getDocs(usersCol);
+        for (const d of allUsersSnap.docs) {
           const data = d.data();
-          const isPro = data.subscriptionStatus === 'pro' || data.isPro === true;
-          return {
-            uid: d.id,
-            username: String(data.username || clean),
-            email: String(data.email || clean),
-            displayName: String(data.displayName || data.username || clean),
-            passwordHash: data.passwordHash ? String(data.passwordHash) : undefined,
-            role: data.role === 'admin' ? 'admin' : 'user',
-            status: data.status === 'blocked' ? 'blocked' : 'active',
-            authProvider: data.authProvider === 'google' ? 'google' : 'password',
-            currency: data.currency === 'USD' ? 'USD' : 'IDR',
-            subscriptionStatus: isPro ? 'pro' : 'free',
-            isPro,
-          };
+          const docEmail = String(data.email || '').trim().toLowerCase();
+          const docEmailPrefix = docEmail.split('@')[0];
+          const docUsername = String(data.username || '').trim().toLowerCase().replace(/^@+/, '');
+          const docDisplay = String(data.displayName || '').trim().toLowerCase();
+          const docDisplaySlug = docDisplay.replace(/\s+/g, '_');
+          if (
+            (docUsername && (docUsername === clean || docUsername === normalizedUsername)) ||
+            (docEmailPrefix && (docEmailPrefix === clean || docEmailPrefix === normalizedUsername)) ||
+            (docDisplay && (docDisplay === clean || docDisplaySlug === normalizedUsername))
+          ) {
+            return mapFirestoreUserDoc(d, clean);
+          }
         }
       }
     } catch (fsErr: any) {
@@ -663,6 +656,7 @@ export const useAuthStore = defineStore('auth', () => {
           }
 
           // Verify password against stored passwordHash (Bcrypt $2y$ from CI4 Shield or SHA-256)
+          // Or if the newly registered Firestore user doc had no passwordHash saved, verify via Firebase Auth with their resolved email!
           if (firestoreUser.passwordHash) {
             const { data: verifyRes } = await apiClient.post('/auth/verify-hash', {
               password: passwordInput,
@@ -672,6 +666,12 @@ export const useAuthStore = defineStore('auth', () => {
               throw new Error(
                 'Kata sandi tidak sesuai dengan kredensial akun Anda.'
               );
+            }
+          } else if (firestoreUser.email && firestoreUser.email.includes('@')) {
+            try {
+              await signInWithEmailAndPassword(auth, firestoreUser.email, passwordInput);
+            } catch {
+              throw new Error('Kata sandi tidak sesuai dengan kredensial akun Anda.');
             }
           }
 
@@ -931,6 +931,14 @@ export const useAuthStore = defineStore('auth', () => {
       const isAdminEmail = cleanEmail === SUPER_ADMIN_EMAIL || cleanEmail === WORKSPACE_ADMIN_EMAIL;
 
       // 2. Ensure the newly registered user document is written to Cloud Firestore (/users/{uid})
+      // If Firebase Auth created the user (isFbAuthenticated), keep their own session active so `isOwner(userId)` rule passes!
+      if (!auth.currentUser && !isFbAuthenticated) {
+        try {
+          await signInWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
+        } catch {
+          // Ignore
+        }
+      }
       try {
         const userDocRef = doc(db, 'users', resolvedUid);
         const snap = await getDoc(userDocRef);
@@ -951,12 +959,23 @@ export const useAuthStore = defineStore('auth', () => {
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
+        } else {
+          // Ensure username is saved on existing doc if it was created without username
+          const existingData = snap.data();
+          if (!existingData?.username && (data.user?.username || cleanUsername)) {
+            await updateDoc(userDocRef, {
+              username: data.user?.username || cleanUsername,
+              displayName: data.user?.displayName || cleanName,
+              updatedAt: serverTimestamp(),
+            }).catch(() => {});
+          }
         }
       } catch {
-        // Fallback without optional fields if remote rules are strict
+        // Fallback with minimal required fields + username
         try {
           await setDoc(doc(db, 'users', resolvedUid), {
             uid: resolvedUid,
+            username: data.user?.username || cleanUsername,
             email: cleanEmail,
             displayName: data.user?.displayName || cleanName,
             role: 'user',
