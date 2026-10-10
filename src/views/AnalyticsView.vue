@@ -249,6 +249,16 @@ function computeBoundsForMode(
 
 const activeBounds = computed(() => computeBoundsForMode(rangeType.value, anchorDate.value));
 
+watch(
+  activeBounds,
+  (bounds) => {
+    if (bounds.startIso && bounds.endIso) {
+      void financeStore.ensureTransactionsForDateRange(bounds.startIso, bounds.endIso);
+    }
+  },
+  { immediate: true }
+);
+
 // Navigate backward (-1) or forward (+1) according to current rangeType
 function navigatePeriod(direction: -1 | 1) {
   const current = anchorDate.value;

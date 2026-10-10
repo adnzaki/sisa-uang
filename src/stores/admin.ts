@@ -49,16 +49,23 @@ export interface AdminUserItem {
   status: 'active' | 'blocked';
   authProvider: 'password' | 'google';
   currency: 'IDR' | 'USD';
-  subscriptionStatus?: 'free' | 'pro';
+  subscriptionStatus?: 'free' | 'pending' | 'pro';
   isPro?: boolean;
   subscriptionPlan?: 'monthly' | 'yearly' | null;
   subscriptionExpiresAt?: string | null;
+  subscriptionPaymentMethod?: 'qris' | 'bank_transfer' | null;
+  subscriptionProofDataUrl?: string | null;
+  subscriptionProofFileName?: string | null;
+  subscriptionRequestedAt?: string | null;
+  subscriptionSenderName?: string | null;
+  subscriptionTransferNote?: string | null;
   passwordHash?: string;
   createdAt: string;
   updatedAt: string;
 }
 
 export function isAdminUserProActive(u: AdminUserItem): boolean {
+  if (u.subscriptionStatus === 'pending') return false;
   const markedPro = u.subscriptionStatus === 'pro' || u.isPro === true;
   if (!markedPro) return false;
   if (u.subscriptionExpiresAt) {
@@ -72,6 +79,10 @@ export function isAdminUserProActive(u: AdminUserItem): boolean {
     }
   }
   return true;
+}
+
+export function isAdminUserProPending(u: AdminUserItem): boolean {
+  return !isAdminUserProActive(u) && u.subscriptionStatus === 'pending';
 }
 
 export interface AdminActivityLogItem {
@@ -98,6 +109,54 @@ export interface AdminSecurityAlertItem {
 
 export const useAdminStore = defineStore('admin', () => {
   const users = ref<AdminUserItem[]>([]);
+  const paginatedUsers = ref<AdminUserItem[]>([]);
+  const usersPage = ref(1);
+  const usersPageSize = ref(25);
+  const usersTotalFiltered = ref(0);
+  const usersTotalPages = ref(1);
+  const isUsersPageLoading = ref(false);
+  const usersSummary = ref({
+    totalUsers: 0,
+    activeUsersCount: 0,
+    blockedUsersCount: 0,
+    proUsersCount: 0,
+    pendingProUsersCount: 0,
+  });
+  interface CachedAdminUsersPageEntry {
+    items: AdminUserItem[];
+    page: number;
+    limit: number;
+    totalItems: number;
+    totalPages: number;
+    syncToken: number;
+    summary: {
+      totalUsers: number;
+      activeUsersCount: number;
+      blockedUsersCount: number;
+      proUsersCount: number;
+      pendingProUsersCount: number;
+    };
+  }
+
+  let currentUsersFilterParams = {
+    page: 1,
+    limit: 25,
+    status: 'all',
+    plan: 'all',
+    search: '',
+  };
+  let localAdminUsersSyncToken = 0;
+  const adminUsersPageCache = new Map<string, CachedAdminUsersPageEntry>();
+
+  function buildAdminUsersPageCacheKey(filter = currentUsersFilterParams): string {
+    const cleanSearch = String(filter.search || '').trim().toLowerCase();
+    return `pg:${filter.page}|lim:${filter.limit}|st:${filter.status}|pl:${filter.plan}|q:${cleanSearch}`;
+  }
+
+  function invalidateAdminUsersPageCache() {
+    adminUsersPageCache.clear();
+  }
+
   const logs = ref<AdminActivityLogItem[]>([]);
   const alerts = ref<AdminSecurityAlertItem[]>([]);
   const isLoading = ref(false);
@@ -114,17 +173,31 @@ export const useAdminStore = defineStore('admin', () => {
     | null = null;
   const cachedRawCollectionDocs = new Map<string, Record<string, any>[]>();
 
+  const totalUsersCount = computed(() =>
+    Math.max(usersSummary.value.totalUsers, users.value.length)
+  );
   const openAlertsCount = computed(
     () => alerts.value.filter((a) => a.status === 'open').length
   );
-  const activeUsersCount = computed(
-    () => users.value.filter((u) => u.status === 'active').length
+  const activeUsersCount = computed(() =>
+    usersSummary.value.totalUsers > 0
+      ? usersSummary.value.activeUsersCount
+      : users.value.filter((u) => u.status === 'active').length
   );
-  const blockedUsersCount = computed(
-    () => users.value.filter((u) => u.status === 'blocked').length
+  const blockedUsersCount = computed(() =>
+    usersSummary.value.totalUsers > 0
+      ? usersSummary.value.blockedUsersCount
+      : users.value.filter((u) => u.status === 'blocked').length
   );
-  const proUsersCount = computed(
-    () => users.value.filter((u) => isAdminUserProActive(u)).length
+  const proUsersCount = computed(() =>
+    usersSummary.value.totalUsers > 0
+      ? usersSummary.value.proUsersCount
+      : users.value.filter((u) => isAdminUserProActive(u)).length
+  );
+  const pendingProUsersCount = computed(() =>
+    usersSummary.value.totalUsers > 0
+      ? usersSummary.value.pendingProUsersCount
+      : users.value.filter((u) => isAdminUserProPending(u)).length
   );
 
   function triggerInstantAlertBanner(alert: AdminSecurityAlertItem) {
@@ -202,18 +275,129 @@ export const useAdminStore = defineStore('admin', () => {
     }
   }
 
+  async function fetchAdminUsersPage(
+    params?: {
+      page?: number;
+      limit?: number;
+      status?: string;
+      plan?: string;
+      search?: string;
+    },
+    silent = false,
+    forceServerReload = false
+  ) {
+    if (params) {
+      currentUsersFilterParams = {
+        page: params.page ?? currentUsersFilterParams.page,
+        limit: params.limit ?? currentUsersFilterParams.limit,
+        status: params.status ?? currentUsersFilterParams.status,
+        plan: params.plan ?? currentUsersFilterParams.plan,
+        search: params.search ?? currentUsersFilterParams.search,
+      };
+    }
+
+    const cacheKey = buildAdminUsersPageCacheKey(currentUsersFilterParams);
+    const cachedEntry = !forceServerReload ? adminUsersPageCache.get(cacheKey) : undefined;
+
+    if (cachedEntry && localAdminUsersSyncToken > 0) {
+      // Immediately display cached page
+      paginatedUsers.value = cachedEntry.items;
+      usersPage.value = cachedEntry.page;
+      usersPageSize.value = cachedEntry.limit;
+      usersTotalFiltered.value = cachedEntry.totalItems;
+      usersTotalPages.value = cachedEntry.totalPages;
+      usersSummary.value = { ...cachedEntry.summary };
+      users.value = paginatedUsers.value;
+
+      // Accompany user activity with lightweight 1-Sync Read Token check
+      try {
+        const { data: tokenData } = await apiClient.get('/admin/users/sync-token');
+        const remoteToken = Number(tokenData?.syncToken) || 0;
+        if (remoteToken > 0 && remoteToken === cachedEntry.syncToken) {
+          // No user data changed on server -> keep using cached 25 items!
+          return;
+        }
+        // Remote sync token changed -> invalidate cache and reload from server below
+        localAdminUsersSyncToken = remoteToken;
+        invalidateAdminUsersPageCache();
+      } catch {
+        return;
+      }
+    }
+
+    if (!silent) isUsersPageLoading.value = true;
+    try {
+      const { data } = await apiClient.get('/admin/users', {
+        params: currentUsersFilterParams,
+      });
+      const remoteToken = Number(data.syncToken) || Date.now();
+      if (localAdminUsersSyncToken > 0 && remoteToken !== localAdminUsersSyncToken) {
+        invalidateAdminUsersPageCache();
+      }
+      localAdminUsersSyncToken = remoteToken;
+
+      paginatedUsers.value = data.items || [];
+      usersPage.value = Number(data.page) || 1;
+      usersPageSize.value = Number(data.limit) || 25;
+      usersTotalFiltered.value = Number(data.totalItems) || 0;
+      usersTotalPages.value = Number(data.totalPages) || 1;
+      if (data.summary) {
+        usersSummary.value = {
+          totalUsers: Number(data.summary.totalUsers) || 0,
+          activeUsersCount: Number(data.summary.activeUsersCount) || 0,
+          blockedUsersCount: Number(data.summary.blockedUsersCount) || 0,
+          proUsersCount: Number(data.summary.proUsersCount) || 0,
+          pendingProUsersCount: Number(data.summary.pendingProUsersCount) || 0,
+        };
+      }
+      users.value = paginatedUsers.value;
+
+      const resolvedKey = buildAdminUsersPageCacheKey({
+        ...currentUsersFilterParams,
+        page: usersPage.value,
+      });
+      adminUsersPageCache.set(resolvedKey, {
+        items: paginatedUsers.value,
+        page: usersPage.value,
+        limit: usersPageSize.value,
+        totalItems: usersTotalFiltered.value,
+        totalPages: usersTotalPages.value,
+        syncToken: remoteToken,
+        summary: { ...usersSummary.value },
+      });
+    } catch (err: any) {
+      if (!silent) {
+        const msg =
+          err?.response?.data?.error ||
+          (err instanceof Error ? err.message : 'Gagal memuat halaman pengguna.');
+        useNotificationStore().notifyError('Gagal Memuat Data Pengguna', err, msg);
+      }
+    } finally {
+      if (!silent) isUsersPageLoading.value = false;
+    }
+  }
+
   async function fetchAdminOverview(silent = false) {
     if (!silent) isLoading.value = true;
     error.value = null;
 
     try {
-      const { data } = await apiClient.get('/admin/overview');
-      const incomingUsers: AdminUserItem[] = data.users || [];
+      const [overviewRes] = await Promise.all([
+        apiClient.get('/admin/overview'),
+        fetchAdminUsersPage(undefined, true),
+      ]);
+      const data = overviewRes.data;
       const incomingLogs: AdminActivityLogItem[] = data.logs || [];
       const incomingAlerts: AdminSecurityAlertItem[] = data.alerts || [];
 
-      if (incomingUsers.length > 0 || users.value.length === 0) {
-        users.value = incomingUsers;
+      if (data.summary) {
+        usersSummary.value = {
+          totalUsers: Number(data.summary.totalUsers) || 0,
+          activeUsersCount: Number(data.summary.activeUsersCount) || 0,
+          blockedUsersCount: Number(data.summary.blockedUsersCount) || 0,
+          proUsersCount: Number(data.summary.proUsersCount) || 0,
+          pendingProUsersCount: Number(data.summary.pendingProUsersCount) || 0,
+        };
       }
       if (incomingLogs.length > 0 || logs.value.length === 0) {
         logs.value = incomingLogs;
@@ -263,7 +447,7 @@ export const useAdminStore = defineStore('admin', () => {
         const snap = await getDocs(collection(targetDb, 'users'));
         const proMarkersMap = new Map<
           string,
-          { plan: 'monthly' | 'yearly'; expiresAt: string | null }
+          { status: 'pending' | 'pro'; plan: 'monthly' | 'yearly'; expiresAt: string | null }
         >();
         try {
           const proSnap = await getDocs(
@@ -273,16 +457,21 @@ export const useAdminStore = defineStore('admin', () => {
             const pData = pd.data() as Record<string, any>;
             if (!pData.deleted && pData.ownerId) {
               const rawPeriod = String(pData.period || '');
+              let status: 'pending' | 'pro' = 'pro';
               let plan: 'monthly' | 'yearly' = 'monthly';
               let expiresAt: string | null = null;
-              if (rawPeriod.startsWith('Y:')) {
+              if (rawPeriod.startsWith('P:')) {
+                status = 'pending';
+                plan = rawPeriod.slice(2, 3) === 'Y' ? 'yearly' : 'monthly';
+                expiresAt = null;
+              } else if (rawPeriod.startsWith('Y:')) {
                 plan = 'yearly';
                 expiresAt = rawPeriod.slice(2) || null;
               } else if (rawPeriod.startsWith('M:')) {
                 plan = 'monthly';
                 expiresAt = rawPeriod.slice(2) || null;
               }
-              proMarkersMap.set(String(pData.ownerId), { plan, expiresAt });
+              proMarkersMap.set(String(pData.ownerId), { status, plan, expiresAt });
             }
           });
         } catch {
@@ -300,13 +489,17 @@ export const useAdminStore = defineStore('admin', () => {
             return new Date().toISOString();
           };
           const markerInfo = proMarkersMap.get(d.id);
+          const isPending =
+            markerInfo?.status === 'pending' || fbUser.subscriptionStatus === 'pending';
           const isPro =
-            !!markerInfo ||
-            fbUser.subscriptionStatus === 'pro' ||
-            fbUser.isPro === true;
-          const subscriptionPlan: 'monthly' | 'yearly' | null = isPro
-            ? markerInfo?.plan || (fbUser.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly')
-            : null;
+            !isPending &&
+            (markerInfo?.status === 'pro' ||
+              fbUser.subscriptionStatus === 'pro' ||
+              fbUser.isPro === true);
+          const subscriptionPlan: 'monthly' | 'yearly' | null =
+            isPro || isPending
+              ? markerInfo?.plan || (fbUser.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly')
+              : null;
           const subscriptionExpiresAt: string | null = isPro
             ? markerInfo?.expiresAt || fbUser.subscriptionExpiresAt || null
             : null;
@@ -319,7 +512,7 @@ export const useAdminStore = defineStore('admin', () => {
             status: fbUser.status === 'blocked' ? 'blocked' : 'active',
             authProvider: fbUser.authProvider === 'google' ? 'google' : 'password',
             currency: fbUser.currency === 'USD' ? 'USD' : 'IDR',
-            subscriptionStatus: isPro ? 'pro' : 'free',
+            subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
             isPro,
             subscriptionPlan,
             subscriptionExpiresAt,
@@ -329,7 +522,6 @@ export const useAdminStore = defineStore('admin', () => {
           });
         });
         if (fbUsers.length > 0) {
-          users.value = fbUsers;
           // Sync into Express disk cache so future server restarts have all users without touching Firestore
           try {
             await apiClient.post('/admin/import-sql-json', {
@@ -339,6 +531,8 @@ export const useAdminStore = defineStore('admin', () => {
           } catch {
             // Ignore
           }
+          invalidateAdminUsersPageCache();
+          await fetchAdminUsersPage(undefined, true, true);
         }
       } catch (err) {
         if (isFirestoreQuotaError(err)) {
@@ -366,13 +560,15 @@ export const useAdminStore = defineStore('admin', () => {
         { status: nextStatus }
       );
 
-      const idx = users.value.findIndex((u) => u.uid === targetUser.uid);
+      const idx = paginatedUsers.value.findIndex((u) => u.uid === targetUser.uid);
       if (idx >= 0 && data.user) {
-        users.value[idx] = data.user;
+        paginatedUsers.value[idx] = data.user;
       }
       if (data.log) {
         logs.value.unshift(data.log);
       }
+      invalidateAdminUsersPageCache();
+      void fetchAdminUsersPage(undefined, true, true);
 
       if (auth.currentUser) {
         try {
@@ -427,10 +623,10 @@ export const useAdminStore = defineStore('admin', () => {
         }
       );
 
-      const idx = users.value.findIndex((u) => u.uid === targetUser.uid);
+      const idx = paginatedUsers.value.findIndex((u) => u.uid === targetUser.uid);
       if (idx >= 0) {
-        users.value[idx] = {
-          ...users.value[idx],
+        paginatedUsers.value[idx] = {
+          ...paginatedUsers.value[idx],
           ...(data.user || {}),
           subscriptionStatus: nextSubStatus,
           isPro: nextIsPro,
@@ -441,6 +637,8 @@ export const useAdminStore = defineStore('admin', () => {
       if (data.log) {
         logs.value.unshift(data.log);
       }
+      invalidateAdminUsersPageCache();
+      void fetchAdminUsersPage(undefined, true, true);
 
       // Persist to Cloud Firestore so the user's client session & 1-read sync token pick it up immediately
       // Encodes plan ('M' or 'Y') and expiration date ('YYYY-MM-DD') inside `period` (e.g. 'M:2026-11-09', 12 chars)
@@ -533,10 +731,13 @@ export const useAdminStore = defineStore('admin', () => {
         `/admin/users/${encodeURIComponent(targetUser.uid)}`
       );
 
+      paginatedUsers.value = paginatedUsers.value.filter((u) => u.uid !== targetUser.uid);
       users.value = users.value.filter((u) => u.uid !== targetUser.uid);
       if (data.log) {
         logs.value.unshift(data.log);
       }
+      invalidateAdminUsersPageCache();
+      void fetchAdminUsersPage(undefined, true, true);
 
       if (auth.currentUser) {
         try {
@@ -1303,6 +1504,13 @@ export const useAdminStore = defineStore('admin', () => {
 
   return {
     users,
+    paginatedUsers,
+    usersPage,
+    usersPageSize,
+    usersTotalFiltered,
+    usersTotalPages,
+    isUsersPageLoading,
+    totalUsersCount,
     logs,
     alerts,
     isLoading,
@@ -1312,7 +1520,9 @@ export const useAdminStore = defineStore('admin', () => {
     activeUsersCount,
     blockedUsersCount,
     proUsersCount,
+    pendingProUsersCount,
     fetchAdminOverview,
+    fetchAdminUsersPage,
     startRealtimeMonitoring,
     stopRealtimeMonitoring,
     toggleUserBlockStatus,

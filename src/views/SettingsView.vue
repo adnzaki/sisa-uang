@@ -20,6 +20,8 @@ import {
   Eye,
   EyeOff,
   Sparkles,
+  Crown,
+  Clock,
 } from 'lucide-vue-next';
 import { useThemeStore } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
@@ -444,6 +446,43 @@ async function handleChangePassword() {
           <span class="font-semibold text-emerald-600 dark:text-emerald-400">
             {{ authStore.isSuperAdmin ? 'Administrator (Super Admin)' : 'Pengguna Standar' }}
           </span>
+        </div>
+        <div
+          v-if="!authStore.isSuperAdmin"
+          class="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 py-2 border-b border-slate-100 dark:border-slate-800"
+        >
+          <span>Status Langganan SisaUang Pro</span>
+          <div class="flex flex-wrap items-center gap-2">
+            <span
+              v-if="authStore.isProUser"
+              class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 font-bold"
+            >
+              <Crown class="w-3.5 h-3.5 shrink-0" />
+              <span>
+                SisaUang Pro ({{ authStore.user?.subscriptionPlan === 'yearly' ? 'Tahunan' : 'Bulanan' }} · Aktif s/d {{ authStore.user?.subscriptionExpiresAt || '-' }})
+              </span>
+            </span>
+            <span
+              v-else-if="authStore.isPendingProUser"
+              class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 font-bold"
+            >
+              <Clock class="w-3.5 h-3.5 shrink-0" />
+              <span>PENDING (Menunggu Verifikasi 1–24 Jam)</span>
+            </span>
+            <span v-else class="font-semibold text-slate-700 dark:text-slate-300">
+              Paket Free
+            </span>
+
+            <button
+              v-if="!authStore.isProUser"
+              type="button"
+              class="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer"
+              @click="notificationStore.openProModal()"
+            >
+              <Crown class="w-3 h-3 shrink-0" />
+              <span>Info SisaUang Pro</span>
+            </button>
+          </div>
         </div>
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 py-1.5 border-b border-slate-100 dark:border-slate-800">
           <span>Skema Database</span>

@@ -49,18 +49,21 @@ export interface AppUser {
   status: 'active' | 'blocked';
   authProvider: 'password' | 'google';
   currency: 'IDR' | 'USD';
-  subscriptionStatus?: 'free' | 'pro';
+  subscriptionStatus?: 'free' | 'pending' | 'pro';
   isPro?: boolean;
   subscriptionPlan?: 'monthly' | 'yearly' | null;
   subscriptionExpiresAt?: string | null;
+  subscriptionPaymentMethod?: 'qris' | 'bank_transfer' | null;
+  subscriptionRequestedAt?: string | null;
   isFirebaseBacked?: boolean;
 }
 
 export function isSubscriptionActiveByDate(
-  status?: 'free' | 'pro',
+  status?: 'free' | 'pending' | 'pro',
   isProFlag?: boolean,
   expiresAt?: string | null
 ): boolean {
+  if (status === 'pending') return false;
   const markedPro = status === 'pro' || isProFlag === true;
   if (!markedPro) return false;
   if (expiresAt) {
@@ -123,6 +126,12 @@ export const useAuthStore = defineStore('auth', () => {
           user.value.isPro,
           user.value.subscriptionExpiresAt
         ))
+  );
+  const isPendingProUser = computed(
+    () =>
+      !!user.value &&
+      !isProUser.value &&
+      user.value.subscriptionStatus === 'pending'
   );
   const canAccessControlPanel = computed(() => {
     if (!isAuthenticated.value || !isSuperAdmin.value) return false;
@@ -192,13 +201,24 @@ export const useAuthStore = defineStore('auth', () => {
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
         }
 
-        if (data.subscriptionStatus === 'pro' || data.subscriptionStatus === 'free') {
+        if (
+          data.subscriptionStatus === 'pro' ||
+          data.subscriptionStatus === 'pending' ||
+          data.subscriptionStatus === 'free'
+        ) {
           const nextIsPro = isSubscriptionActiveByDate(
             data.subscriptionStatus,
             data.isPro,
             data.subscriptionExpiresAt
           );
-          const nextPlan = nextIsPro ? data.subscriptionPlan || 'monthly' : null;
+          const nextIsPending = !nextIsPro && data.subscriptionStatus === 'pending';
+          const nextSubStatus: 'free' | 'pending' | 'pro' = nextIsPro
+            ? 'pro'
+            : nextIsPending
+              ? 'pending'
+              : 'free';
+          const nextPlan =
+            nextIsPro || nextIsPending ? data.subscriptionPlan || 'monthly' : null;
           const nextExp = nextIsPro ? data.subscriptionExpiresAt || null : null;
           const prevIsPro = isSubscriptionActiveByDate(
             user.value.subscriptionStatus,
@@ -207,17 +227,27 @@ export const useAuthStore = defineStore('auth', () => {
           );
           if (
             nextIsPro !== prevIsPro ||
+            user.value.subscriptionStatus !== nextSubStatus ||
             user.value.subscriptionPlan !== nextPlan ||
             user.value.subscriptionExpiresAt !== nextExp
           ) {
+            const wasPendingBefore = user.value.subscriptionStatus === 'pending';
             user.value = {
               ...user.value,
-              subscriptionStatus: nextIsPro ? 'pro' : 'free',
+              subscriptionStatus: nextSubStatus,
               isPro: nextIsPro,
               subscriptionPlan: nextPlan,
               subscriptionExpiresAt: nextExp,
+              subscriptionPaymentMethod: data.subscriptionPaymentMethod || user.value.subscriptionPaymentMethod || null,
+              subscriptionRequestedAt: data.subscriptionRequestedAt || user.value.subscriptionRequestedAt || null,
             };
             localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+            if (wasPendingBefore && nextIsPro) {
+              useNotificationStore().notifySuccess(
+                'Langganan SisaUang Pro Disetujui!',
+                `Pembayaran Anda telah diverifikasi oleh Super Admin. Seluruh fitur eksklusif SisaUang Pro kini aktif!`
+              );
+            }
           }
         }
       } catch {
@@ -227,14 +257,20 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function setExternalSubscriptionStatus(
-    nextStatus: 'free' | 'pro',
+    nextStatus: 'free' | 'pending' | 'pro',
     plan?: 'monthly' | 'yearly' | null,
     expiresAt?: string | null
   ) {
     if (!user.value) return;
     const isPro = isSubscriptionActiveByDate(nextStatus, nextStatus === 'pro', expiresAt);
-    const resolvedStatus: 'free' | 'pro' = isPro ? 'pro' : 'free';
-    const resolvedPlan = isPro ? plan || user.value.subscriptionPlan || 'monthly' : null;
+    const isPending = !isPro && nextStatus === 'pending';
+    const resolvedStatus: 'free' | 'pending' | 'pro' = isPro
+      ? 'pro'
+      : isPending
+        ? 'pending'
+        : 'free';
+    const resolvedPlan =
+      isPro || isPending ? plan || user.value.subscriptionPlan || 'monthly' : null;
     const resolvedExpires = isPro ? expiresAt ?? user.value.subscriptionExpiresAt ?? null : null;
 
     if (
@@ -243,6 +279,7 @@ export const useAuthStore = defineStore('auth', () => {
       user.value.subscriptionPlan !== resolvedPlan ||
       user.value.subscriptionExpiresAt !== resolvedExpires
     ) {
+      const wasPending = user.value.subscriptionStatus === 'pending';
       user.value = {
         ...user.value,
         subscriptionStatus: resolvedStatus,
@@ -251,6 +288,12 @@ export const useAuthStore = defineStore('auth', () => {
         subscriptionExpiresAt: resolvedExpires,
       };
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+      if (wasPending && isPro) {
+        useNotificationStore().notifySuccess(
+          'Langganan SisaUang Pro Disetujui!',
+          'Pembayaran Anda telah disetujui oleh Super Admin. Langganan SisaUang Pro Anda kini telah aktif.'
+        );
+      }
     }
   }
 
@@ -1331,6 +1374,100 @@ export const useAuthStore = defineStore('auth', () => {
     setApiAdminContext(null, null);
   }
 
+  async function submitProSubscriptionPayment(payload: {
+    subscriptionPlan: 'monthly' | 'yearly';
+    paymentMethod: 'qris' | 'bank_transfer';
+    proofDataUrl: string;
+    proofFileName: string;
+    senderName?: string;
+    transferNote?: string;
+  }): Promise<boolean> {
+    if (!user.value) return false;
+    const notify = useNotificationStore();
+    const safeUid = sanitizeId(user.value.uid);
+
+    try {
+      const { data } = await apiClient.post(
+        `/users/${encodeURIComponent(safeUid)}/subscription-payment`,
+        {
+          email: user.value.email,
+          displayName: user.value.displayName,
+          subscriptionPlan: payload.subscriptionPlan,
+          paymentMethod: payload.paymentMethod,
+          proofDataUrl: payload.proofDataUrl,
+          proofFileName: payload.proofFileName,
+          senderName: payload.senderName || user.value.displayName,
+          transferNote: payload.transferNote || '',
+        }
+      );
+
+      // Update local user state to pending
+      user.value = {
+        ...user.value,
+        subscriptionStatus: 'pending',
+        isPro: false,
+        subscriptionPlan: payload.subscriptionPlan,
+        subscriptionExpiresAt: null,
+        subscriptionPaymentMethod: payload.paymentMethod,
+        subscriptionRequestedAt: new Date().toISOString(),
+      };
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+
+      // Also persist pending marker to Cloud Firestore `/budgets/su_sub_pro_${safeUid}`
+      // with period `P:M:YYYY-MM-DD` or `P:Y:YYYY-MM-DD` (length 14 chars, compliant with isValidBudget rule)
+      try {
+        const targetDb = db;
+        const proMarkerId = sanitizeId(`su_sub_pro_${safeUid}`);
+        const now = new Date();
+        const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const planCode = payload.subscriptionPlan === 'yearly' ? 'Y' : 'M';
+        const markerPeriod = `P:${planCode}:${todayIso}`;
+
+        await setDoc(
+          doc(targetDb, 'budgets', proMarkerId),
+          {
+            ownerId: safeUid,
+            category: '__SISAUANG_PRO__',
+            limitAmount: 1,
+            spentAmount: 0,
+            period: markerPeriod,
+            deleted: false,
+            deletedAt: null,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        await updateDoc(doc(targetDb, 'users', safeUid), {
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+      } catch {
+        // Fallback handled by Express server registry
+      }
+
+      const planLabel = payload.subscriptionPlan === 'yearly' ? 'Tahunan' : 'Bulanan';
+      const methodLabel = payload.paymentMethod === 'qris' ? 'QRIS' : 'Transfer Bank';
+      notify.notifySuccess(
+        'Pembayaran Sedang Diproses (Menunggu Verifikasi 1–24 Jam)',
+        `Bukti pembayaran SisaUang Pro (${planLabel} via ${methodLabel}) telah dikirim ke azzackey@gmail.com. Status langganan Anda kini PENDING dan menunggu verifikasi 1–24 jam oleh Super Admin.`,
+        {
+          detail: data?.emailDispatched
+            ? 'Email konfirmasi beserta lampiran bukti transfer telah terkirim otomatis ke azzackey@gmail.com.'
+            : 'Permintaan langganan dan bukti transfer tercatat di antrean persetujuan Super Admin (azzackey@gmail.com).',
+          durationMs: 11000,
+        }
+      );
+      return true;
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.error ||
+        (err instanceof Error ? err.message : 'Gagal mengirim bukti pembayaran langganan.');
+      notify.notifyError('Gagal Mengirim Bukti Pembayaran', err, msg);
+      return false;
+    }
+  }
+
   return {
     user,
     isReady,
@@ -1342,8 +1479,10 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     isSuperAdmin,
     isProUser,
+    isPendingProUser,
     canAccessControlPanel,
     setExternalSubscriptionStatus,
+    submitProSubscriptionPayment,
     clearError,
     initAuth,
     loginWithEmail,

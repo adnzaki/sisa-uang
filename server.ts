@@ -56,10 +56,16 @@ export interface ServerUserRecord {
   status: 'active' | 'blocked';
   authProvider: 'password' | 'google';
   currency: 'IDR' | 'USD';
-  subscriptionStatus?: 'free' | 'pro';
+  subscriptionStatus?: 'free' | 'pending' | 'pro';
   isPro?: boolean;
   subscriptionPlan?: 'monthly' | 'yearly' | null;
   subscriptionExpiresAt?: string | null;
+  subscriptionPaymentMethod?: 'qris' | 'bank_transfer' | null;
+  subscriptionProofDataUrl?: string | null;
+  subscriptionProofFileName?: string | null;
+  subscriptionRequestedAt?: string | null;
+  subscriptionSenderName?: string | null;
+  subscriptionTransferNote?: string | null;
   passwordHash?: string;
   createdAt: string;
   updatedAt: string;
@@ -75,6 +81,7 @@ function getTodayLocalIso(): string {
 
 function isUserSubscriptionActive(u?: Partial<ServerUserRecord> | null): boolean {
   if (!u) return false;
+  if (u.subscriptionStatus === 'pending') return false;
   const markedPro = u.subscriptionStatus === 'pro' || u.isPro === true;
   if (!markedPro) return false;
   if (u.subscriptionExpiresAt) {
@@ -163,7 +170,10 @@ function loadPersistedUsersCache() {
   }
 }
 
+let usersRegistrySyncToken = Date.now();
+
 function savePersistedUsersCache() {
+  usersRegistrySyncToken = Date.now();
   try {
     const list = Array.from(usersStore.values());
     fs.writeFileSync(USERS_CACHE_FILE, JSON.stringify(list, null, 2), 'utf8');
@@ -324,6 +334,106 @@ async function sendSuperAdminOtpEmail(recipientEmail: string, otpCode: string): 
     subject: `[Sisa Uang] Kode OTP Super Admin: ${otpCode}`,
     text: `Kode verifikasi Super Admin Sisa Uang Anda adalah: ${otpCode}. Berlaku selama 10 menit.`,
     html: htmlContent,
+  });
+}
+
+async function sendProSubscriptionPaymentEmail(payload: {
+  recipientEmail: string;
+  userUid: string;
+  userDisplayName: string;
+  userEmail: string;
+  plan: 'monthly' | 'yearly';
+  paymentMethod: 'qris' | 'bank_transfer';
+  senderName: string;
+  transferNote: string;
+  proofDataUrl: string;
+  proofFileName: string;
+  requestedAt: string;
+}): Promise<void> {
+  const transporter = createSmtpTransporter();
+  const fromAddress = `"Sisa Uang Billing" <${(process.env.SMTP_USER || '').trim().replace(/^['"]|['"]$/g, '')}>`;
+  const planLabel = payload.plan === 'yearly' ? 'Tahunan (12 Bulan)' : 'Bulanan (1 Bulan)';
+  const priceLabel = payload.plan === 'yearly' ? 'Rp 249.000 / tahun' : 'Rp 25.000 / bulan';
+  const methodLabel = payload.paymentMethod === 'qris' ? 'QRIS Instant' : 'Transfer Bank';
+
+  const attachments: any[] = [];
+  if (payload.proofDataUrl && payload.proofDataUrl.startsWith('data:')) {
+    const match = payload.proofDataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      const mimeType = match[1];
+      const base64Data = match[2];
+      attachments.push({
+        filename: payload.proofFileName || `bukti-transfer-${payload.userUid}.png`,
+        content: Buffer.from(base64Data, 'base64'),
+        contentType: mimeType,
+        cid: 'payment_proof_img',
+      });
+    }
+  }
+
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 28px; background-color: #f8fafc; border-radius: 16px; border: 1px solid #e2e8f0;">
+      <div style="background-color: #ffffff; border-radius: 14px; padding: 28px; border: 1px solid #e2e8f0;">
+        <div style="display: inline-block; padding: 6px 12px; background-color: #ecfdf5; color: #059669; font-size: 12px; font-weight: 700; border-radius: 9999px; letter-spacing: 0.04em; text-transform: uppercase;">
+          SisaUang Pro · Konfirmasi Pembayaran Baru
+        </div>
+        <h2 style="margin: 16px 0 8px; color: #0f172a; font-size: 20px; font-weight: 700;">
+          Pengajuan Langganan SisaUang Pro (Status: PENDING)
+        </h2>
+        <p style="margin: 0 0 20px; color: #475569; font-size: 14px; line-height: 1.6;">
+          Pengguna berikut telah mengunggah bukti pembayaran langganan <strong>SisaUang Pro</strong> dan menunggu persetujuan di Control Panel Super Admin:
+        </p>
+
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px;">
+          <tr>
+            <td style="padding: 8px 12px; border: 1px solid #e2e8f0; background: #f8fafc; color: #64748b; width: 38%;">Nama Pengguna</td>
+            <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-weight: 700; color: #0f172a;">${payload.userDisplayName}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 12px; border: 1px solid #e2e8f0; background: #f8fafc; color: #64748b;">Email Akun</td>
+            <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-family: monospace; color: #0f172a;">${payload.userEmail}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 12px; border: 1px solid #e2e8f0; background: #f8fafc; color: #64748b;">Pilihan Paket</td>
+            <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-weight: 700; color: #059669;">SisaUang Pro — ${planLabel} (${priceLabel})</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 12px; border: 1px solid #e2e8f0; background: #f8fafc; color: #64748b;">Metode Pembayaran</td>
+            <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-weight: 600; color: #0f172a;">${methodLabel}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 12px; border: 1px solid #e2e8f0; background: #f8fafc; color: #64748b;">Nama Pengirim / Catatan</td>
+            <td style="padding: 8px 12px; border: 1px solid #e2e8f0; color: #0f172a;">${payload.senderName || '-'} ${payload.transferNote ? `(${payload.transferNote})` : ''}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 12px; border: 1px solid #e2e8f0; background: #f8fafc; color: #64748b;">Waktu Pengajuan</td>
+            <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-family: monospace; color: #0f172a;">${payload.requestedAt}</td>
+          </tr>
+        </table>
+
+        <p style="margin: 0 0 12px; color: #475569; font-size: 13px; font-weight: 600;">
+          Lampiran Bukti Transfer (${payload.proofFileName}):
+        </p>
+        ${
+          attachments.length > 0
+            ? `<div style="margin-bottom: 18px; text-align: center;"><img src="cid:payment_proof_img" alt="Bukti Transfer" style="max-width: 100%; max-height: 480px; border-radius: 12px; border: 1px solid #cbd5e1;" /></div>`
+            : ''
+        }
+        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
+        <p style="margin: 0; color: #64748b; font-size: 12px;">
+          Silakan buka menu <strong>Control Panel Super Admin</strong> di Sisa Uang untuk meninjau bukti transfer dan menyetujui (Approve) langganan SisaUang Pro pengguna ini.
+        </p>
+      </div>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from: fromAddress,
+    to: payload.recipientEmail,
+    subject: `[SisaUang Pro] Konfirmasi Pembayaran ${planLabel} — ${payload.userDisplayName} (${payload.userEmail})`,
+    text: `Konfirmasi Pembayaran SisaUang Pro baru dari ${payload.userDisplayName} (${payload.userEmail}). Paket: ${planLabel} (${priceLabel}). Metode: ${methodLabel}. Silakan setujui di Control Panel Super Admin.`,
+    html: htmlContent,
+    attachments,
   });
 }
 
@@ -928,8 +1038,12 @@ async function startServer() {
     }
 
     const isSuperAdmin = email === SUPER_ADMIN_EMAIL || email === WORKSPACE_ADMIN_EMAIL;
-    const incomingSubStatus =
-      req.body?.subscriptionStatus === 'pro' || req.body?.isPro === true ? 'pro' : undefined;
+    const incomingSubStatus: 'free' | 'pending' | 'pro' | undefined =
+      req.body?.subscriptionStatus === 'pending'
+        ? 'pending'
+        : req.body?.subscriptionStatus === 'pro' || req.body?.isPro === true
+          ? 'pro'
+          : undefined;
     const incomingPlan: 'monthly' | 'yearly' | null =
       req.body?.subscriptionPlan === 'yearly'
         ? 'yearly'
@@ -945,11 +1059,15 @@ async function startServer() {
       if (rawUsername) {
         existing.username = username;
       }
-      if (incomingSubStatus) {
+      if (incomingSubStatus === 'pro' && existing.subscriptionStatus !== 'pending') {
         existing.subscriptionStatus = 'pro';
         existing.isPro = true;
         if (incomingPlan) existing.subscriptionPlan = incomingPlan;
         if (incomingExpiresAt) existing.subscriptionExpiresAt = incomingExpiresAt;
+      } else if (incomingSubStatus === 'pending' && existing.subscriptionStatus !== 'pro') {
+        existing.subscriptionStatus = 'pending';
+        existing.isPro = false;
+        if (incomingPlan) existing.subscriptionPlan = incomingPlan;
       }
       if (passwordHash) {
         existing.passwordHash = passwordHash;
@@ -977,7 +1095,7 @@ async function startServer() {
       currency: 'IDR',
       subscriptionStatus: incomingSubStatus || 'free',
       isPro: incomingSubStatus === 'pro',
-      subscriptionPlan: incomingSubStatus === 'pro' ? incomingPlan : null,
+      subscriptionPlan: incomingSubStatus ? incomingPlan : null,
       subscriptionExpiresAt: incomingSubStatus === 'pro' ? incomingExpiresAt : null,
       passwordHash,
       createdAt: nowIso(),
@@ -1133,14 +1251,133 @@ async function startServer() {
     }
 
     const isPro = isUserSubscriptionActive(user);
+    const isPending = !isPro && user.subscriptionStatus === 'pending';
     res.json({
       status: user.status,
       role: user.role,
-      subscriptionStatus: isPro ? 'pro' : 'free',
+      subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
       isPro,
-      subscriptionPlan: isPro ? user.subscriptionPlan || 'monthly' : null,
+      subscriptionPlan: isPro || isPending ? user.subscriptionPlan || 'monthly' : null,
       subscriptionExpiresAt: isPro ? user.subscriptionExpiresAt || null : null,
+      subscriptionPaymentMethod: user.subscriptionPaymentMethod || null,
+      subscriptionRequestedAt: user.subscriptionRequestedAt || null,
       updatedAt: user.updatedAt,
+    });
+  });
+
+  // Submit SisaUang Pro Payment Proof (QRIS / Bank Transfer) -> Sends email to azzackey@gmail.com & sets status to 'pending'
+  app.post('/api/users/:uid/subscription-payment', async (req: Request, res: Response) => {
+    const uid = String(req.params.uid || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const displayName = String(req.body?.displayName || '').trim() || email.split('@')[0] || 'Pengguna';
+    const plan: 'monthly' | 'yearly' =
+      req.body?.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly';
+    const paymentMethod: 'qris' | 'bank_transfer' =
+      req.body?.paymentMethod === 'bank_transfer' ? 'bank_transfer' : 'qris';
+    const proofDataUrl = String(req.body?.proofDataUrl || '');
+    const proofFileName = String(req.body?.proofFileName || 'bukti-transfer.png').slice(0, 120);
+    const senderName = String(req.body?.senderName || displayName).trim().slice(0, 80);
+    const transferNote = String(req.body?.transferNote || '').trim().slice(0, 160);
+
+    if (!uid || !proofDataUrl.startsWith('data:image/')) {
+      res.status(400).json({
+        error: 'Bukti transfer berupa gambar wajib diunggah sebelum mengirim konfirmasi pembayaran.',
+      });
+      return;
+    }
+
+    let user = usersStore.get(uid);
+    if (!user && email) {
+      for (const u of usersStore.values()) {
+        if (u.email.toLowerCase() === email) {
+          user = u;
+          break;
+        }
+      }
+    }
+
+    const requestedAt = nowIso();
+    if (!user) {
+      user = {
+        uid,
+        username: (email.split('@')[0] || `user_${Date.now()}`).slice(0, 60),
+        email: email || `${uid}@sisa-uang.id`,
+        displayName: displayName.slice(0, 80),
+        role: 'user',
+        status: 'active',
+        authProvider: 'password',
+        currency: 'IDR',
+        subscriptionStatus: 'pending',
+        isPro: false,
+        subscriptionPlan: plan,
+        subscriptionExpiresAt: null,
+        subscriptionPaymentMethod: paymentMethod,
+        subscriptionProofDataUrl: proofDataUrl,
+        subscriptionProofFileName: proofFileName,
+        subscriptionRequestedAt: requestedAt,
+        subscriptionSenderName: senderName,
+        subscriptionTransferNote: transferNote,
+        createdAt: requestedAt,
+        updatedAt: requestedAt,
+      };
+      usersStore.set(uid, user);
+    } else {
+      user.subscriptionStatus = 'pending';
+      user.isPro = false;
+      user.subscriptionPlan = plan;
+      user.subscriptionExpiresAt = null;
+      user.subscriptionPaymentMethod = paymentMethod;
+      user.subscriptionProofDataUrl = proofDataUrl;
+      user.subscriptionProofFileName = proofFileName;
+      user.subscriptionRequestedAt = requestedAt;
+      user.subscriptionSenderName = senderName;
+      user.subscriptionTransferNote = transferNote;
+      user.updatedAt = requestedAt;
+    }
+
+    savePersistedUsersCache();
+
+    const planLabel = plan === 'yearly' ? 'Tahunan' : 'Bulanan';
+    const methodLabel = paymentMethod === 'qris' ? 'QRIS' : 'Transfer Bank';
+
+    // Automatically send email to azzackey@gmail.com with subscription details & transfer proof attachment
+    let emailDispatched = false;
+    let emailErrorNote = '';
+    if (isSmtpConfigured()) {
+      try {
+        await sendProSubscriptionPaymentEmail({
+          recipientEmail: 'azzackey@gmail.com',
+          userUid: user.uid,
+          userDisplayName: user.displayName,
+          userEmail: user.email,
+          plan,
+          paymentMethod,
+          senderName,
+          transferNote,
+          proofDataUrl,
+          proofFileName,
+          requestedAt: new Date(requestedAt).toLocaleString('id-ID'),
+        });
+        emailDispatched = true;
+      } catch (mailErr: any) {
+        emailErrorNote = String(mailErr?.message || mailErr || '');
+      }
+    }
+
+    const log = appendLog(
+      user.uid,
+      user.email,
+      'subscription_payment_submitted',
+      `Pengguna ${user.displayName} (${user.email}) mengirim bukti pembayaran SisaUang Pro (${planLabel} via ${methodLabel}). Email ke azzackey@gmail.com ${emailDispatched ? 'terkirim otomatis' : 'tersimpan di sistem antrean verifikasi'}. Status: PENDING.`,
+      'info'
+    );
+
+    res.json({
+      user: sanitizeUser(user),
+      emailDispatched,
+      recipientEmail: 'azzackey@gmail.com',
+      emailErrorNote: emailErrorNote || null,
+      log,
     });
   });
 
@@ -1188,12 +1425,101 @@ async function startServer() {
   // =========================================================================
 
   app.get('/api/admin/overview', requireAdminMiddleware, (_req: Request, res: Response) => {
-    const users = Array.from(usersStore.values()).map(sanitizeUser);
+    const allUsers = Array.from(usersStore.values()).map(sanitizeUser);
+    const totalUsers = allUsers.length;
+    const activeUsersCount = allUsers.filter((u) => u.status === 'active').length;
+    const blockedUsersCount = allUsers.filter((u) => u.status === 'blocked').length;
+    const proUsersCount = allUsers.filter((u) => u.isPro === true).length;
+    const pendingProUsersCount = allUsers.filter((u) => !u.isPro && u.subscriptionStatus === 'pending').length;
+
     res.json({
-      users,
+      users: allUsers.slice(0, 25),
+      syncToken: usersRegistrySyncToken,
+      summary: {
+        totalUsers,
+        activeUsersCount,
+        blockedUsersCount,
+        proUsersCount,
+        pendingProUsersCount,
+      },
       logs: activityLogs,
       alerts: securityAlerts,
       serverTime: nowIso(),
+    });
+  });
+
+  // Lightweight 1-Sync Read Token Endpoint for Super Admin User Pagination Cache
+  app.get('/api/admin/users/sync-token', requireAdminMiddleware, (_req: Request, res: Response) => {
+    res.json({
+      syncToken: usersRegistrySyncToken,
+      totalUsers: usersStore.size,
+    });
+  });
+
+  // Server-side Paginated Users Endpoint (/api/admin/users?page=1&limit=25&status=all&plan=all&search=...)
+  app.get('/api/admin/users', requireAdminMiddleware, (req: Request, res: Response) => {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
+    const statusFilter = String(req.query.status || 'all').trim().toLowerCase();
+    const planFilter = String(req.query.plan || 'all').trim().toLowerCase();
+    const search = String(req.query.search || '').trim().toLowerCase();
+
+    const allUsers = Array.from(usersStore.values()).map(sanitizeUser);
+    allUsers.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+
+    const totalUsers = allUsers.length;
+    const activeUsersCount = allUsers.filter((u) => u.status === 'active').length;
+    const blockedUsersCount = allUsers.filter((u) => u.status === 'blocked').length;
+    const proUsersCount = allUsers.filter((u) => u.isPro === true).length;
+    const pendingProUsersCount = allUsers.filter(
+      (u) => !u.isPro && u.subscriptionStatus === 'pending'
+    ).length;
+
+    const filtered = allUsers.filter((u) => {
+      if (statusFilter !== 'all' && u.status !== statusFilter) {
+        return false;
+      }
+      if (planFilter === 'pro' && !u.isPro) {
+        return false;
+      }
+      if (planFilter === 'pending' && (u.isPro || u.subscriptionStatus !== 'pending')) {
+        return false;
+      }
+      if (planFilter === 'free' && (u.isPro || u.subscriptionStatus === 'pending')) {
+        return false;
+      }
+      if (search) {
+        const matchName = String(u.displayName || '').toLowerCase().includes(search);
+        const matchUser = String(u.username || '').toLowerCase().includes(search);
+        const matchEmail = String(u.email || '').toLowerCase().includes(search);
+        const matchRole = String(u.role || '').toLowerCase().includes(search);
+        if (!matchName && !matchUser && !matchEmail && !matchRole) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    const totalFiltered = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
+    const safePage = Math.min(page, totalPages);
+    const start = (safePage - 1) * limit;
+    const pageItems = filtered.slice(start, start + limit);
+
+    res.json({
+      items: pageItems,
+      page: safePage,
+      limit,
+      totalItems: totalFiltered,
+      totalPages,
+      syncToken: usersRegistrySyncToken,
+      summary: {
+        totalUsers,
+        activeUsersCount,
+        blockedUsersCount,
+        proUsersCount,
+        pendingProUsersCount,
+      },
     });
   });
 
@@ -1231,17 +1557,24 @@ async function startServer() {
     });
   });
 
-  // Activate or Deactivate SisaUang Pro subscription manually by Super Admin with Billing Plan & Active Period
+  // Activate, Approve Pending, or Deactivate SisaUang Pro subscription manually by Super Admin with Billing Plan & Active Period
   app.patch('/api/admin/users/:uid/subscription', requireAdminMiddleware, (req: Request, res: Response) => {
     const targetUid = String(req.params.uid || '');
+    const requestedStatus = req.body?.subscriptionStatus;
+    const isPending = requestedStatus === 'pending';
     const isPro =
-      req.body?.subscriptionStatus === 'pro' || req.body?.isPro === true;
-    const newSubStatus: 'free' | 'pro' = isPro ? 'pro' : 'free';
-    const plan: 'monthly' | 'yearly' | null = isPro
-      ? req.body?.subscriptionPlan === 'yearly'
-        ? 'yearly'
-        : 'monthly'
-      : null;
+      !isPending && (requestedStatus === 'pro' || req.body?.isPro === true);
+    const newSubStatus: 'free' | 'pending' | 'pro' = isPro
+      ? 'pro'
+      : isPending
+        ? 'pending'
+        : 'free';
+    const plan: 'monthly' | 'yearly' | null =
+      isPro || isPending
+        ? req.body?.subscriptionPlan === 'yearly'
+          ? 'yearly'
+          : 'monthly'
+        : null;
     const rawExpires = req.body?.subscriptionExpiresAt
       ? String(req.body.subscriptionExpiresAt).slice(0, 10)
       : '';
@@ -1254,10 +1587,19 @@ async function startServer() {
       return;
     }
 
+    const wasPending = targetUser.subscriptionStatus === 'pending';
     targetUser.subscriptionStatus = newSubStatus;
     targetUser.isPro = isPro;
     targetUser.subscriptionPlan = plan;
     targetUser.subscriptionExpiresAt = expiresAt;
+    if (newSubStatus === 'free') {
+      targetUser.subscriptionPaymentMethod = null;
+      targetUser.subscriptionProofDataUrl = null;
+      targetUser.subscriptionProofFileName = null;
+      targetUser.subscriptionRequestedAt = null;
+      targetUser.subscriptionSenderName = null;
+      targetUser.subscriptionTransferNote = null;
+    }
     targetUser.updatedAt = nowIso();
     savePersistedUsersCache();
 
@@ -1265,10 +1607,14 @@ async function startServer() {
     const log = appendLog(
       'admin_vuedevo_01',
       SUPER_ADMIN_EMAIL,
-      isPro ? 'user_pro_activated' : 'user_pro_deactivated',
       isPro
-        ? `Super Admin mengaktifkan langganan SisaUang Pro (${planLabel}, aktif s/d ${expiresAt || '-'}) untuk ${targetUser.displayName} (${targetUser.email}).`
-        : `Super Admin menonaktifkan langganan SisaUang Pro untuk pengguna ${targetUser.displayName} (${targetUser.email}).`,
+        ? wasPending
+          ? 'user_pro_approved'
+          : 'user_pro_activated'
+        : 'user_pro_deactivated',
+      isPro
+        ? `Super Admin ${wasPending ? 'menyetujui pembayaran & ' : ''}mengaktifkan langganan SisaUang Pro (${planLabel}, aktif s/d ${expiresAt || '-'}) untuk ${targetUser.displayName} (${targetUser.email}).`
+        : `Super Admin menonaktifkan/menolak langganan SisaUang Pro untuk pengguna ${targetUser.displayName} (${targetUser.email}).`,
       'info'
     );
 
@@ -1294,6 +1640,7 @@ async function startServer() {
     }
 
     usersStore.delete(targetUid);
+    savePersistedUsersCache();
 
     const log = appendLog(
       'admin_vuedevo_01',
