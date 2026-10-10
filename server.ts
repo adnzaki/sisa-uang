@@ -826,29 +826,43 @@ async function startServer() {
       return;
     }
 
+    let preSyncedRecord: ServerUserRecord | undefined;
     for (const u of usersStore.values()) {
-      if (u.email.toLowerCase() === emailRaw && emailRaw !== SUPER_ADMIN_EMAIL) {
-        res.status(409).json({ error: 'Email ini sudah terdaftar. Silakan masuk.' });
-        return;
-      }
-      if (u.username.toLowerCase() === username && emailRaw !== SUPER_ADMIN_EMAIL) {
-        res.status(409).json({ error: 'Username ini sudah digunakan. Pilih username lain.' });
-        return;
+      const isSameEmail = u.email.toLowerCase() === emailRaw && emailRaw !== SUPER_ADMIN_EMAIL;
+      const isSameUsername = u.username.toLowerCase() === username && emailRaw !== SUPER_ADMIN_EMAIL;
+      if (isSameEmail || isSameUsername) {
+        // If this exact UID was just pre-synced from Firebase Auth (or has no passwordHash yet), allow completing registration
+        const isSameFirebaseUid = Boolean(req.body?.uid && u.uid === String(req.body.uid).trim());
+        const hasNoPasswordYet = !u.passwordHash;
+        if (isSameFirebaseUid || hasNoPasswordYet) {
+          preSyncedRecord = u;
+          break;
+        }
+        if (isSameEmail) {
+          res.status(409).json({ error: 'Email ini sudah terdaftar. Silakan masuk.' });
+          return;
+        }
+        if (isSameUsername) {
+          res.status(409).json({ error: 'Username ini sudah digunakan. Pilih username lain.' });
+          return;
+        }
       }
     }
 
     const isSuperAdmin = emailRaw === SUPER_ADMIN_EMAIL || emailRaw === WORKSPACE_ADMIN_EMAIL;
     const newUser: ServerUserRecord = {
-      uid: isSuperAdmin ? 'admin_vuedevo_01' : uid,
+      uid: isSuperAdmin ? 'admin_vuedevo_01' : preSyncedRecord?.uid || uid,
       username: isSuperAdmin ? SUPER_ADMIN_USERNAME : username,
       email: emailRaw,
       displayName: displayName.slice(0, 80),
-      role: isSuperAdmin ? 'admin' : 'user',
-      status: 'active',
+      role: isSuperAdmin ? 'admin' : preSyncedRecord?.role || 'user',
+      status: preSyncedRecord?.status || 'active',
       authProvider: 'password',
-      currency: 'IDR',
+      currency: preSyncedRecord?.currency || 'IDR',
+      subscriptionStatus: preSyncedRecord?.subscriptionStatus || 'free',
+      isPro: preSyncedRecord?.isPro || false,
       passwordHash: isSuperAdmin ? superAdminPasswordHash : hashPassword(password),
-      createdAt: nowIso(),
+      createdAt: preSyncedRecord?.createdAt || nowIso(),
       updatedAt: nowIso(),
     };
 
