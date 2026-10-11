@@ -2,15 +2,9 @@
 import { ref, computed, watch } from 'vue';
 import {
   Sparkles,
-  Database,
-  PiggyBank,
-  Tablet,
-  Keyboard,
   Rocket,
   Layers,
   Check,
-  RefreshCw,
-  KeyRound,
   Users,
   ShieldCheck,
   Wallet,
@@ -26,11 +20,11 @@ const RELEASE_DATE = 'Oktober 2026';
 const notificationStore = useNotificationStore();
 const authStore = useAuthStore();
 
-const activeFilter = ref<'all' | 'features' | 'interface' | 'accessibility' | 'performance'>('all');
+const activeFilter = ref<'all' | 'features' | 'interface'>('all');
 
 export interface ChangelogItem {
   id: string;
-  category: 'features' | 'interface' | 'accessibility' | 'performance';
+  category: 'features' | 'interface';
   badge: string;
   badgeColor: 'emerald' | 'indigo' | 'amber' | 'rose' | 'sky';
   title: string;
@@ -64,70 +58,10 @@ const changelogItems: ChangelogItem[] = [
     category: 'interface',
     badge: 'FORMAT NOMINAL',
     badgeColor: 'indigo',
-    title: 'Penyempurnaan Separator Ribuan Otomatis pada Seluruh Inputan Uang',
+    title: 'Melengkapi Separator Ribuan Otomatis untuk Inputan Uang',
     summary:
       'Melengkapi pemformatan pemisah ribuan otomatis (titik/koma sesuai format mata uang IDR/USD) saat mengetik nominal uang di seluruh formulir, termasuk Saldo Awal Sumber Dana (Wallet), Transaksi, Kepemilikan Dana, dan Anggaran.',
     icon: Wallet,
-  },
-  {
-    id: 'server-cache-sync-fix',
-    category: 'performance',
-    badge: 'CACHE & SERVER',
-    badgeColor: 'sky',
-    title: 'Perbaikan Sistem Cache dan Integrasi Penarikan Data dari Server',
-    summary:
-      'Penyempurnaan sinkronisasi cache lokal dengan registri server serta penarikan data pengguna dan koleksi Cloud Firestore secara menyeluruh agar seluruh data selalu tampil akurat dan konsisten.',
-    icon: RefreshCw,
-  },
-  {
-    id: 'password-reset-feature',
-    category: 'features',
-    badge: 'FITUR KEAMANAN',
-    badgeColor: 'rose',
-    title: 'Penambahan Fitur Reset Password & Visibilitas Kata Sandi',
-    summary:
-      'Kini pengguna dapat memulihkan dan mengatur ulang kata sandi secara langsung menggunakan email atau username terdaftar pada halaman autentikasi, dilengkapi tombol tampilkan/sembunyikan kata sandi (Hide/Show Password).',
-    icon: KeyRound,
-  },
-  {
-    id: 'periodic-budget',
-    category: 'features',
-    badge: 'FITUR ANGGARAN',
-    badgeColor: 'emerald',
-    title: 'Peningkatan Fitur Anggaran dengan Dukungan Periodik Bulanan',
-    summary:
-      'Penyempurnaan alur penyusunan dan pemantauan anggaran yang kini berbasis periode bulan dengan pilihan tahun, pengelolaan kategori anggaran per periode, serta perhitungan serapan anggaran yang lebih akurat.',
-    icon: PiggyBank,
-  },
-  {
-    id: 'tablet-layout',
-    category: 'interface',
-    badge: 'TATA LETAK',
-    badgeColor: 'indigo',
-    title: 'Perbaikan Struktur Layout pada Layar Tablet',
-    summary:
-      'Penyesuaian tata letak dan proporsi antarmuka aplikasi pada perangkat berlayar tablet agar navigasi serta tampilan konten lebih rapi, proporsional, dan nyaman digunakan.',
-    icon: Tablet,
-  },
-  {
-    id: 'keyboard-tab-accessibility',
-    category: 'accessibility',
-    badge: 'AKSESIBILITAS',
-    badgeColor: 'amber',
-    title: 'Peningkatan Navigasi Tombol TAB (Aksesibilitas) pada Setiap Form Input',
-    summary:
-      'Optimalisasi urutan fokus dan responsivitas tombol TAB pada keyboard fisik di seluruh formulir input untuk memudahkan perpindahan antar kolom isian secara cepat dan berurutan.',
-    icon: Keyboard,
-  },
-  {
-    id: 'db-cache-optimization',
-    category: 'performance',
-    badge: 'PERFORMA & CACHE',
-    badgeColor: 'sky',
-    title: 'Peningkatan Performa Aplikasi melalui Optimalisasi Operasi Database dan Penggunaan Cache',
-    summary:
-      'Perombakan mekanisme pembacaan dan penulisan database dengan pemanfaatan cache pintar untuk memangkas beban operasi database secara signifikan serta mempercepat waktu muat aplikasi.',
-    icon: Database,
   },
 ];
 
@@ -140,18 +74,8 @@ const filterTabs = [
   },
   {
     id: 'interface' as const,
-    label: 'Tata Letak',
+    label: 'Input & Antarmuka',
     count: changelogItems.filter((i) => i.category === 'interface').length,
-  },
-  {
-    id: 'accessibility' as const,
-    label: 'Aksesibilitas',
-    count: changelogItems.filter((i) => i.category === 'accessibility').length,
-  },
-  {
-    id: 'performance' as const,
-    label: 'Performa & Cache',
-    count: changelogItems.filter((i) => i.category === 'performance').length,
   },
 ];
 
@@ -169,7 +93,7 @@ function markChangelogSeenAndClose() {
   notificationStore.closeChangelogModal();
 }
 
-// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.0-rc.4 changelog yet
+// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.0-rc.5 changelog yet
 watch(
   () => [authStore.isReady, authStore.isAuthenticated, authStore.requiresOtp] as const,
   ([ready, authenticated, needOtp]) => {
@@ -247,8 +171,8 @@ watch(
             <p class="text-xs sm:text-sm text-slate-300 leading-relaxed">
               Pembaruan versi <strong class="text-emerald-300 font-mono">{{ RELEASE_VERSION }}</strong> menghadirkan
               dukungan multi-akun untuk beralih antar akun dengan cepat, manajemen perangkat &amp; sesi aktif dengan
-              otorisasi Perangkat Utama berbasis OTP email, kelengkapan separator ribuan otomatis pada seluruh inputan
-              uang, serta seluruh peningkatan performa dan fitur dari rilis sebelumnya.
+              otorisasi Perangkat Utama berbasis OTP email, serta pelengkapan separator ribuan otomatis pada seluruh
+              inputan uang.
             </p>
           </div>
         </div>
