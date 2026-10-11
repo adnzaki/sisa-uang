@@ -36,7 +36,7 @@ export const useNotificationStore = defineStore('notification', () => {
   const confirmDialog = ref<ConfirmDialogOptions | null>(null);
   let confirmResolver: ((confirmed: boolean) => void) | null = null;
 
-  // Global Official Release Notes / Changelog Modal State (v1.0.0-rc.4)
+  // Global Official Release Notes / Changelog Modal State (v1.0.0-rc.5)
   const changelogModalOpen = ref(false);
 
   // Global SisaUang Pro Subscription Prompt Modal State

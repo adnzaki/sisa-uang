@@ -87,12 +87,87 @@ export interface OtpDispatchInfo {
   autoVerified?: boolean;
 }
 
+export interface DeviceSessionInfo {
+  sessionId: string;
+  uid: string;
+  email: string;
+  deviceId: string;
+  deviceName: string;
+  browser: string;
+  os: string;
+  deviceType: 'desktop' | 'mobile' | 'tablet';
+  ipAddress: string;
+  isPrimary: boolean;
+  status: 'active' | 'revoked';
+  revokedAt?: string | null;
+  revokedByDeviceId?: string | null;
+  createdAt: string;
+  lastActiveAt: string;
+}
+
+export interface SavedAccountSession {
+  user: AppUser;
+  adminToken?: string | null;
+  otpVerified?: boolean;
+  lastUsedAt: string;
+}
+
 const SUPER_ADMIN_EMAIL = 'vuedevo@gmail.com';
 const SUPER_ADMIN_USERNAME = 'vuedevo';
 const WORKSPACE_ADMIN_EMAIL = 'adnanzaki65@admin.sd.belajar.id';
 const SESSION_STORAGE_KEY = 'sisa_uang_active_user';
+const SAVED_ACCOUNTS_STORAGE_KEY = 'sisa_uang_saved_accounts_v1';
+const DEVICE_ID_STORAGE_KEY = 'sisa_uang_device_id_v1';
+const CUSTOM_DEVICE_NAME_KEY = 'sisa_uang_custom_device_name_v1';
 const OTP_VERIFIED_KEY = 'sisa_uang_otp_verified';
 const DEFAULT_ADMIN_SESSION_TOKEN = 'sisa_uang_admin_session_token_v1';
+
+function getOrCreateDeviceId(): string {
+  try {
+    const existing = localStorage.getItem(DEVICE_ID_STORAGE_KEY);
+    if (existing && existing.length >= 8) {
+      return existing;
+    }
+    const randomPart = Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+    const created = `dev_${randomPart}`;
+    localStorage.setItem(DEVICE_ID_STORAGE_KEY, created);
+    return created;
+  } catch {
+    return `dev_fallback_${Date.now()}`;
+  }
+}
+
+function detectClientDeviceMetadata() {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  let browser = 'Browser Web';
+  if (/Edg\//i.test(ua)) browser = 'Microsoft Edge';
+  else if (/OPR\/|Opera/i.test(ua)) browser = 'Opera';
+  else if (/Chrome\//i.test(ua) && !/Edg\//i.test(ua)) browser = 'Google Chrome';
+  else if (/Firefox\//i.test(ua)) browser = 'Mozilla Firefox';
+  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Apple Safari';
+
+  let os = 'Perangkat';
+  if (/Windows NT/i.test(ua)) os = 'Windows';
+  else if (/Android/i.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+  else if (/Mac OS X|Macintosh/i.test(ua)) os = 'macOS';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+
+  let deviceType: 'desktop' | 'mobile' | 'tablet' = 'desktop';
+  if (/iPad|Tablet/i.test(ua)) deviceType = 'tablet';
+  else if (/Mobile|Android|iPhone|iPod/i.test(ua)) deviceType = 'mobile';
+
+  const customName =
+    typeof localStorage !== 'undefined' ? localStorage.getItem(CUSTOM_DEVICE_NAME_KEY) : null;
+
+  return {
+    userAgent: ua,
+    browser,
+    os,
+    deviceType,
+    deviceName: customName || `${browser} di ${os}`,
+  };
+}
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<AppUser | null>(null);
@@ -100,10 +175,38 @@ export const useAuthStore = defineStore('auth', () => {
   const isLoading = ref(false);
   const error = ref<string | null>(null);
 
+  // Device & Session Management state
+  const currentDeviceId = ref<string>(getOrCreateDeviceId());
+  const deviceSessions = ref<DeviceSessionInfo[]>([]);
+  const isSessionsLoading = ref(false);
+  const primaryDeviceOtpPending = ref<{
+    email: string;
+    deviceId: string;
+    deviceName: string;
+    expiresAt: number;
+    message: string;
+    fallbackCode?: string;
+    smtpNotice?: string;
+  } | null>(null);
+
+  // Multi-Account Switcher state
+  const savedAccounts = ref<SavedAccountSession[]>([]);
+
   // Super Admin 2FA Email OTP state (exclusively for vuedevo@gmail.com)
   const requiresOtp = ref(false);
   const otpVerified = ref(localStorage.getItem(OTP_VERIFIED_KEY) === 'true');
   const otpDispatchInfo = ref<OtpDispatchInfo | null>(null);
+
+  const currentDeviceSession = computed(
+    () =>
+      deviceSessions.value.find((s) => s.deviceId === currentDeviceId.value) || null
+  );
+  const isCurrentDevicePrimary = computed(
+    () => currentDeviceSession.value?.isPrimary === true
+  );
+  const hasAnyPrimaryDevice = computed(() =>
+    deviceSessions.value.some((s) => s.isPrimary)
+  );
 
   let userStatusUnsubscribe: (() => void) | null = null;
   let statusPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -175,6 +278,339 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  function loadSavedAccountsFromStorage() {
+    try {
+      const raw = localStorage.getItem(SAVED_ACCOUNTS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as SavedAccountSession[];
+        if (Array.isArray(parsed)) {
+          savedAccounts.value = parsed.filter((item) => item && item.user && item.user.uid);
+        }
+      }
+    } catch {
+      savedAccounts.value = [];
+    }
+  }
+
+  function persistSavedAccountsToStorage() {
+    try {
+      localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, JSON.stringify(savedAccounts.value));
+    } catch {
+      // Ignore storage error
+    }
+  }
+
+  function upsertSavedAccount(targetUser: AppUser, adminToken?: string | null) {
+    loadSavedAccountsFromStorage();
+    const existingIdx = savedAccounts.value.findIndex(
+      (item) =>
+        item.user.uid === targetUser.uid ||
+        item.user.email.toLowerCase() === targetUser.email.toLowerCase()
+    );
+    const entry: SavedAccountSession = {
+      user: { ...targetUser },
+      adminToken:
+        adminToken !== undefined
+          ? adminToken
+          : existingIdx >= 0
+            ? savedAccounts.value[existingIdx].adminToken
+            : localStorage.getItem('sisa_uang_admin_token'),
+      otpVerified: otpVerified.value,
+      lastUsedAt: new Date().toISOString(),
+    };
+    if (existingIdx >= 0) {
+      savedAccounts.value.splice(existingIdx, 1, entry);
+    } else {
+      savedAccounts.value.unshift(entry);
+    }
+    persistSavedAccountsToStorage();
+  }
+
+  function removeSavedAccount(uid: string) {
+    loadSavedAccountsFromStorage();
+    savedAccounts.value = savedAccounts.value.filter((item) => item.user.uid !== uid);
+    persistSavedAccountsToStorage();
+  }
+
+  async function registerCurrentDeviceSession(
+    targetUser: AppUser,
+    forceNewLogin = false
+  ): Promise<boolean> {
+    if (!targetUser?.uid) return true;
+    const meta = detectClientDeviceMetadata();
+    try {
+      const { data } = await apiClient.post(
+        `/users/${encodeURIComponent(targetUser.uid)}/sessions/register`,
+        {
+          email: targetUser.email,
+          deviceId: currentDeviceId.value,
+          deviceName: meta.deviceName,
+          browser: meta.browser,
+          os: meta.os,
+          deviceType: meta.deviceType,
+          userAgent: meta.userAgent,
+          forceNewLogin,
+        }
+      );
+
+      if (data?.revoked && !forceNewLogin) {
+        useNotificationStore().notifyError(
+          'Sesi Perangkat Dicabut',
+          'Sesi login pada perangkat ini telah dihentikan dari Perangkat Utama Anda. Silakan masuk kembali.'
+        );
+        await logout(true);
+        return false;
+      }
+
+      if (Array.isArray(data?.sessions)) {
+        deviceSessions.value = data.sessions;
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  async function fetchDeviceSessions(silent = false) {
+    if (!user.value?.uid) return;
+    if (!silent) {
+      isSessionsLoading.value = true;
+    }
+    try {
+      const { data } = await apiClient.get(
+        `/users/${encodeURIComponent(user.value.uid)}/sessions`,
+        {
+          params: { deviceId: currentDeviceId.value },
+        }
+      );
+      if (Array.isArray(data?.sessions)) {
+        deviceSessions.value = data.sessions;
+      }
+      // If no session registered yet on server (e.g. server restarted), register current device automatically
+      if (!data?.currentSession && user.value) {
+        await registerCurrentDeviceSession(user.value, true);
+      }
+    } catch {
+      // Ignore network error
+    } finally {
+      if (!silent) {
+        isSessionsLoading.value = false;
+      }
+    }
+  }
+
+  async function requestPrimaryDeviceOtp(customDeviceName?: string) {
+    if (!user.value) {
+      throw new Error('Tidak ada sesi pengguna aktif.');
+    }
+    const notify = useNotificationStore();
+    if (customDeviceName && customDeviceName.trim()) {
+      localStorage.setItem(CUSTOM_DEVICE_NAME_KEY, customDeviceName.trim().slice(0, 80));
+    }
+    const meta = detectClientDeviceMetadata();
+    isSessionsLoading.value = true;
+    try {
+      const { data } = await apiClient.post(
+        `/users/${encodeURIComponent(user.value.uid)}/sessions/request-primary-otp`,
+        {
+          email: user.value.email,
+          deviceId: currentDeviceId.value,
+          deviceName: customDeviceName?.trim() || meta.deviceName,
+        }
+      );
+
+      primaryDeviceOtpPending.value = {
+        email: data.email || user.value.email,
+        deviceId: currentDeviceId.value,
+        deviceName: data.deviceName || meta.deviceName,
+        expiresAt: data.expiresAt || Date.now() + 600000,
+        message: data.message,
+        fallbackCode: data.fallbackCode,
+        smtpNotice: data.smtpNotice,
+      };
+
+      notify.notifySuccess(
+        'Kode OTP Perangkat Utama Dikirim',
+        data.sent
+          ? `Kode verifikasi 6 digit telah dikirim ke email terdaftar (${data.email || user.value.email}).`
+          : `Kode verifikasi OTP 6 digit telah dibuat untuk memverifikasi perangkat utama (${data.email || user.value.email}).`
+      );
+      return primaryDeviceOtpPending.value;
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.error ||
+        (err instanceof Error ? err.message : 'Gagal mengirim kode OTP Perangkat Utama.');
+      notify.notifyError('Gagal Meminta OTP Perangkat Utama', err, msg);
+      throw new Error(msg);
+    } finally {
+      isSessionsLoading.value = false;
+    }
+  }
+
+  async function verifyPrimaryDeviceOtp(otpCode: string): Promise<boolean> {
+    if (!user.value) return false;
+    const notify = useNotificationStore();
+    const cleanCode = otpCode.trim();
+    if (cleanCode.length < 6) {
+      notify.notifyError('Kode OTP Belum Lengkap', 'Masukkan 6 digit kode verifikasi OTP.');
+      return false;
+    }
+
+    isSessionsLoading.value = true;
+    try {
+      const { data } = await apiClient.post(
+        `/users/${encodeURIComponent(user.value.uid)}/sessions/verify-primary-otp`,
+        {
+          deviceId: currentDeviceId.value,
+          code: cleanCode,
+        }
+      );
+
+      if (Array.isArray(data?.sessions)) {
+        deviceSessions.value = data.sessions;
+      }
+      primaryDeviceOtpPending.value = null;
+
+      notify.notifySuccess(
+        'Perangkat Utama Berhasil Diatur!',
+        data?.message ||
+          'Perangkat ini kini berstatus Perangkat Utama dan dapat mengelola/mencabut sesi di perangkat lain.'
+      );
+      return true;
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.error ||
+        (err instanceof Error ? err.message : 'Kode verifikasi OTP tidak sesuai.');
+      notify.notifyError('Verifikasi OTP Gagal', err, msg);
+      return false;
+    } finally {
+      isSessionsLoading.value = false;
+    }
+  }
+
+  function cancelPrimaryDeviceOtp() {
+    primaryDeviceOtpPending.value = null;
+  }
+
+  async function revokeDeviceSession(targetDeviceId: string): Promise<boolean> {
+    if (!user.value) return false;
+    const notify = useNotificationStore();
+    isSessionsLoading.value = true;
+    try {
+      const { data } = await apiClient.delete(
+        `/users/${encodeURIComponent(user.value.uid)}/sessions/${encodeURIComponent(targetDeviceId)}`,
+        {
+          params: { actorDeviceId: currentDeviceId.value },
+        }
+      );
+      if (Array.isArray(data?.sessions)) {
+        deviceSessions.value = data.sessions;
+      } else {
+        deviceSessions.value = deviceSessions.value.filter((s) => s.deviceId !== targetDeviceId);
+      }
+      notify.notifySuccess(
+        'Sesi Perangkat Dicabut',
+        'Sesi login pada perangkat tersebut berhasil dihapus dan tidak dapat mengakses akun lagi.'
+      );
+      return true;
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.error ||
+        (err instanceof Error ? err.message : 'Gagal mencabut sesi perangkat.');
+      notify.notifyError('Gagal Mencabut Sesi', err, msg);
+      return false;
+    } finally {
+      isSessionsLoading.value = false;
+    }
+  }
+
+  async function revokeAllOtherDeviceSessions(): Promise<boolean> {
+    if (!user.value) return false;
+    const notify = useNotificationStore();
+    isSessionsLoading.value = true;
+    try {
+      const { data } = await apiClient.post(
+        `/users/${encodeURIComponent(user.value.uid)}/sessions/revoke-others`,
+        {
+          actorDeviceId: currentDeviceId.value,
+        }
+      );
+      if (Array.isArray(data?.sessions)) {
+        deviceSessions.value = data.sessions;
+      }
+      notify.notifySuccess(
+        'Seluruh Sesi Perangkat Lain Dicabut',
+        `${data?.revokedCount || 0} sesi perangkat lain telah dihentikan secara permanen.`
+      );
+      return true;
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.error ||
+        (err instanceof Error ? err.message : 'Gagal mencabut sesi perangkat lain.');
+      notify.notifyError('Gagal Mencabut Sesi Lain', err, msg);
+      return false;
+    } finally {
+      isSessionsLoading.value = false;
+    }
+  }
+
+  async function switchAccount(targetUid: string): Promise<boolean> {
+    loadSavedAccountsFromStorage();
+    const targetEntry = savedAccounts.value.find((item) => item.user.uid === targetUid);
+    if (!targetEntry) return false;
+
+    const notify = useNotificationStore();
+    const nextUser: AppUser = {
+      ...targetEntry.user,
+      isFirebaseBacked: true,
+    };
+
+    user.value = nextUser;
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextUser));
+
+    const isTargetSuperAdmin =
+      nextUser.role === 'admin' ||
+      nextUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+      nextUser.username?.toLowerCase() === SUPER_ADMIN_USERNAME ||
+      nextUser.username?.toLowerCase() === 'dark.notes';
+
+    requiresOtp.value = false;
+    otpVerified.value = isTargetSuperAdmin ? true : Boolean(targetEntry.otpVerified);
+    localStorage.setItem(OTP_VERIFIED_KEY, otpVerified.value ? 'true' : 'false');
+
+    const effectiveToken =
+      targetEntry.adminToken ||
+      (isTargetSuperAdmin ? DEFAULT_ADMIN_SESSION_TOKEN : null);
+    setApiAdminContext(nextUser.email, effectiveToken);
+
+    upsertSavedAccount(nextUser, effectiveToken);
+    primaryDeviceOtpPending.value = null;
+
+    // Ensure Firebase Auth bridge session is active so Firestore rules work seamlessly
+    if (
+      String(nextUser.uid).startsWith('ci4_user_') ||
+      nextUser.uid === 'admin_vuedevo_01' ||
+      !auth.currentUser
+    ) {
+      if (!auth.currentUser || auth.currentUser.email?.toLowerCase() !== SUPER_ADMIN_EMAIL) {
+        try {
+          await signInWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
+        } catch {
+          // Ignore
+        }
+      }
+    }
+
+    await registerCurrentDeviceSession(nextUser, true);
+    startUserStatusMonitor(nextUser);
+
+    notify.notifySuccess(
+      'Berhasil Beralih Akun',
+      `Sesi aktif kini beralih ke ${nextUser.displayName} (@${nextUser.username}).`
+    );
+    return true;
+  }
+
   function startUserStatusMonitor(_targetUser: AppUser) {
     if (userStatusUnsubscribe) {
       userStatusUnsubscribe();
@@ -190,8 +626,19 @@ export const useAuthStore = defineStore('auth', () => {
       if (!user.value) return;
       try {
         const { data } = await apiClient.get(`/users/${encodeURIComponent(user.value.uid)}/status`, {
-          params: { email: user.value.email },
+          params: {
+            email: user.value.email,
+            deviceId: currentDeviceId.value,
+          },
         });
+        if (data.sessionRevoked) {
+          useNotificationStore().notifyError(
+            'Sesi Perangkat Dicabut',
+            'Sesi login perangkat ini telah dicabut oleh Perangkat Utama Anda.'
+          );
+          await logout(true);
+          return;
+        }
         if (data.status === 'blocked' && user.value.status !== 'blocked') {
           user.value.status = 'blocked';
           error.value = 'Akses akun Anda telah diblokir secara real-time oleh Super Administrator.';
@@ -464,6 +911,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function initAuth() {
+    loadSavedAccountsFromStorage();
     const savedRaw = localStorage.getItem(SESSION_STORAGE_KEY);
     if (savedRaw) {
       try {
@@ -485,6 +933,8 @@ export const useAuthStore = defineStore('auth', () => {
           localStorage.setItem(OTP_VERIFIED_KEY, 'true');
         }
         setApiAdminContext(parsed.email, storedToken);
+        upsertSavedAccount(parsed, storedToken);
+        void registerCurrentDeviceSession(parsed, false);
         startUserStatusMonitor(parsed);
       } catch {
         localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -514,6 +964,8 @@ export const useAuthStore = defineStore('auth', () => {
               localStorage.setItem(OTP_VERIFIED_KEY, 'true');
             }
             setApiAdminContext(profile.email, storedToken);
+            upsertSavedAccount(profile, storedToken);
+            void registerCurrentDeviceSession(profile, true);
             startUserStatusMonitor(profile);
           }
         } catch (err) {
@@ -805,6 +1257,8 @@ export const useAuthStore = defineStore('auth', () => {
         (isLoggedSuperAdmin ? DEFAULT_ADMIN_SESSION_TOKEN : null);
 
       setApiAdminContext(loggedInUser.email, effectiveAdminToken);
+      upsertSavedAccount(loggedInUser, effectiveAdminToken);
+      await registerCurrentDeviceSession(loggedInUser, true);
       startUserStatusMonitor(loggedInUser);
 
       if (backendData.requiresOtp) {
@@ -837,11 +1291,12 @@ export const useAuthStore = defineStore('auth', () => {
           const profile = await ensureFirestoreUserDocument(cred.user);
           user.value = profile;
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
-          setApiAdminContext(
-            profile.email,
+          const fallbackToken =
             localStorage.getItem('sisa_uang_admin_token') ||
-              (profile.email.toLowerCase() === SUPER_ADMIN_EMAIL ? DEFAULT_ADMIN_SESSION_TOKEN : null)
-          );
+            (profile.email.toLowerCase() === SUPER_ADMIN_EMAIL ? DEFAULT_ADMIN_SESSION_TOKEN : null);
+          setApiAdminContext(profile.email, fallbackToken);
+          upsertSavedAccount(profile, fallbackToken);
+          await registerCurrentDeviceSession(profile, true);
           startUserStatusMonitor(profile);
 
           if (cleanIdentifier === SUPER_ADMIN_EMAIL) {
@@ -1000,12 +1455,13 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(registeredUser));
       const isRegSuperAdmin =
         registeredUser.role === 'admin' || registeredUser.email.toLowerCase() === SUPER_ADMIN_EMAIL;
-      setApiAdminContext(
-        registeredUser.email,
+      const regAdminToken =
         data.adminToken ||
-          localStorage.getItem('sisa_uang_admin_token') ||
-          (isRegSuperAdmin ? DEFAULT_ADMIN_SESSION_TOKEN : null)
-      );
+        localStorage.getItem('sisa_uang_admin_token') ||
+        (isRegSuperAdmin ? DEFAULT_ADMIN_SESSION_TOKEN : null);
+      setApiAdminContext(registeredUser.email, regAdminToken);
+      upsertSavedAccount(registeredUser, regAdminToken);
+      await registerCurrentDeviceSession(registeredUser, true);
       startUserStatusMonitor(registeredUser);
 
       if (data.requiresOtp) {
@@ -1104,6 +1560,7 @@ export const useAuthStore = defineStore('auth', () => {
         username: safeUsername,
       };
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+      upsertSavedAccount(user.value);
 
       await recordAuditLog(
         'profile_updated',
@@ -1344,7 +1801,10 @@ export const useAuthStore = defineStore('auth', () => {
 
       user.value = profile;
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
-      setApiAdminContext(profile.email, localStorage.getItem('sisa_uang_admin_token'));
+      const googleAdminToken = localStorage.getItem('sisa_uang_admin_token');
+      setApiAdminContext(profile.email, googleAdminToken);
+      upsertSavedAccount(profile, googleAdminToken);
+      await registerCurrentDeviceSession(profile, true);
       startUserStatusMonitor(profile);
 
       await recordAuditLog(
@@ -1494,8 +1954,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   // 7. Logout
-  async function logout() {
-    if (user.value) {
+  async function logout(isRevokedByRemote = false) {
+    if (user.value && !isRevokedByRemote) {
       await recordAuditLog('user_logout', `Pengguna ${user.value.email} keluar dari sesi.`, 'info');
     }
     if (userStatusUnsubscribe) {
@@ -1512,6 +1972,8 @@ export const useAuthStore = defineStore('auth', () => {
       // Ignore
     }
     user.value = null;
+    deviceSessions.value = [];
+    primaryDeviceOtpPending.value = null;
     requiresOtp.value = false;
     otpVerified.value = false;
     otpDispatchInfo.value = null;
@@ -1619,6 +2081,14 @@ export const useAuthStore = defineStore('auth', () => {
     isReady,
     isLoading,
     error,
+    currentDeviceId,
+    deviceSessions,
+    isSessionsLoading,
+    currentDeviceSession,
+    isCurrentDevicePrimary,
+    hasAnyPrimaryDevice,
+    primaryDeviceOtpPending,
+    savedAccounts,
     requiresOtp,
     otpVerified,
     otpDispatchInfo,
@@ -1639,6 +2109,14 @@ export const useAuthStore = defineStore('auth', () => {
     loginWithGoogle,
     requestSuperAdminOtp,
     verifySuperAdminOtp,
+    fetchDeviceSessions,
+    requestPrimaryDeviceOtp,
+    verifyPrimaryDeviceOtp,
+    cancelPrimaryDeviceOtp,
+    revokeDeviceSession,
+    revokeAllOtherDeviceSessions,
+    switchAccount,
+    removeSavedAccount,
     recordAuditLog,
     logout,
   };

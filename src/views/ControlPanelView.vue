@@ -217,22 +217,42 @@ function handleUsersPageChange(newPage: number) {
 
 const paginatedUsers = computed(() => adminStore.paginatedUsers);
 
-const filteredLogs = computed(() => {
-  return adminStore.logs.filter((l) => {
-    if (logSeverityFilter.value !== 'all' && l.severity !== logSeverityFilter.value) {
-      return false;
-    }
-    if (logSearch.value.trim()) {
-      const q = logSearch.value.toLowerCase();
-      return (
-        l.actorEmail.toLowerCase().includes(q) ||
-        l.action.toLowerCase().includes(q) ||
-        l.detail.toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
+// Server-side Pagination for System Activity Logs (25 rows per page)
+const LOGS_PAGE_SIZE = 25;
+const logsCurrentPage = ref(1);
+let logSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function triggerServerLogsFetch(targetPage: number, silent = false) {
+  logsCurrentPage.value = targetPage;
+  void adminStore.fetchAdminLogsPage(
+    {
+      page: targetPage,
+      limit: LOGS_PAGE_SIZE,
+      severity: logSeverityFilter.value,
+      search: logSearch.value.trim(),
+    },
+    silent
+  );
+}
+
+watch(logSeverityFilter, () => {
+  triggerServerLogsFetch(1);
 });
+
+watch(logSearch, () => {
+  if (logSearchDebounceTimer) {
+    clearTimeout(logSearchDebounceTimer);
+  }
+  logSearchDebounceTimer = setTimeout(() => {
+    triggerServerLogsFetch(1);
+  }, 250);
+});
+
+function handleLogsPageChange(newPage: number) {
+  triggerServerLogsFetch(newPage);
+}
+
+const paginatedLogs = computed(() => adminStore.paginatedLogs);
 
 function formatTimestamp(iso: string): string {
   try {
@@ -373,7 +393,7 @@ function formatTimestamp(iso: string): string {
         @click="selectSection('logs')"
       >
         <Activity class="w-4 h-4" />
-        <span>{{ t('admin.activityLogs') }} ({{ adminStore.logs.length }})</span>
+        <span>{{ t('admin.activityLogs') }} ({{ adminStore.totalLogsCount }})</span>
       </button>
 
       <button
@@ -718,12 +738,28 @@ function formatTimestamp(iso: string): string {
       </div>
 
       <div
+        v-if="adminStore.isLogsPageLoading && paginatedLogs.length === 0"
+        class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-8 text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400"
+      >
+        Memuat halaman log sistem dari server...
+      </div>
+
+      <div
+        v-else-if="paginatedLogs.length === 0"
+        class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-8 text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400"
+      >
+        Tidak ada log sistem yang cocok dengan filter atau pencarian Anda.
+      </div>
+
+      <div
+        v-else
         class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-100 dark:divide-slate-800/80"
+        :class="adminStore.isLogsPageLoading ? 'opacity-60 pointer-events-none transition-opacity' : ''"
       >
         <div
-          v-for="log in filteredLogs"
+          v-for="log in paginatedLogs"
           :key="log.id"
-          class="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+          class="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-slate-50/60 dark:hover:bg-slate-800/30 transition-colors"
         >
           <div class="space-y-1 min-w-0">
             <div class="text-sm font-medium text-slate-900 dark:text-slate-100">
@@ -754,6 +790,15 @@ function formatTimestamp(iso: string): string {
           </div>
         </div>
       </div>
+
+      <!-- Server-Side Pagination Control for Super Admin System Logs (25 rows per page) -->
+      <AppPagination
+        :current-page="adminStore.logsPage"
+        :total-items="adminStore.logsTotalFiltered"
+        :page-size="LOGS_PAGE_SIZE"
+        item-label="log aktivitas"
+        @update:current-page="handleLogsPageChange"
+      />
     </section>
 
     <!-- MODULE 3: Security & Suspicious Activity Alerts -->
