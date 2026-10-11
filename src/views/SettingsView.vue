@@ -1028,7 +1028,7 @@ function handleGoToAddAccount() {
             </div>
           </div>
 
-          <form class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5" @submit.prevent="handleVerifyPrimaryOtp">
+          <form class="flex flex-col lg:flex-row items-stretch lg:items-center gap-2.5" @submit.prevent="handleVerifyPrimaryOtp">
             <input
               v-model="primaryOtpInput"
               type="text"
@@ -1036,32 +1036,34 @@ function handleGoToAddAccount() {
               maxlength="6"
               required
               placeholder="Masukkan 6 Digit OTP (000000)"
-              class="flex-1 min-h-[44px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 font-mono text-sm font-bold tracking-[0.25em] text-center sm:text-left text-slate-900 dark:text-slate-100 placeholder:tracking-normal placeholder:font-sans focus:outline-none focus:border-emerald-600"
+              class="w-full lg:flex-1 min-h-[44px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 font-mono text-sm font-bold tracking-[0.25em] text-center lg:text-left text-slate-900 dark:text-slate-100 placeholder:tracking-normal placeholder:font-sans focus:outline-none focus:border-emerald-600"
             />
-            <div class="flex items-center gap-2">
+            <div class="flex flex-col lg:flex-row items-stretch lg:items-center gap-2 w-full lg:w-auto">
               <button
                 type="submit"
                 :disabled="authStore.isSessionsLoading || primaryOtpInput.trim().length < 6"
-                class="flex-1 sm:flex-initial min-h-[44px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                class="w-full lg:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer whitespace-nowrap"
               >
                 <CheckCircle2 class="w-4 h-4 shrink-0" />
                 <span>Verifikasi &amp; Jadikan Utama</span>
               </button>
-              <button
-                type="button"
-                :disabled="authStore.isSessionsLoading"
-                class="min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-                @click="handleRequestPrimaryOtp"
-              >
-                Kirim Ulang
-              </button>
-              <button
-                type="button"
-                class="min-h-[44px] px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
-                @click="authStore.cancelPrimaryDeviceOtp()"
-              >
-                Batal
-              </button>
+              <div class="grid grid-cols-2 lg:flex lg:items-center gap-2 w-full lg:w-auto">
+                <button
+                  type="button"
+                  :disabled="authStore.isSessionsLoading"
+                  class="w-full lg:w-auto min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors cursor-pointer whitespace-nowrap"
+                  @click="handleRequestPrimaryOtp"
+                >
+                  Kirim Ulang
+                </button>
+                <button
+                  type="button"
+                  class="w-full lg:w-auto min-h-[44px] px-3 py-2 rounded-xl border border-rose-200/80 dark:border-rose-900/60 bg-rose-50/50 dark:bg-rose-950/30 text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-100/70 dark:hover:bg-rose-950/60 flex items-center justify-center transition-colors cursor-pointer whitespace-nowrap"
+                  @click="authStore.cancelPrimaryDeviceOtp()"
+                >
+                  Batal
+                </button>
+              </div>
             </div>
           </form>
         </div>
