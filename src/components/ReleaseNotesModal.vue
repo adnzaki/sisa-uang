@@ -8,6 +8,7 @@ import {
   Users,
   ShieldCheck,
   Wallet,
+  Smartphone,
 } from 'lucide-vue-next';
 import { useNotificationStore } from '../stores/notification';
 import { useAuthStore } from '../stores/auth';
@@ -33,6 +34,16 @@ export interface ChangelogItem {
 }
 
 const changelogItems: ChangelogItem[] = [
+  {
+    id: 'smartphone-swipe-gestures',
+    category: 'interface',
+    badge: 'GESTURE SMARTPHONE',
+    badgeColor: 'sky',
+    title: 'Menambahkan Gesture Swipe Khusus Pengguna Smartphone',
+    summary:
+      'Dukungan navigasi sentuh layaknya aplikasi native: geser (swipe) kiri/kanan pada layar untuk berpindah antar menu Bottom Navbar dengan transisi halus, geser kiri/kanan untuk menutup popup banner notifikasi, serta geser ke kiri untuk menutup menu sidebar.',
+    icon: Smartphone,
+  },
   {
     id: 'multi-account-support',
     category: 'features',
@@ -170,9 +181,9 @@ watch(
             </h3>
             <p class="text-xs sm:text-sm text-slate-300 leading-relaxed">
               Pembaruan versi <strong class="text-emerald-300 font-mono">{{ RELEASE_VERSION }}</strong> menghadirkan
-              dukungan multi-akun untuk beralih antar akun dengan cepat, manajemen perangkat &amp; sesi aktif dengan
-              otorisasi Perangkat Utama berbasis OTP email, serta pelengkapan separator ribuan otomatis pada seluruh
-              inputan uang.
+              gesture swipe khusus pengguna smartphone, dukungan multi-akun untuk beralih antar akun dengan cepat,
+              manajemen perangkat &amp; sesi aktif dengan otorisasi Perangkat Utama berbasis OTP email, serta
+              pelengkapan separator ribuan otomatis pada seluruh inputan uang.
             </p>
           </div>
         </div>

@@ -67,6 +67,284 @@ const desktopAccountMenuRef = ref<HTMLElement | null>(null);
 const mobileAccountMenuRef = ref<HTMLElement | null>(null);
 const deniedBannerVisible = ref(false);
 const mainScrollContainer = ref<HTMLElement | null>(null);
+const pageTransitionName = ref<'page' | 'page-slide-left' | 'page-slide-right'>('page');
+
+// =========================================================================
+// 1. Native Mobile Swipe Gestures for Popup Notification Banners
+// =========================================================================
+interface BannerSwipeState {
+  startX: number;
+  startY: number;
+  deltaX: number;
+  isDragging: boolean;
+  isLockedHorizontal: boolean;
+  isDismissing: boolean;
+  dismissDir: 1 | -1;
+}
+
+const bannerSwipeMap = ref<Record<string, BannerSwipeState>>({});
+
+function onBannerTouchStart(bannerId: string, e: TouchEvent) {
+  if (e.touches.length !== 1) return;
+  const touch = e.touches[0];
+  bannerSwipeMap.value[bannerId] = {
+    startX: touch.clientX,
+    startY: touch.clientY,
+    deltaX: 0,
+    isDragging: true,
+    isLockedHorizontal: false,
+    isDismissing: false,
+    dismissDir: 1,
+  };
+}
+
+function onBannerTouchMove(bannerId: string, e: TouchEvent) {
+  const st = bannerSwipeMap.value[bannerId];
+  if (!st || !st.isDragging || st.isDismissing || e.touches.length !== 1) return;
+  const touch = e.touches[0];
+  const dx = touch.clientX - st.startX;
+  const dy = touch.clientY - st.startY;
+
+  if (!st.isLockedHorizontal) {
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) {
+      // User is scrolling vertically, cancel horizontal drag
+      st.isDragging = false;
+      st.deltaX = 0;
+      return;
+    }
+    if (Math.abs(dx) > 8) {
+      st.isLockedHorizontal = true;
+    }
+  }
+
+  if (st.isLockedHorizontal) {
+    st.deltaX = dx;
+  }
+}
+
+function onBannerTouchEnd(bannerId: string) {
+  const st = bannerSwipeMap.value[bannerId];
+  if (!st || st.isDismissing) return;
+  st.isDragging = false;
+
+  if (Math.abs(st.deltaX) >= 65) {
+    st.isDismissing = true;
+    st.dismissDir = st.deltaX >= 0 ? 1 : -1;
+    st.deltaX = st.dismissDir * 420;
+    setTimeout(() => {
+      notificationStore.dismissBanner(bannerId);
+      delete bannerSwipeMap.value[bannerId];
+    }, 180);
+  } else {
+    st.deltaX = 0;
+    st.isLockedHorizontal = false;
+  }
+}
+
+function getBannerSwipeStyle(bannerId: string) {
+  const st = bannerSwipeMap.value[bannerId];
+  if (!st || (st.deltaX === 0 && !st.isDismissing)) return {};
+  const opacity = st.isDismissing
+    ? 0
+    : Math.max(0.2, 1 - Math.abs(st.deltaX) / 220);
+  return {
+    transform: `translate3d(${st.deltaX}px, 0, 0)`,
+    opacity: String(opacity),
+    transition: st.isDragging
+      ? 'none'
+      : 'transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease',
+  };
+}
+
+// =========================================================================
+// 2. Native Mobile Horizontal Swipe Navigation for Bottom Navbar Tabs
+// =========================================================================
+const regularBottomNavRoutes = ['/', '/transactions', '/wallets', '/settings'];
+const adminBottomNavRoutes = [
+  '/control-panel?tab=users',
+  '/control-panel?tab=logs',
+  '/control-panel?tab=alerts',
+  '/database',
+  '/settings',
+];
+
+function getCurrentBottomNavIndex(): { list: string[]; index: number } {
+  if (authStore.isSuperAdmin) {
+    if (route.path === '/control-panel') {
+      const tab = (route.query.tab as string) || 'users';
+      const idx = adminBottomNavRoutes.indexOf(`/control-panel?tab=${tab}`);
+      return { list: adminBottomNavRoutes, index: idx };
+    }
+    return {
+      list: adminBottomNavRoutes,
+      index: adminBottomNavRoutes.indexOf(route.path),
+    };
+  }
+  return {
+    list: regularBottomNavRoutes,
+    index: regularBottomNavRoutes.indexOf(route.path),
+  };
+}
+
+function isInsideHorizontalScrollableOrInteractive(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const interactiveSelector =
+    'input, textarea, select, [contenteditable="true"], [data-no-page-swipe]';
+  if (target.closest(interactiveSelector)) return true;
+
+  let el: HTMLElement | null = target;
+  while (el && el !== mainScrollContainer.value && el !== document.body) {
+    if (el.scrollWidth > el.clientWidth + 6) {
+      const style = window.getComputedStyle(el);
+      if (
+        style.overflowX === 'auto' ||
+        style.overflowX === 'scroll' ||
+        el.classList.contains('overflow-x-auto')
+      ) {
+        return true;
+      }
+    }
+    el = el.parentElement;
+  }
+  return false;
+}
+
+let mainSwipeStartX = 0;
+let mainSwipeStartY = 0;
+let mainSwipeStartTime = 0;
+let mainSwipeTracking = false;
+let mainSwipeDirectionLocked: 'horizontal' | 'vertical' | null = null;
+
+function onMainContentTouchStart(e: TouchEvent) {
+  if (typeof window !== 'undefined' && window.innerWidth >= 768) {
+    mainSwipeTracking = false;
+    return;
+  }
+  if (
+    e.touches.length !== 1 ||
+    mobileDrawerOpen.value ||
+    accountMenuOpen.value ||
+    financeStore.quickModalOpen ||
+    notificationStore.changelogModalOpen ||
+    Boolean(notificationStore.proModalOptions) ||
+    Boolean(notificationStore.confirmDialog)
+  ) {
+    mainSwipeTracking = false;
+    return;
+  }
+
+  const touch = e.touches[0];
+  const screenW = window.innerWidth || 360;
+  // Ignore touches starting within 28px of left or right screen edges
+  // so we never conflict with OS/Browser native Back/Forward edge gestures
+  if (touch.clientX < 28 || touch.clientX > screenW - 28) {
+    mainSwipeTracking = false;
+    return;
+  }
+
+  if (isInsideHorizontalScrollableOrInteractive(e.target)) {
+    mainSwipeTracking = false;
+    return;
+  }
+
+  const { index } = getCurrentBottomNavIndex();
+  if (index === -1) {
+    mainSwipeTracking = false;
+    return;
+  }
+
+  mainSwipeStartX = touch.clientX;
+  mainSwipeStartY = touch.clientY;
+  mainSwipeStartTime = Date.now();
+  mainSwipeTracking = true;
+  mainSwipeDirectionLocked = null;
+}
+
+function onMainContentTouchMove(e: TouchEvent) {
+  if (!mainSwipeTracking || e.touches.length !== 1) return;
+  const touch = e.touches[0];
+  const dx = touch.clientX - mainSwipeStartX;
+  const dy = touch.clientY - mainSwipeStartY;
+
+  if (!mainSwipeDirectionLocked) {
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 12) {
+      mainSwipeDirectionLocked = 'vertical';
+      mainSwipeTracking = false;
+      return;
+    }
+    if (Math.abs(dx) > Math.abs(dy) * 1.35 && Math.abs(dx) > 16) {
+      mainSwipeDirectionLocked = 'horizontal';
+    }
+  }
+}
+
+function onMainContentTouchEnd(e: TouchEvent) {
+  if (!mainSwipeTracking) return;
+  mainSwipeTracking = false;
+  if (mainSwipeDirectionLocked !== 'horizontal' || e.changedTouches.length !== 1) return;
+
+  const touch = e.changedTouches[0];
+  const dx = touch.clientX - mainSwipeStartX;
+  const dy = touch.clientY - mainSwipeStartY;
+  const elapsed = Date.now() - mainSwipeStartTime;
+
+  if (elapsed > 650) return;
+  if (Math.abs(dx) < 64 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+
+  const { list, index } = getCurrentBottomNavIndex();
+  if (index === -1) return;
+
+  if (dx < 0 && index < list.length - 1) {
+    // Swiped Left -> Move to Next Tab on the right
+    pageTransitionName.value = 'page-slide-left';
+    router.push(list[index + 1]);
+  } else if (dx > 0 && index > 0) {
+    // Swiped Right -> Move to Previous Tab on the left
+    pageTransitionName.value = 'page-slide-right';
+    router.push(list[index - 1]);
+  }
+}
+
+// =========================================================================
+// 3. Swipe Left on Open Mobile Sidebar Drawer to Close It Smoothly
+// =========================================================================
+let drawerTouchStartX = 0;
+let drawerTouchStartY = 0;
+const drawerDragOffsetX = ref(0);
+const isDrawerDragging = ref(false);
+
+function onDrawerTouchStart(e: TouchEvent) {
+  if (e.touches.length !== 1) return;
+  drawerTouchStartX = e.touches[0].clientX;
+  drawerTouchStartY = e.touches[0].clientY;
+  drawerDragOffsetX.value = 0;
+  isDrawerDragging.value = true;
+}
+
+function onDrawerTouchMove(e: TouchEvent) {
+  if (!isDrawerDragging.value || e.touches.length !== 1) return;
+  const dx = e.touches[0].clientX - drawerTouchStartX;
+  const dy = e.touches[0].clientY - drawerTouchStartY;
+
+  if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 14 && drawerDragOffsetX.value === 0) {
+    isDrawerDragging.value = false;
+    return;
+  }
+  if (dx < 0) {
+    drawerDragOffsetX.value = dx;
+  }
+}
+
+function onDrawerTouchEnd() {
+  if (!isDrawerDragging.value) return;
+  isDrawerDragging.value = false;
+  if (drawerDragOffsetX.value <= -65) {
+    drawerDragOffsetX.value = 0;
+    mobileDrawerOpen.value = false;
+  } else {
+    drawerDragOffsetX.value = 0;
+  }
+}
 
 const userInitials = computed(() => {
   const name = (authStore.user?.displayName || authStore.user?.email || 'U').trim();
@@ -184,7 +462,24 @@ watch(
 
 watch(
   () => route.fullPath,
-  () => {
+  (newFullPath, oldFullPath) => {
+    if (oldFullPath && newFullPath !== oldFullPath) {
+      const list = authStore.isSuperAdmin ? adminBottomNavRoutes : regularBottomNavRoutes;
+      const normalizeNavPath = (fp: string) => {
+        if (authStore.isSuperAdmin && fp.startsWith('/control-panel')) {
+          const match = fp.match(/[?&]tab=([^&]+)/);
+          return `/control-panel?tab=${match ? match[1] : 'users'}`;
+        }
+        return fp.split('?')[0];
+      };
+      const oldIdx = list.indexOf(normalizeNavPath(oldFullPath));
+      const newIdx = list.indexOf(normalizeNavPath(newFullPath));
+      if (oldIdx !== -1 && newIdx !== -1 && oldIdx !== newIdx) {
+        pageTransitionName.value = newIdx > oldIdx ? 'page-slide-left' : 'page-slide-right';
+      } else {
+        pageTransitionName.value = 'page';
+      }
+    }
     mobileDrawerOpen.value = false;
     accountMenuOpen.value = false;
     if (mainScrollContainer.value) {
@@ -482,7 +777,7 @@ async function handleSubmitProPayment() {
       <div
         v-for="banner in notificationStore.banners"
         :key="banner.id"
-        class="pointer-events-auto rounded-2xl border p-4 shadow-2xl backdrop-blur-md flex items-start justify-between gap-3 transition-all"
+        class="pointer-events-auto rounded-2xl border p-4 shadow-2xl backdrop-blur-md flex items-start justify-between gap-3 transition-all touch-pan-y select-none"
         :class="
           banner.type === 'success'
             ? 'border-emerald-500/80 bg-emerald-950/95 text-white'
@@ -490,7 +785,12 @@ async function handleSubmitProPayment() {
             ? 'border-amber-500/80 bg-amber-950/95 text-white'
             : 'border-rose-500/80 bg-rose-950/95 text-white'
         "
+        :style="getBannerSwipeStyle(banner.id)"
         role="alert"
+        @touchstart.passive="onBannerTouchStart(banner.id, $event)"
+        @touchmove.passive="onBannerTouchMove(banner.id, $event)"
+        @touchend="onBannerTouchEnd(banner.id)"
+        @touchcancel="onBannerTouchEnd(banner.id)"
       >
         <div class="flex items-start gap-3 min-w-0">
           <div
@@ -1331,11 +1631,14 @@ async function handleSubmitProPayment() {
         <!-- Scrollable Main View Content -->
         <main
           ref="mainScrollContainer"
-          class="flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden pb-24 md:pb-8"
+          class="flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden pb-24 md:pb-8 touch-pan-y"
+          @touchstart.passive="onMainContentTouchStart"
+          @touchmove.passive="onMainContentTouchMove"
+          @touchend.passive="onMainContentTouchEnd"
         >
           <div class="w-full max-w-full min-w-0 px-3.5 sm:px-6 lg:px-8 py-4 sm:py-6 lg:py-7">
             <RouterView v-slot="{ Component }">
-              <Transition name="page" mode="out-in">
+              <Transition :name="pageTransitionName" mode="out-in">
                 <component :is="Component" />
               </Transition>
             </RouterView>
@@ -1351,7 +1654,19 @@ async function handleSubmitProPayment() {
           @click.self="mobileDrawerOpen = false"
         >
           <div
-            class="drawer-panel w-72 sm:w-80 max-w-[85vw] bg-white dark:bg-slate-900 h-dvh max-h-dvh overflow-y-auto p-5 flex flex-col justify-between gap-4 border-r border-slate-200 dark:border-slate-800 shadow-2xl"
+            class="drawer-panel w-72 sm:w-80 max-w-[85vw] bg-white dark:bg-slate-900 h-dvh max-h-dvh overflow-y-auto p-5 flex flex-col justify-between gap-4 border-r border-slate-200 dark:border-slate-800 shadow-2xl touch-pan-y"
+            :style="
+              drawerDragOffsetX < 0
+                ? {
+                    transform: `translate3d(${drawerDragOffsetX}px, 0, 0)`,
+                    transition: isDrawerDragging ? 'none' : 'transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                  }
+                : undefined
+            "
+            @touchstart.passive="onDrawerTouchStart"
+            @touchmove.passive="onDrawerTouchMove"
+            @touchend="onDrawerTouchEnd"
+            @touchcancel="onDrawerTouchEnd"
           >
             <div class="space-y-5">
               <!-- Dedicated App Logo Container + Language Toggle + Close Button at top of Slide-Out Sidebar -->
