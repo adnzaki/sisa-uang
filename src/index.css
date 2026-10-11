@@ -64,18 +64,49 @@
 /* Smooth UI Transitions (Modals, Drawers, Dropdowns, Pages, Dynamic Blocks) */
 /* ========================================================================= */
 
-/* Page Route Transition */
+/* Page Route Transition (Default & Directional Horizontal Swipe Transitions) */
+.page-enter-active,
+.page-leave-active,
 .page-fade-enter-active,
 .page-fade-leave-active {
   transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
+.page-enter-from,
 .page-fade-enter-from {
   opacity: 0;
   transform: translateY(6px);
 }
+.page-leave-to,
 .page-fade-leave-to {
   opacity: 0;
   transform: translateY(-4px);
+}
+
+/* Swipe Left (Navigating to Next Tab on the Right) */
+.page-slide-left-enter-active,
+.page-slide-left-leave-active,
+.page-slide-right-enter-active,
+.page-slide-right-leave-active {
+  transition: opacity 0.22s cubic-bezier(0.22, 1, 0.36, 1), transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform, opacity;
+}
+.page-slide-left-enter-from {
+  opacity: 0;
+  transform: translateX(32px);
+}
+.page-slide-left-leave-to {
+  opacity: 0;
+  transform: translateX(-32px);
+}
+
+/* Swipe Right (Navigating to Previous Tab on the Left) */
+.page-slide-right-enter-from {
+  opacity: 0;
+  transform: translateX(-32px);
+}
+.page-slide-right-leave-to {
+  opacity: 0;
+  transform: translateX(32px);
 }
 
 /* Modal Backdrop & Panel Transition */
