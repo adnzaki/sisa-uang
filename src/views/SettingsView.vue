@@ -840,14 +840,14 @@ function handleGoToAddAccount() {
         <div
           v-for="acc in authStore.savedAccounts"
           :key="acc.user.uid"
-          class="p-3.5 rounded-2xl border transition-all flex items-center justify-between gap-3"
+          class="p-3.5 rounded-2xl border transition-all flex flex-col justify-between gap-3"
           :class="
             acc.user.uid === authStore.user?.uid
               ? 'border-emerald-600 bg-emerald-50/40 dark:bg-emerald-950/30 ring-2 ring-emerald-500/15'
               : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 hover:border-emerald-500/50'
           "
         >
-          <div class="flex items-center gap-3 min-w-0 flex-1">
+          <div class="flex items-start gap-3 min-w-0 w-full">
             <div
               class="w-10 h-10 rounded-xl font-bold text-xs flex items-center justify-center shrink-0"
               :class="
@@ -882,27 +882,29 @@ function handleGoToAddAccount() {
               <div class="text-[10px] text-slate-400 dark:text-slate-500">
                 Terakhir digunakan: {{ formatSessionTimestamp(acc.lastUsedAt) }}
               </div>
-            </div>
-          </div>
 
-          <div class="flex items-center gap-1.5 shrink-0">
-            <button
-              v-if="acc.user.uid !== authStore.user?.uid"
-              type="button"
-              class="min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors cursor-pointer"
-              @click="handleSwitchSavedAccount(acc.user.uid)"
-            >
-              Beralih
-            </button>
-            <button
-              v-if="acc.user.uid !== authStore.user?.uid"
-              type="button"
-              class="min-h-[38px] px-2.5 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-xs font-semibold transition-colors cursor-pointer"
-              title="Hapus akun dari daftar multi-akun"
-              @click="authStore.removeSavedAccount(acc.user.uid)"
-            >
-              <Trash2 class="w-3.5 h-3.5" />
-            </button>
+              <div
+                v-if="acc.user.uid !== authStore.user?.uid"
+                class="pt-2 flex items-center gap-2"
+              >
+                <button
+                  type="button"
+                  class="flex-1 min-h-[38px] px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center transition-colors cursor-pointer"
+                  @click="handleSwitchSavedAccount(acc.user.uid)"
+                >
+                  Beralih
+                </button>
+                <button
+                  type="button"
+                  class="min-h-[38px] px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 hover:bg-rose-100/70 dark:hover:bg-rose-950/60 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                  title="Hapus akun dari daftar multi-akun"
+                  @click="authStore.removeSavedAccount(acc.user.uid)"
+                >
+                  <Trash2 class="w-3.5 h-3.5 shrink-0" />
+                  <span>Hapus</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
