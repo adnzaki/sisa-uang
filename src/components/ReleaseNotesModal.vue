@@ -11,13 +11,16 @@ import {
   Check,
   RefreshCw,
   KeyRound,
+  Users,
+  ShieldCheck,
+  Wallet,
 } from 'lucide-vue-next';
 import { useNotificationStore } from '../stores/notification';
 import { useAuthStore } from '../stores/auth';
 import AppModal from './AppModal.vue';
 
-const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0_rc_4_rev2';
-const RELEASE_VERSION = '1.0.0-rc.4';
+const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0_rc_5';
+const RELEASE_VERSION = '1.0.0-rc.5';
 const RELEASE_DATE = 'Oktober 2026';
 
 const notificationStore = useNotificationStore();
@@ -36,6 +39,36 @@ export interface ChangelogItem {
 }
 
 const changelogItems: ChangelogItem[] = [
+  {
+    id: 'multi-account-support',
+    category: 'features',
+    badge: 'MULTI-AKUN',
+    badgeColor: 'emerald',
+    title: 'Penambahan Dukungan Multi-Akun (Beralih Antar Akun Instan)',
+    summary:
+      'Simpan beberapa akun pengguna sekaligus pada perangkat Anda dan beralih antar akun secara instan melalui menu profil di pojok kanan atas, halaman Pengaturan, maupun halaman Login tanpa harus memasukkan ulang kata sandi.',
+    icon: Users,
+  },
+  {
+    id: 'device-session-management',
+    category: 'features',
+    badge: 'MANAJEMEN SESI & OTP',
+    badgeColor: 'rose',
+    title: 'Penambahan Fitur Manajemen Perangkat, Sesi Aktif & Otorisasi Perangkat Utama',
+    summary:
+      'Pantau seluruh perangkat yang masuk ke akun Anda secara real-time, tetapkan Perangkat Utama melalui verifikasi kode OTP 6 digit ke email terdaftar, serta hapus atau cabut (revoke) sesi login di perangkat lain dari jarak jauh.',
+    icon: ShieldCheck,
+  },
+  {
+    id: 'thousand-separator-money-inputs',
+    category: 'interface',
+    badge: 'FORMAT NOMINAL',
+    badgeColor: 'indigo',
+    title: 'Penyempurnaan Separator Ribuan Otomatis pada Seluruh Inputan Uang',
+    summary:
+      'Melengkapi pemformatan pemisah ribuan otomatis (titik/koma sesuai format mata uang IDR/USD) saat mengetik nominal uang di seluruh formulir, termasuk Saldo Awal Sumber Dana (Wallet), Transaksi, Kepemilikan Dana, dan Anggaran.',
+    icon: Wallet,
+  },
   {
     id: 'server-cache-sync-fix',
     category: 'performance',
@@ -180,7 +213,7 @@ watch(
             </span>
           </div>
           <p class="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-            Release Candidate 4 · {{ RELEASE_DATE }}
+            Release Candidate 5 · {{ RELEASE_DATE }}
           </p>
         </div>
       </div>
@@ -213,9 +246,9 @@ watch(
             </h3>
             <p class="text-xs sm:text-sm text-slate-300 leading-relaxed">
               Pembaruan versi <strong class="text-emerald-300 font-mono">{{ RELEASE_VERSION }}</strong> menghadirkan
-              perbaikan sistem cache dan integrasi penarikan data dari server, penambahan fitur reset password,
-              dukungan anggaran periodik bulanan, penyempurnaan tata letak layar tablet, peningkatan aksesibilitas
-              navigasi tombol TAB pada formulir, serta optimalisasi operasi database.
+              dukungan multi-akun untuk beralih antar akun dengan cepat, manajemen perangkat &amp; sesi aktif dengan
+              otorisasi Perangkat Utama berbasis OTP email, kelengkapan separator ribuan otomatis pada seluruh inputan
+              uang, serta seluruh peningkatan performa dan fitur dari rilis sebelumnya.
             </p>
           </div>
         </div>

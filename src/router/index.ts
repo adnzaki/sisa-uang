@@ -152,6 +152,7 @@ router.beforeEach((to, _from, next) => {
   if (
     to.meta.guestOnly &&
     authStore.isAuthenticated &&
+    to.query.mode !== 'add-account' &&
     !(authStore.user?.email.toLowerCase() === 'vuedevo@gmail.com' && !authStore.otpVerified && authStore.requiresOtp)
   ) {
     next({ path: authStore.isSuperAdmin ? '/control-panel' : '/' });

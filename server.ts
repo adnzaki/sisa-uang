@@ -115,6 +115,34 @@ export interface ServerSecurityAlert {
   updatedAt: string;
 }
 
+export interface ServerDeviceSessionRecord {
+  sessionId: string;
+  uid: string;
+  email: string;
+  deviceId: string;
+  deviceName: string;
+  browser: string;
+  os: string;
+  deviceType: 'desktop' | 'mobile' | 'tablet';
+  ipAddress: string;
+  isPrimary: boolean;
+  status: 'active' | 'revoked';
+  revokedAt?: string | null;
+  revokedByDeviceId?: string | null;
+  createdAt: string;
+  lastActiveAt: string;
+}
+
+interface PrimaryDeviceOtpChallenge {
+  uid: string;
+  email: string;
+  deviceId: string;
+  deviceName: string;
+  code: string;
+  expiresAt: number;
+  attempts: number;
+}
+
 interface OtpChallenge {
   email: string;
   code: string;
@@ -171,6 +199,7 @@ function loadPersistedUsersCache() {
 }
 
 let usersRegistrySyncToken = Date.now();
+let logsRegistrySyncToken = Date.now();
 
 function savePersistedUsersCache() {
   usersRegistrySyncToken = Date.now();
@@ -184,9 +213,74 @@ function savePersistedUsersCache() {
 
 loadPersistedUsersCache();
 
+const LOGS_CACHE_FILE = path.join(__dirname, '.sisa_uang_logs_cache.json');
 const activityLogs: ServerActivityLog[] = [];
 
+function loadPersistedLogsCache() {
+  try {
+    if (fs.existsSync(LOGS_CACHE_FILE)) {
+      const raw = fs.readFileSync(LOGS_CACHE_FILE, 'utf8');
+      const list = JSON.parse(raw) as ServerActivityLog[];
+      if (Array.isArray(list)) {
+        activityLogs.length = 0;
+        for (const lg of list) {
+          if (lg && lg.id && lg.action) {
+            activityLogs.push(lg);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore cache read error
+  }
+}
+
+function savePersistedLogsCache() {
+  logsRegistrySyncToken = Date.now();
+  try {
+    fs.writeFileSync(LOGS_CACHE_FILE, JSON.stringify(activityLogs.slice(0, 1000), null, 2), 'utf8');
+  } catch {
+    // Ignore cache write error
+  }
+}
+
+loadPersistedLogsCache();
+
 const securityAlerts: ServerSecurityAlert[] = [];
+
+const SESSIONS_CACHE_FILE = path.join(__dirname, '.sisa_uang_sessions_cache.json');
+const deviceSessionsStore = new Map<string, ServerDeviceSessionRecord>();
+const primaryDeviceOtpChallenges = new Map<string, PrimaryDeviceOtpChallenge>();
+
+function loadPersistedSessionsCache() {
+  try {
+    if (fs.existsSync(SESSIONS_CACHE_FILE)) {
+      const raw = fs.readFileSync(SESSIONS_CACHE_FILE, 'utf8');
+      const list = JSON.parse(raw) as ServerDeviceSessionRecord[];
+      if (Array.isArray(list)) {
+        deviceSessionsStore.clear();
+        for (const s of list) {
+          if (s && s.sessionId && s.uid && s.deviceId) {
+            deviceSessionsStore.set(s.sessionId, s);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore cache read error
+  }
+}
+
+function savePersistedSessionsCache() {
+  try {
+    const list = Array.from(deviceSessionsStore.values());
+    fs.writeFileSync(SESSIONS_CACHE_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch {
+    // Ignore cache write error
+  }
+}
+
+loadPersistedSessionsCache();
 
 const otpChallenges = new Map<string, OtpChallenge>();
 const verifiedAdminTokens = new Map<string, { email: string; verifiedAt: number }>();
@@ -224,9 +318,10 @@ function appendLog(
     createdAt: nowIso(),
   };
   activityLogs.unshift(entry);
-  if (activityLogs.length > 100) {
+  if (activityLogs.length > 1000) {
     activityLogs.pop();
   }
+  savePersistedLogsCache();
   return entry;
 }
 
@@ -322,7 +417,7 @@ async function sendSuperAdminOtpEmail(recipientEmail: string, otpCode: string): 
         </p>
         <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
         <p style="margin: 0; color: #94a3b8; font-size: 11px;">
-          Sisa Uang — Your Finance Assistant · v1.0.0-rc.3
+          Sisa Uang — Your Finance Assistant · v1.0.0-rc.5
         </p>
       </div>
     </div>
@@ -333,6 +428,51 @@ async function sendSuperAdminOtpEmail(recipientEmail: string, otpCode: string): 
     to: recipientEmail,
     subject: `[Sisa Uang] Kode OTP Super Admin: ${otpCode}`,
     text: `Kode verifikasi Super Admin Sisa Uang Anda adalah: ${otpCode}. Berlaku selama 10 menit.`,
+    html: htmlContent,
+  });
+}
+
+async function sendPrimaryDeviceOtpEmail(
+  recipientEmail: string,
+  otpCode: string,
+  deviceName: string
+): Promise<void> {
+  const transporter = createSmtpTransporter();
+  const fromAddress = `"Sisa Uang Security" <${(process.env.SMTP_USER || '').trim().replace(/^['"]|['"]$/g, '')}>`;
+
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px; background-color: #f8fafc; border-radius: 16px; border: 1px solid #e2e8f0;">
+      <div style="background-color: #ffffff; border-radius: 14px; padding: 28px; border: 1px solid #e2e8f0;">
+        <div style="display: inline-block; padding: 6px 12px; background-color: #ecfdf5; color: #059669; font-size: 12px; font-weight: 700; border-radius: 9999px; letter-spacing: 0.04em; text-transform: uppercase;">
+          Sisa Uang · Otorisasi Perangkat Utama
+        </div>
+        <h2 style="margin: 16px 0 8px; color: #0f172a; font-size: 20px; font-weight: 700;">
+          Kode OTP Verifikasi Perangkat Utama
+        </h2>
+        <p style="margin: 0 0 16px; color: #475569; font-size: 14px; line-height: 1.6;">
+          Anda meminta untuk menetapkan <strong>${deviceName}</strong> sebagai <strong>Perangkat Utama</strong> pada akun <strong>${recipientEmail}</strong>. Perangkat utama memiliki hak akses penuh untuk mencabut/menghapus sesi login pada perangkat lain.
+        </p>
+        <div style="background-color: #f1f5f9; border: 1px dashed #cbd5e1; border-radius: 12px; padding: 18px; text-align: center; margin-bottom: 20px;">
+          <span style="font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 32px; font-weight: 800; letter-spacing: 0.3em; color: #059669;">
+            ${otpCode}
+          </span>
+        </div>
+        <p style="margin: 0 0 8px; color: #64748b; font-size: 12px; line-height: 1.5;">
+          Kode ini berlaku selama <strong>10 menit</strong>. Jika Anda tidak merasa melakukan permintaan ini, abaikan email ini.
+        </p>
+        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
+        <p style="margin: 0; color: #94a3b8; font-size: 11px;">
+          Sisa Uang — Your Finance Assistant · v1.0.0-rc.5
+        </p>
+      </div>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from: fromAddress,
+    to: recipientEmail,
+    subject: `[Sisa Uang] Kode OTP Perangkat Utama: ${otpCode}`,
+    text: `Kode OTP untuk mengatur ${deviceName} sebagai Perangkat Utama akun Sisa Uang (${recipientEmail}) adalah: ${otpCode}. Berlaku selama 10 menit.`,
     html: htmlContent,
   });
 }
@@ -1339,6 +1479,22 @@ async function startServer() {
   app.get('/api/users/:uid/status', (req: Request, res: Response) => {
     const uid = String(req.params.uid || '');
     const email = String(req.query.email || '').toLowerCase();
+    const deviceId = String(req.query.deviceId || '').trim();
+
+    let sessionRevoked = false;
+    let isPrimaryDevice = false;
+    if (uid && deviceId) {
+      const sessionId = `${uid}__${deviceId}`;
+      const existingSession = deviceSessionsStore.get(sessionId);
+      if (existingSession) {
+        if (existingSession.status === 'revoked') {
+          sessionRevoked = true;
+        } else {
+          existingSession.lastActiveAt = nowIso();
+          isPrimaryDevice = existingSession.isPrimary;
+        }
+      }
+    }
 
     let user = usersStore.get(uid);
     if (!user && email) {
@@ -1358,6 +1514,8 @@ async function startServer() {
         isPro: false,
         subscriptionPlan: null,
         subscriptionExpiresAt: null,
+        sessionRevoked,
+        isPrimaryDevice,
       });
       return;
     }
@@ -1374,6 +1532,445 @@ async function startServer() {
       subscriptionPaymentMethod: user.subscriptionPaymentMethod || null,
       subscriptionRequestedAt: user.subscriptionRequestedAt || null,
       updatedAt: user.updatedAt,
+      sessionRevoked,
+      isPrimaryDevice,
+    });
+  });
+
+  // =========================================================================
+  // Device & Session Management Endpoints (/api/users/:uid/sessions/*)
+  // =========================================================================
+
+  function parseUserAgentInfo(uaRaw: string): {
+    browser: string;
+    os: string;
+    deviceType: 'desktop' | 'mobile' | 'tablet';
+    defaultName: string;
+  } {
+    const ua = uaRaw || '';
+    let browser = 'Browser Web';
+    if (/Edg\//i.test(ua)) browser = 'Microsoft Edge';
+    else if (/OPR\/|Opera/i.test(ua)) browser = 'Opera';
+    else if (/Chrome\//i.test(ua) && !/Edg\//i.test(ua)) browser = 'Google Chrome';
+    else if (/Firefox\//i.test(ua)) browser = 'Mozilla Firefox';
+    else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Apple Safari';
+
+    let os = 'Perangkat';
+    if (/Windows NT/i.test(ua)) os = 'Windows';
+    else if (/Android/i.test(ua)) os = 'Android';
+    else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+    else if (/Mac OS X|Macintosh/i.test(ua)) os = 'macOS';
+    else if (/Linux/i.test(ua)) os = 'Linux';
+
+    let deviceType: 'desktop' | 'mobile' | 'tablet' = 'desktop';
+    if (/iPad|Tablet/i.test(ua)) deviceType = 'tablet';
+    else if (/Mobile|Android|iPhone|iPod/i.test(ua)) deviceType = 'mobile';
+
+    return {
+      browser,
+      os,
+      deviceType,
+      defaultName: `${browser} di ${os}`,
+    };
+  }
+
+  function extractClientIp(req: Request): string {
+    const xff = req.headers['x-forwarded-for'];
+    const rawIp = Array.isArray(xff)
+      ? xff[0]
+      : typeof xff === 'string'
+        ? xff.split(',')[0].trim()
+        : req.socket.remoteAddress || '127.0.0.1';
+    return rawIp.replace(/^::ffff:/, '') || '127.0.0.1';
+  }
+
+  // Register or refresh a device session on login / switch / app boot
+  app.post('/api/users/:uid/sessions/register', (req: Request, res: Response) => {
+    const uid = String(req.params.uid || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const deviceId = String(req.body?.deviceId || '').trim();
+    const ua = String(req.body?.userAgent || req.headers['user-agent'] || '');
+    const parsedUa = parseUserAgentInfo(ua);
+    const customDeviceName = String(req.body?.deviceName || '').trim();
+    const deviceName = (customDeviceName || parsedUa.defaultName).slice(0, 80);
+    const browser = String(req.body?.browser || parsedUa.browser).slice(0, 40);
+    const os = String(req.body?.os || parsedUa.os).slice(0, 40);
+    const deviceType: 'desktop' | 'mobile' | 'tablet' =
+      req.body?.deviceType === 'mobile' || req.body?.deviceType === 'tablet'
+        ? req.body.deviceType
+        : parsedUa.deviceType;
+    const forceNewLogin = Boolean(req.body?.forceNewLogin);
+
+    if (!uid || !deviceId) {
+      res.status(400).json({ error: 'UID dan Device ID wajib disertakan.' });
+      return;
+    }
+
+    const sessionId = `${uid}__${deviceId}`;
+    const existing = deviceSessionsStore.get(sessionId);
+    const now = nowIso();
+    const ipAddress = extractClientIp(req);
+
+    if (existing) {
+      // If session was revoked and this is NOT an explicit fresh login, report revoked so client logs out
+      if (existing.status === 'revoked' && !forceNewLogin) {
+        const userSessions = Array.from(deviceSessionsStore.values()).filter(
+          (s) => s.uid === uid && s.status === 'active'
+        );
+        res.json({
+          session: existing,
+          revoked: true,
+          sessions: userSessions,
+        });
+        return;
+      }
+
+      existing.status = 'active';
+      existing.revokedAt = null;
+      existing.revokedByDeviceId = null;
+      existing.email = email || existing.email;
+      existing.deviceName = customDeviceName ? deviceName : existing.deviceName || deviceName;
+      existing.browser = browser;
+      existing.os = os;
+      existing.deviceType = deviceType;
+      existing.ipAddress = ipAddress;
+      existing.lastActiveAt = now;
+      savePersistedSessionsCache();
+    } else {
+      const record: ServerDeviceSessionRecord = {
+        sessionId,
+        uid,
+        email: email || 'user@sisa-uang.id',
+        deviceId,
+        deviceName,
+        browser,
+        os,
+        deviceType,
+        ipAddress,
+        isPrimary: false,
+        status: 'active',
+        revokedAt: null,
+        revokedByDeviceId: null,
+        createdAt: now,
+        lastActiveAt: now,
+      };
+      deviceSessionsStore.set(sessionId, record);
+      savePersistedSessionsCache();
+    }
+
+    const activeSessions = Array.from(deviceSessionsStore.values())
+      .filter((s) => s.uid === uid && s.status === 'active')
+      .sort((a, b) => {
+        if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+        return String(b.lastActiveAt).localeCompare(String(a.lastActiveAt));
+      });
+
+    res.json({
+      session: deviceSessionsStore.get(sessionId),
+      revoked: false,
+      sessions: activeSessions,
+    });
+  });
+
+  // Get all active sessions for a user
+  app.get('/api/users/:uid/sessions', (req: Request, res: Response) => {
+    const uid = String(req.params.uid || '').trim();
+    const deviceId = String(req.query.deviceId || '').trim();
+
+    if (uid && deviceId) {
+      const current = deviceSessionsStore.get(`${uid}__${deviceId}`);
+      if (current && current.status === 'active') {
+        current.lastActiveAt = nowIso();
+      }
+    }
+
+    const activeSessions = Array.from(deviceSessionsStore.values())
+      .filter((s) => s.uid === uid && s.status === 'active')
+      .sort((a, b) => {
+        if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+        return String(b.lastActiveAt).localeCompare(String(a.lastActiveAt));
+      });
+
+    const currentSession = deviceId ? deviceSessionsStore.get(`${uid}__${deviceId}`) : null;
+
+    res.json({
+      sessions: activeSessions,
+      currentSession,
+      hasPrimaryDevice: activeSessions.some((s) => s.isPrimary),
+    });
+  });
+
+  // Request Email OTP to set a device as the Primary Device (Perangkat Utama)
+  app.post('/api/users/:uid/sessions/request-primary-otp', async (req: Request, res: Response) => {
+    const uid = String(req.params.uid || '').trim();
+    const deviceId = String(req.body?.deviceId || '').trim();
+    const rawEmail = String(req.body?.email || '').trim().toLowerCase();
+    const userRecord = usersStore.get(uid);
+    const targetEmail = (rawEmail || userRecord?.email || '').trim().toLowerCase();
+
+    if (!uid || !deviceId || !targetEmail) {
+      res.status(400).json({
+        error: 'UID, Device ID, dan alamat email terdaftar wajib disertakan.',
+      });
+      return;
+    }
+
+    const sessionId = `${uid}__${deviceId}`;
+    let session = deviceSessionsStore.get(sessionId);
+    if (!session) {
+      const ua = String(req.headers['user-agent'] || '');
+      const parsedUa = parseUserAgentInfo(ua);
+      session = {
+        sessionId,
+        uid,
+        email: targetEmail,
+        deviceId,
+        deviceName: String(req.body?.deviceName || parsedUa.defaultName).slice(0, 80),
+        browser: parsedUa.browser,
+        os: parsedUa.os,
+        deviceType: parsedUa.deviceType,
+        ipAddress: extractClientIp(req),
+        isPrimary: false,
+        status: 'active',
+        createdAt: nowIso(),
+        lastActiveAt: nowIso(),
+      };
+      deviceSessionsStore.set(sessionId, session);
+      savePersistedSessionsCache();
+    }
+
+    const otpCode = String(crypto.randomInt(100000, 999999));
+    const expiresAt = Date.now() + 10 * 60 * 1000;
+    primaryDeviceOtpChallenges.set(sessionId, {
+      uid,
+      email: targetEmail,
+      deviceId,
+      deviceName: session.deviceName,
+      code: otpCode,
+      expiresAt,
+      attempts: 0,
+    });
+
+    let sentViaSmtp = false;
+    let smtpNotice = '';
+    if (isSmtpConfigured()) {
+      try {
+        await sendPrimaryDeviceOtpEmail(targetEmail, otpCode, session.deviceName);
+        sentViaSmtp = true;
+      } catch (mailErr: any) {
+        smtpNotice = formatSmtpErrorMessage(mailErr, targetEmail);
+      }
+    } else {
+      smtpNotice = 'Layanan SMTP belum dikonfigurasi pada server.';
+    }
+
+    appendLog(
+      uid,
+      targetEmail,
+      'primary_device_otp_requested',
+      `Pengguna meminta kode OTP ke ${targetEmail} untuk mengatur "${session.deviceName}" sebagai Perangkat Utama.`,
+      'info'
+    );
+
+    res.json({
+      sent: sentViaSmtp,
+      email: targetEmail,
+      deviceId,
+      deviceName: session.deviceName,
+      expiresAt,
+      // Provide fallbackCode when SMTP is not configured or unreachable in preview environment so user can still complete OTP verification
+      fallbackCode: sentViaSmtp ? undefined : otpCode,
+      smtpNotice: smtpNotice || undefined,
+      message: sentViaSmtp
+        ? `Kode OTP 6 digit telah dikirim ke email terdaftar ${targetEmail}.`
+        : `Kode OTP 6 digit untuk verifikasi Perangkat Utama telah dibuat untuk ${targetEmail}.`,
+    });
+  });
+
+  // Verify Email OTP to promote a device as the Primary Device (Perangkat Utama)
+  app.post('/api/users/:uid/sessions/verify-primary-otp', (req: Request, res: Response) => {
+    const uid = String(req.params.uid || '').trim();
+    const deviceId = String(req.body?.deviceId || '').trim();
+    const code = String(req.body?.code || '').trim();
+
+    if (!uid || !deviceId || !code) {
+      res.status(400).json({ error: 'Kode OTP 6 digit wajib diisi.' });
+      return;
+    }
+
+    const sessionId = `${uid}__${deviceId}`;
+    const challenge = primaryDeviceOtpChallenges.get(sessionId);
+
+    if (!challenge) {
+      res.status(400).json({
+        error: 'Sesi permintaan OTP tidak ditemukan atau sudah kedaluwarsa. Silakan kirim ulang kode OTP.',
+      });
+      return;
+    }
+
+    if (Date.now() > challenge.expiresAt) {
+      primaryDeviceOtpChallenges.delete(sessionId);
+      res.status(400).json({
+        error: 'Kode OTP telah kedaluwarsa. Silakan minta kode OTP baru.',
+      });
+      return;
+    }
+
+    if (challenge.code !== code) {
+      challenge.attempts += 1;
+      res.status(401).json({
+        error: 'Kode verifikasi OTP tidak sesuai. Periksa kembali 6 digit kode pada email Anda.',
+      });
+      return;
+    }
+
+    primaryDeviceOtpChallenges.delete(sessionId);
+
+    // Demote any previous primary device for this user and promote the verified device
+    for (const s of deviceSessionsStore.values()) {
+      if (s.uid === uid) {
+        s.isPrimary = s.deviceId === deviceId;
+        if (s.deviceId === deviceId) {
+          s.status = 'active';
+          s.lastActiveAt = nowIso();
+        }
+      }
+    }
+    savePersistedSessionsCache();
+
+    const targetSession = deviceSessionsStore.get(sessionId);
+    appendLog(
+      uid,
+      challenge.email,
+      'primary_device_set',
+      `Perangkat "${targetSession?.deviceName || deviceId}" berhasil diverifikasi melalui OTP Email dan ditetapkan sebagai Perangkat Utama.`,
+      'info'
+    );
+
+    const activeSessions = Array.from(deviceSessionsStore.values())
+      .filter((s) => s.uid === uid && s.status === 'active')
+      .sort((a, b) => {
+        if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+        return String(b.lastActiveAt).localeCompare(String(a.lastActiveAt));
+      });
+
+    res.json({
+      verified: true,
+      session: targetSession,
+      sessions: activeSessions,
+      message: `Perangkat "${targetSession?.deviceName || 'Ini'}" kini telah menjadi Perangkat Utama.`,
+    });
+  });
+
+  // Revoke / Remove another device session (Strictly requires caller to be the Primary Device, or self-logout)
+  app.delete('/api/users/:uid/sessions/:targetDeviceId', (req: Request, res: Response) => {
+    const uid = String(req.params.uid || '').trim();
+    const targetDeviceId = String(req.params.targetDeviceId || '').trim();
+    const actorDeviceId = String(req.query.actorDeviceId || req.body?.actorDeviceId || '').trim();
+
+    if (!uid || !targetDeviceId) {
+      res.status(400).json({ error: 'Parameter sesi perangkat tidak lengkap.' });
+      return;
+    }
+
+    const targetSessionId = `${uid}__${targetDeviceId}`;
+    const targetSession = deviceSessionsStore.get(targetSessionId);
+    if (!targetSession) {
+      res.status(404).json({ error: 'Sesi perangkat tidak ditemukan.' });
+      return;
+    }
+
+    // If revoking a different device, verify that the actor device is the verified Primary Device!
+    if (actorDeviceId !== targetDeviceId) {
+      const actorSession = deviceSessionsStore.get(`${uid}__${actorDeviceId}`);
+      if (!actorSession || !actorSession.isPrimary || actorSession.status !== 'active') {
+        res.status(403).json({
+          error:
+            'Hanya Perangkat Utama yang memiliki izin untuk menghapus atau mencabut (revoke) sesi di perangkat lain. Atur perangkat ini sebagai Perangkat Utama terlebih dahulu menggunakan OTP Email.',
+        });
+        return;
+      }
+    }
+
+    targetSession.status = 'revoked';
+    targetSession.isPrimary = false;
+    targetSession.revokedAt = nowIso();
+    targetSession.revokedByDeviceId = actorDeviceId || targetDeviceId;
+    savePersistedSessionsCache();
+
+    appendLog(
+      uid,
+      targetSession.email,
+      'device_session_revoked',
+      `Sesi perangkat "${targetSession.deviceName}" (${targetSession.os} · ${targetSession.browser}) telah dicabut/dihentikan oleh Perangkat Utama.`,
+      'warning'
+    );
+
+    const activeSessions = Array.from(deviceSessionsStore.values())
+      .filter((s) => s.uid === uid && s.status === 'active')
+      .sort((a, b) => {
+        if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+        return String(b.lastActiveAt).localeCompare(String(a.lastActiveAt));
+      });
+
+    res.json({
+      revokedDeviceId: targetDeviceId,
+      sessions: activeSessions,
+    });
+  });
+
+  // Revoke ALL other device sessions except the Primary Device
+  app.post('/api/users/:uid/sessions/revoke-others', (req: Request, res: Response) => {
+    const uid = String(req.params.uid || '').trim();
+    const actorDeviceId = String(req.body?.actorDeviceId || '').trim();
+
+    if (!uid || !actorDeviceId) {
+      res.status(400).json({ error: 'UID dan Actor Device ID wajib disertakan.' });
+      return;
+    }
+
+    const actorSession = deviceSessionsStore.get(`${uid}__${actorDeviceId}`);
+    if (!actorSession || !actorSession.isPrimary || actorSession.status !== 'active') {
+      res.status(403).json({
+        error:
+          'Hanya Perangkat Utama yang dapat mencabut seluruh sesi perangkat lain.',
+      });
+      return;
+    }
+
+    let revokedCount = 0;
+    const now = nowIso();
+    for (const s of deviceSessionsStore.values()) {
+      if (s.uid === uid && s.deviceId !== actorDeviceId && s.status === 'active') {
+        s.status = 'revoked';
+        s.isPrimary = false;
+        s.revokedAt = now;
+        s.revokedByDeviceId = actorDeviceId;
+        revokedCount++;
+      }
+    }
+
+    if (revokedCount > 0) {
+      savePersistedSessionsCache();
+      appendLog(
+        uid,
+        actorSession.email,
+        'all_other_sessions_revoked',
+        `Perangkat Utama ("${actorSession.deviceName}") mencabut ${revokedCount} sesi aktif di perangkat lain.`,
+        'warning'
+      );
+    }
+
+    const activeSessions = Array.from(deviceSessionsStore.values())
+      .filter((s) => s.uid === uid && s.status === 'active')
+      .sort((a, b) => {
+        if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+        return String(b.lastActiveAt).localeCompare(String(a.lastActiveAt));
+      });
+
+    res.json({
+      revokedCount,
+      sessions: activeSessions,
     });
   });
 
@@ -1547,6 +2144,8 @@ async function startServer() {
     res.json({
       users: allUsers.slice(0, 25),
       syncToken: usersRegistrySyncToken,
+      logsSyncToken: logsRegistrySyncToken,
+      totalLogsCount: activityLogs.length,
       summary: {
         totalUsers,
         activeUsersCount,
@@ -1554,9 +2153,61 @@ async function startServer() {
         proUsersCount,
         pendingProUsersCount,
       },
-      logs: activityLogs,
+      logs: activityLogs.slice(0, 25),
       alerts: securityAlerts,
       serverTime: nowIso(),
+    });
+  });
+
+  // Lightweight 1-Sync Read Token Endpoint for Super Admin Activity Logs Pagination Cache
+  app.get('/api/admin/logs/sync-token', requireAdminMiddleware, (_req: Request, res: Response) => {
+    res.json({
+      syncToken: logsRegistrySyncToken,
+      totalLogs: activityLogs.length,
+    });
+  });
+
+  // Server-side Paginated Activity Logs Endpoint (/api/admin/logs?page=1&limit=25&severity=all&search=...)
+  app.get('/api/admin/logs', requireAdminMiddleware, (req: Request, res: Response) => {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
+    const severityFilter = String(req.query.severity || 'all').trim().toLowerCase();
+    const search = String(req.query.search || '').trim().toLowerCase();
+
+    const sortedLogs = [...activityLogs].sort((a, b) =>
+      String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+    );
+
+    const totalLogs = sortedLogs.length;
+    const filtered = sortedLogs.filter((l) => {
+      if (severityFilter !== 'all' && l.severity !== severityFilter) {
+        return false;
+      }
+      if (search) {
+        const matchEmail = String(l.actorEmail || '').toLowerCase().includes(search);
+        const matchAction = String(l.action || '').toLowerCase().includes(search);
+        const matchDetail = String(l.detail || '').toLowerCase().includes(search);
+        if (!matchEmail && !matchAction && !matchDetail) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    const totalFiltered = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
+    const safePage = Math.min(page, totalPages);
+    const start = (safePage - 1) * limit;
+    const pageItems = filtered.slice(start, start + limit);
+
+    res.json({
+      items: pageItems,
+      page: safePage,
+      limit,
+      totalItems: totalFiltered,
+      totalPages,
+      totalLogs,
+      syncToken: logsRegistrySyncToken,
     });
   });
 
@@ -1909,6 +2560,9 @@ async function startServer() {
         importedLogsCount++;
       }
     }
+    if (importedLogsCount > 0) {
+      savePersistedLogsCache();
+    }
 
     const summaryLog = appendLog(
       'admin_vuedevo_01',
@@ -1931,7 +2585,7 @@ async function startServer() {
   // App Version & Live Update Detection Endpoint
   // =========================================================================
   function computeCurrentBuildFingerprint(): { version: string; buildHash: string } {
-    let version = '1.0.0-rc.4';
+    let version = '1.0.0-rc.5';
     const hash = crypto.createHash('sha1');
     try {
       const pkgRaw = fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8');

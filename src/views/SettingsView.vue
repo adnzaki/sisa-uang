@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { RouterLink } from 'vue-router';
+import { RouterLink, useRouter } from 'vue-router';
 import {
   Sun,
   Moon,
@@ -22,6 +22,14 @@ import {
   Sparkles,
   Crown,
   Clock,
+  Smartphone,
+  Laptop,
+  Tablet,
+  Mail,
+  UserPlus,
+  CheckCircle2,
+  LogOut,
+  ShieldAlert,
 } from 'lucide-vue-next';
 import { useThemeStore } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
@@ -30,6 +38,7 @@ import { usePWA } from '../composables/usePWA';
 import PWAInstallButton from '../components/PWAInstallButton.vue';
 
 const { t, locale } = useI18n();
+const router = useRouter();
 const themeStore = useThemeStore();
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
@@ -124,6 +133,118 @@ async function handleChangePassword() {
   } finally {
     isChangingPassword.value = false;
   }
+}
+
+// =========================================================================
+// Device & Session Management + Primary Device OTP + Multi-Account Switcher
+// =========================================================================
+const primaryOtpInput = ref('');
+const customDeviceLabel = ref(
+  typeof localStorage !== 'undefined'
+    ? localStorage.getItem('sisa_uang_custom_device_name_v1') || ''
+    : ''
+);
+
+onMounted(() => {
+  void authStore.fetchDeviceSessions();
+});
+
+watch(
+  () => authStore.user?.uid,
+  (uid) => {
+    if (uid) {
+      profileDisplayName.value = authStore.user?.displayName || '';
+      profileUsername.value =
+        authStore.user?.username || authStore.user?.email.split('@')[0] || '';
+      primaryOtpInput.value = '';
+      void authStore.fetchDeviceSessions();
+    }
+  }
+);
+
+function formatSessionTimestamp(iso?: string | null): string {
+  if (!iso) return '-';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function getAccountInitials(nameOrEmail?: string): string {
+  const clean = (nameOrEmail || 'U').trim();
+  const parts = clean.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  }
+  return clean.slice(0, 2).toUpperCase();
+}
+
+async function handleRequestPrimaryOtp() {
+  try {
+    primaryOtpInput.value = '';
+    await authStore.requestPrimaryDeviceOtp(customDeviceLabel.value);
+  } catch {
+    // Handled in store
+  }
+}
+
+async function handleVerifyPrimaryOtp() {
+  const ok = await authStore.verifyPrimaryDeviceOtp(primaryOtpInput.value);
+  if (ok) {
+    primaryOtpInput.value = '';
+  }
+}
+
+async function handleRevokeSession(targetDeviceId: string, deviceName: string) {
+  const confirmed = await notificationStore.requestConfirmation({
+    title: 'Cabut Sesi Perangkat?',
+    message: `Apakah Anda yakin ingin menghapus dan mencabut sesi login pada perangkat "${deviceName}"?`,
+    detail: `Perangkat tersebut akan langsung keluar dari akun ${authStore.user?.email}.`,
+    confirmLabel: 'Ya, Cabut Sesi',
+    cancelLabel: 'Batal',
+    variant: 'danger',
+  });
+  if (!confirmed) return;
+  await authStore.revokeDeviceSession(targetDeviceId);
+}
+
+async function handleRevokeAllOtherSessions() {
+  const otherCount = authStore.deviceSessions.filter(
+    (s) => s.deviceId !== authStore.currentDeviceId
+  ).length;
+  if (otherCount === 0) return;
+
+  const confirmed = await notificationStore.requestConfirmation({
+    title: 'Cabut Semua Sesi Perangkat Lain?',
+    message: `Apakah Anda yakin ingin mencabut ${otherCount} sesi aktif di perangkat lain?`,
+    detail: 'Hanya sesi pada Perangkat Utama ini yang akan tetap aktif.',
+    confirmLabel: 'Ya, Cabut Semua',
+    cancelLabel: 'Batal',
+    variant: 'danger',
+  });
+  if (!confirmed) return;
+  await authStore.revokeAllOtherDeviceSessions();
+}
+
+async function handleSwitchSavedAccount(targetUid: string) {
+  if (targetUid === authStore.user?.uid) return;
+  const ok = await authStore.switchAccount(targetUid);
+  if (ok) {
+    router.push(authStore.isSuperAdmin ? '/control-panel' : '/');
+  }
+}
+
+function handleGoToAddAccount() {
+  router.push({ path: '/auth', query: { mode: 'add-account' } });
 }
 </script>
 
@@ -688,6 +809,370 @@ async function handleChangePassword() {
           </button>
         </div>
       </form>
+    </section>
+
+    <!-- Multi-Account Switcher Section -->
+    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 gap-3">
+        <div class="flex items-start sm:items-center gap-2 min-w-0">
+          <UserPlus class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5 sm:mt-0" />
+          <div class="min-w-0">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Manajemen Multi-Akun (Pindah Akun Cepat)
+            </h2>
+            <p class="text-xs text-slate-500 dark:text-slate-400 break-words">
+              Simpan beberapa akun pengguna di perangkat ini dan beralih antar akun secara instan tanpa harus memasukkan ulang kata sandi.
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          class="min-h-[40px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0 cursor-pointer"
+          @click="handleGoToAddAccount"
+        >
+          <UserPlus class="w-3.5 h-3.5 shrink-0" />
+          <span>Tambah Akun Lain</span>
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div
+          v-for="acc in authStore.savedAccounts"
+          :key="acc.user.uid"
+          class="p-3.5 rounded-2xl border transition-all flex items-center justify-between gap-3"
+          :class="
+            acc.user.uid === authStore.user?.uid
+              ? 'border-emerald-600 bg-emerald-50/40 dark:bg-emerald-950/30 ring-2 ring-emerald-500/15'
+              : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 hover:border-emerald-500/50'
+          "
+        >
+          <div class="flex items-center gap-3 min-w-0 flex-1">
+            <div
+              class="w-10 h-10 rounded-xl font-bold text-xs flex items-center justify-center shrink-0"
+              :class="
+                acc.user.uid === authStore.user?.uid
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200'
+              "
+            >
+              {{ getAccountInitials(acc.user.displayName || acc.user.email) }}
+            </div>
+            <div class="min-w-0 flex-1 space-y-0.5">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                  {{ acc.user.displayName }}
+                </span>
+                <span
+                  v-if="acc.user.uid === authStore.user?.uid"
+                  class="px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-bold"
+                >
+                  SEDANG AKTIF
+                </span>
+                <span
+                  v-else-if="acc.user.role === 'admin'"
+                  class="px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-semibold"
+                >
+                  Admin
+                </span>
+              </div>
+              <div class="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate">
+                @{{ acc.user.username }} · {{ acc.user.email }}
+              </div>
+              <div class="text-[10px] text-slate-400 dark:text-slate-500">
+                Terakhir digunakan: {{ formatSessionTimestamp(acc.lastUsedAt) }}
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button
+              v-if="acc.user.uid !== authStore.user?.uid"
+              type="button"
+              class="min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors cursor-pointer"
+              @click="handleSwitchSavedAccount(acc.user.uid)"
+            >
+              Beralih
+            </button>
+            <button
+              v-if="acc.user.uid !== authStore.user?.uid"
+              type="button"
+              class="min-h-[38px] px-2.5 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-xs font-semibold transition-colors cursor-pointer"
+              title="Hapus akun dari daftar multi-akun"
+              @click="authStore.removeSavedAccount(acc.user.uid)"
+            >
+              <Trash2 class="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Device & Session Management Section (Primary Device with Email OTP & Remote Session Revocation) -->
+    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 gap-3">
+        <div class="flex items-start sm:items-center gap-2 min-w-0">
+          <Smartphone class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5 sm:mt-0" />
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Manajemen Perangkat &amp; Sesi Aktif
+              </h2>
+              <span
+                v-if="authStore.isCurrentDevicePrimary"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold"
+              >
+                <ShieldCheck class="w-3 h-3 shrink-0" />
+                <span>Perangkat Utama</span>
+              </span>
+            </div>
+            <p class="text-xs text-slate-500 dark:text-slate-400 break-words mt-0.5">
+              Pantau seluruh perangkat yang masuk ke akun ini. Hanya <strong>Perangkat Utama</strong> (diverifikasi melalui OTP ke email terdaftar <strong>{{ authStore.user?.email }}</strong>) yang dapat menghapus atau mencabut sesi di perangkat lain.
+            </p>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            :disabled="authStore.isSessionsLoading"
+            class="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-600 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+            @click="authStore.fetchDeviceSessions()"
+          >
+            <RefreshCw class="w-3.5 h-3.5" :class="authStore.isSessionsLoading ? 'animate-spin' : ''" />
+            <span>Segarkan Sesi</span>
+          </button>
+
+          <button
+            v-if="
+              authStore.isCurrentDevicePrimary &&
+              authStore.deviceSessions.filter((s) => s.deviceId !== authStore.currentDeviceId).length > 0
+            "
+            type="button"
+            :disabled="authStore.isSessionsLoading"
+            class="min-h-[38px] px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+            @click="handleRevokeAllOtherSessions"
+          >
+            <LogOut class="w-3.5 h-3.5 shrink-0" />
+            <span>Cabut Semua Sesi Lain</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Primary Device Status & Email OTP Verification Box -->
+      <div
+        v-if="!authStore.isCurrentDevicePrimary"
+        class="rounded-2xl border border-amber-200/90 dark:border-amber-900/60 bg-amber-50/70 dark:bg-amber-950/30 p-4 space-y-3.5"
+      >
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div class="space-y-2.5 min-w-0">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0">
+                <ShieldAlert class="w-5 h-5" />
+              </div>
+              <div class="text-xs sm:text-sm font-bold text-amber-950 dark:text-amber-200 leading-snug min-w-0">
+                Perangkat Ini Belum Diatur Sebagai Perangkat Utama
+              </div>
+            </div>
+            <p class="text-xs text-amber-900/90 dark:text-amber-200/80 leading-relaxed">
+              Untuk dapat menghapus atau mencabut (revoke) sesi login di perangkat lain, tetapkan perangkat ini sebagai <strong>Perangkat Utama</strong> terlebih dahulu melalui verifikasi kode OTP 6 digit ke email terdaftar (<strong>{{ authStore.user?.email }}</strong>).
+            </p>
+          </div>
+
+          <button
+            v-if="!authStore.primaryDeviceOtpPending"
+            type="button"
+            :disabled="authStore.isSessionsLoading"
+            class="min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-2 shrink-0 transition-colors cursor-pointer disabled:opacity-50"
+            @click="handleRequestPrimaryOtp"
+          >
+            <Mail class="w-4 h-4 shrink-0" />
+            <span>Kirim OTP Perangkat Utama</span>
+          </button>
+        </div>
+
+        <!-- Optional Custom Device Name Input before requesting OTP -->
+        <div v-if="!authStore.primaryDeviceOtpPending" class="pt-1 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          <input
+            v-model="customDeviceLabel"
+            type="text"
+            maxlength="60"
+            placeholder="Nama perangkat ini (opsional, misal: Laptop Kerja / iPhone Pribadi)"
+            class="flex-1 min-h-[42px] px-3.5 py-2 rounded-xl border border-amber-300/80 dark:border-amber-800/70 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+          />
+        </div>
+
+        <!-- Active OTP Verification Form for Primary Device -->
+        <div
+          v-if="authStore.primaryDeviceOtpPending"
+          class="rounded-xl border border-emerald-300 dark:border-emerald-800/70 bg-white dark:bg-slate-900 p-4 space-y-3"
+        >
+          <div class="flex items-start justify-between gap-2">
+            <div class="space-y-1">
+              <div class="text-xs font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                <Mail class="w-3.5 h-3.5 shrink-0" />
+                <span>Verifikasi Kode OTP Email ({{ authStore.primaryDeviceOtpPending.email }})</span>
+              </div>
+              <p class="text-[11px] text-slate-600 dark:text-slate-400">
+                Masukkan 6 digit kode OTP yang dikirim ke email terdaftar untuk menjadikan <strong>{{ authStore.primaryDeviceOtpPending.deviceName }}</strong> sebagai Perangkat Utama.
+              </p>
+              <div
+                v-if="authStore.primaryDeviceOtpPending.fallbackCode"
+                class="mt-1.5 inline-flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/70 border border-emerald-200 dark:border-emerald-800/60 text-xs text-emerald-800 dark:text-emerald-200"
+              >
+                <span>Kode OTP Verifikasi Email Anda:</span>
+                <strong class="font-mono text-sm tracking-widest text-emerald-700 dark:text-emerald-300 select-all">
+                  {{ authStore.primaryDeviceOtpPending.fallbackCode }}
+                </strong>
+              </div>
+            </div>
+          </div>
+
+          <form class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5" @submit.prevent="handleVerifyPrimaryOtp">
+            <input
+              v-model="primaryOtpInput"
+              type="text"
+              inputmode="numeric"
+              maxlength="6"
+              required
+              placeholder="Masukkan 6 Digit OTP (000000)"
+              class="flex-1 min-h-[44px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 font-mono text-sm font-bold tracking-[0.25em] text-center sm:text-left text-slate-900 dark:text-slate-100 placeholder:tracking-normal placeholder:font-sans focus:outline-none focus:border-emerald-600"
+            />
+            <div class="flex items-center gap-2">
+              <button
+                type="submit"
+                :disabled="authStore.isSessionsLoading || primaryOtpInput.trim().length < 6"
+                class="flex-1 sm:flex-initial min-h-[44px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                <CheckCircle2 class="w-4 h-4 shrink-0" />
+                <span>Verifikasi &amp; Jadikan Utama</span>
+              </button>
+              <button
+                type="button"
+                :disabled="authStore.isSessionsLoading"
+                class="min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                @click="handleRequestPrimaryOtp"
+              >
+                Kirim Ulang
+              </button>
+              <button
+                type="button"
+                class="min-h-[44px] px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                @click="authStore.cancelPrimaryDeviceOtp()"
+              >
+                Batal
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Active Primary Device Banner when current device IS already primary -->
+      <div
+        v-else
+        class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/30 p-3.5 sm:p-4 space-y-2"
+      >
+        <div class="flex items-center gap-3 min-w-0">
+          <div class="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+            <ShieldCheck class="w-5 h-5" />
+          </div>
+          <div class="text-xs sm:text-sm font-bold text-emerald-950 dark:text-emerald-200 leading-snug min-w-0">
+            Perangkat Ini Adalah Perangkat Utama Anda
+          </div>
+        </div>
+        <p class="text-[11px] sm:text-xs text-emerald-800/90 dark:text-emerald-300/80 leading-relaxed">
+          Terverifikasi melalui OTP Email. Anda memiliki otoritas penuh untuk menghapus atau mencabut sesi login pada perangkat lain di bawah ini.
+        </p>
+      </div>
+
+      <!-- Device Sessions List -->
+      <div class="space-y-2.5">
+        <div
+          v-for="sess in authStore.deviceSessions"
+          :key="sess.sessionId"
+          class="p-3.5 sm:p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+          :class="
+            sess.deviceId === authStore.currentDeviceId
+              ? 'border-emerald-500/70 bg-emerald-50/30 dark:bg-emerald-950/20'
+              : 'border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40'
+          "
+        >
+          <div class="flex items-start sm:items-center gap-3 min-w-0 flex-1">
+            <div
+              class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+              :class="
+                sess.isPrimary
+                  ? 'bg-emerald-600 text-white'
+                  : sess.deviceId === authStore.currentDeviceId
+                    ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300'
+                    : 'bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+              "
+            >
+              <Smartphone v-if="sess.deviceType === 'mobile'" class="w-5 h-5" />
+              <Tablet v-else-if="sess.deviceType === 'tablet'" class="w-5 h-5" />
+              <Laptop v-else class="w-5 h-5" />
+            </div>
+
+            <div class="min-w-0 flex-1 space-y-1">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
+                  {{ sess.deviceName }}
+                </span>
+                <span
+                  v-if="sess.deviceId === authStore.currentDeviceId"
+                  class="px-2 py-0.5 rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-[10px] font-bold"
+                >
+                  PERANGKAT INI
+                </span>
+                <span
+                  v-if="sess.isPrimary"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-bold"
+                >
+                  <ShieldCheck class="w-3 h-3 shrink-0" />
+                  <span>PERANGKAT UTAMA</span>
+                </span>
+              </div>
+
+              <div class="text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span>{{ sess.os }} · {{ sess.browser }}</span>
+                <span aria-hidden="true">•</span>
+                <span class="font-mono">IP: {{ sess.ipAddress }}</span>
+                <span aria-hidden="true">•</span>
+                <span>Aktif: {{ formatSessionTimestamp(sess.lastActiveAt) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Actions for Other Devices -->
+          <div class="flex items-center justify-end gap-2 shrink-0">
+            <template v-if="sess.deviceId !== authStore.currentDeviceId">
+              <button
+                v-if="authStore.isCurrentDevicePrimary"
+                type="button"
+                :disabled="authStore.isSessionsLoading"
+                class="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900/70 border border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                @click="handleRevokeSession(sess.deviceId, sess.deviceName)"
+              >
+                <Trash2 class="w-3.5 h-3.5 shrink-0" />
+                <span>Cabut / Hapus Sesi</span>
+              </button>
+              <span
+                v-else
+                class="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[11px] font-medium"
+                title="Atur perangkat ini sebagai Perangkat Utama untuk mencabut sesi perangkat lain"
+              >
+                Butuh Akses Perangkat Utama
+              </span>
+            </template>
+            <span
+              v-else
+              class="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 px-2"
+            >
+              Sesi Saat Ini
+            </span>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- Application Version Footer at the very bottom of Settings Page -->

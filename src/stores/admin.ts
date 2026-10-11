@@ -158,6 +158,42 @@ export const useAdminStore = defineStore('admin', () => {
   }
 
   const logs = ref<AdminActivityLogItem[]>([]);
+  const paginatedLogs = ref<AdminActivityLogItem[]>([]);
+  const logsPage = ref(1);
+  const logsPageSize = ref(25);
+  const logsTotalFiltered = ref(0);
+  const logsTotalPages = ref(1);
+  const totalLogsCount = ref(0);
+  const isLogsPageLoading = ref(false);
+
+  interface CachedAdminLogsPageEntry {
+    items: AdminActivityLogItem[];
+    page: number;
+    limit: number;
+    totalItems: number;
+    totalPages: number;
+    totalLogs: number;
+    syncToken: number;
+  }
+
+  let currentLogsFilterParams = {
+    page: 1,
+    limit: 25,
+    severity: 'all',
+    search: '',
+  };
+  let localAdminLogsSyncToken = 0;
+  const adminLogsPageCache = new Map<string, CachedAdminLogsPageEntry>();
+
+  function buildAdminLogsPageCacheKey(filter = currentLogsFilterParams): string {
+    const cleanSearch = String(filter.search || '').trim().toLowerCase();
+    return `pg:${filter.page}|lim:${filter.limit}|sev:${filter.severity}|q:${cleanSearch}`;
+  }
+
+  function invalidateAdminLogsPageCache() {
+    adminLogsPageCache.clear();
+  }
+
   const alerts = ref<AdminSecurityAlertItem[]>([]);
   const isLoading = ref(false);
   const error = ref<string | null>(null);
@@ -377,6 +413,98 @@ export const useAdminStore = defineStore('admin', () => {
     }
   }
 
+  async function fetchAdminLogsPage(
+    params?: {
+      page?: number;
+      limit?: number;
+      severity?: string;
+      search?: string;
+    },
+    silent = false,
+    forceServerReload = false
+  ) {
+    if (params) {
+      currentLogsFilterParams = {
+        page: params.page ?? currentLogsFilterParams.page,
+        limit: params.limit ?? currentLogsFilterParams.limit,
+        severity: params.severity ?? currentLogsFilterParams.severity,
+        search: params.search ?? currentLogsFilterParams.search,
+      };
+    }
+
+    const cacheKey = buildAdminLogsPageCacheKey(currentLogsFilterParams);
+    const cachedEntry = !forceServerReload ? adminLogsPageCache.get(cacheKey) : undefined;
+
+    if (cachedEntry && localAdminLogsSyncToken > 0) {
+      paginatedLogs.value = cachedEntry.items;
+      logsPage.value = cachedEntry.page;
+      logsPageSize.value = cachedEntry.limit;
+      logsTotalFiltered.value = cachedEntry.totalItems;
+      logsTotalPages.value = cachedEntry.totalPages;
+      totalLogsCount.value = Math.max(cachedEntry.totalLogs, cachedEntry.totalItems);
+      logs.value = paginatedLogs.value;
+
+      // Accompany user activity with lightweight 1-Sync Read Token check
+      try {
+        const { data: tokenData } = await apiClient.get('/admin/logs/sync-token');
+        const remoteToken = Number(tokenData?.syncToken) || 0;
+        if (remoteToken > 0 && remoteToken === cachedEntry.syncToken) {
+          return;
+        }
+        localAdminLogsSyncToken = remoteToken;
+        invalidateAdminLogsPageCache();
+      } catch {
+        return;
+      }
+    }
+
+    if (!silent) isLogsPageLoading.value = true;
+    try {
+      const { data } = await apiClient.get('/admin/logs', {
+        params: currentLogsFilterParams,
+      });
+      const remoteToken = Number(data.syncToken) || Date.now();
+      if (localAdminLogsSyncToken > 0 && remoteToken !== localAdminLogsSyncToken) {
+        invalidateAdminLogsPageCache();
+      }
+      localAdminLogsSyncToken = remoteToken;
+
+      paginatedLogs.value = data.items || [];
+      logsPage.value = Number(data.page) || 1;
+      logsPageSize.value = Number(data.limit) || 25;
+      logsTotalFiltered.value = Number(data.totalItems) || 0;
+      logsTotalPages.value = Number(data.totalPages) || 1;
+      totalLogsCount.value = Math.max(
+        Number(data.totalLogs) || 0,
+        logsTotalFiltered.value
+      );
+      logs.value = paginatedLogs.value;
+
+      const resolvedKey = buildAdminLogsPageCacheKey({
+        ...currentLogsFilterParams,
+        page: logsPage.value,
+      });
+      adminLogsPageCache.set(resolvedKey, {
+        items: paginatedLogs.value,
+        page: logsPage.value,
+        limit: logsPageSize.value,
+        totalItems: logsTotalFiltered.value,
+        totalPages: logsTotalPages.value,
+        totalLogs: totalLogsCount.value,
+        syncToken: remoteToken,
+      });
+    } catch (err: any) {
+      if (!silent) {
+        const msg =
+          err?.response?.data?.error ||
+          (err instanceof Error ? err.message : 'Gagal memuat halaman log sistem.');
+        useNotificationStore().notifyError('Gagal Memuat Log Sistem', err, msg);
+      }
+    } finally {
+      if (!silent) isLogsPageLoading.value = false;
+    }
+  }
+
   let firestoreUsersSyncedInSession = false;
 
   async function syncFirestoreUsersToServerRegistry(force = false): Promise<number> {
@@ -422,15 +550,16 @@ export const useAdminStore = defineStore('admin', () => {
       }
 
       const fbUsers: AdminUserItem[] = [];
+      const tsToIso = (val: any) => {
+        if (!val) return new Date().toISOString();
+        if (typeof val === 'string') return val;
+        if (typeof val.toDate === 'function') return val.toDate().toISOString();
+        if (typeof val.seconds === 'number') return new Date(val.seconds * 1000).toISOString();
+        return new Date().toISOString();
+      };
+
       snap.docs.forEach((d) => {
         const fbUser = d.data();
-        const tsToIso = (val: any) => {
-          if (!val) return new Date().toISOString();
-          if (typeof val === 'string') return val;
-          if (typeof val.toDate === 'function') return val.toDate().toISOString();
-          if (typeof val.seconds === 'number') return new Date(val.seconds * 1000).toISOString();
-          return new Date().toISOString();
-        };
         const markerInfo = proMarkersMap.get(d.id);
         const isPending =
           markerInfo?.status === 'pending' || fbUser.subscriptionStatus === 'pending';
@@ -465,18 +594,49 @@ export const useAdminStore = defineStore('admin', () => {
         });
       });
 
-      if (fbUsers.length > 0) {
+      // Also hydrate Firestore activity_logs into server registry if server has few logs
+      const fbLogs: AdminActivityLogItem[] = [];
+      if (totalLogsCount.value < 5 || force) {
+        try {
+          const logsSnap = await getDocs(collection(targetDb, 'activity_logs'));
+          logsSnap.docs.forEach((ld) => {
+            const lData = ld.data();
+            fbLogs.push({
+              id: ld.id,
+              actorUid: String(lData.actorUid || 'user'),
+              actorEmail: String(lData.actorEmail || 'user@sisa-uang.id'),
+              action: String(lData.action || 'activity'),
+              detail: String(lData.detail || ''),
+              severity:
+                lData.severity === 'critical'
+                  ? 'critical'
+                  : lData.severity === 'warning'
+                    ? 'warning'
+                    : 'info',
+              createdAt: tsToIso(lData.createdAt),
+            });
+          });
+        } catch {
+          // Ignore if activity_logs collection is empty or restricted
+        }
+      }
+
+      if (fbUsers.length > 0 || fbLogs.length > 0) {
         firestoreUsersSyncedInSession = true;
         try {
           await apiClient.post('/admin/import-sql-json', {
             users: fbUsers,
-            activity_logs: [],
+            activity_logs: fbLogs,
           });
         } catch {
           // Ignore
         }
         invalidateAdminUsersPageCache();
-        await fetchAdminUsersPage(undefined, true, true);
+        invalidateAdminLogsPageCache();
+        await Promise.all([
+          fetchAdminUsersPage(undefined, true, true),
+          fetchAdminLogsPage(undefined, true, true),
+        ]);
       }
       return fbUsers.length;
     } catch (err) {
@@ -495,9 +655,9 @@ export const useAdminStore = defineStore('admin', () => {
       const [overviewRes] = await Promise.all([
         apiClient.get('/admin/overview'),
         fetchAdminUsersPage(undefined, true, !silent),
+        fetchAdminLogsPage(undefined, true, !silent),
       ]);
       const data = overviewRes.data;
-      const incomingLogs: AdminActivityLogItem[] = data.logs || [];
       const incomingAlerts: AdminSecurityAlertItem[] = data.alerts || [];
 
       if (data.summary) {
@@ -509,8 +669,8 @@ export const useAdminStore = defineStore('admin', () => {
           pendingProUsersCount: Number(data.summary.pendingProUsersCount) || 0,
         };
       }
-      if (incomingLogs.length > 0 || logs.value.length === 0) {
-        logs.value = incomingLogs;
+      if (typeof data.totalLogsCount === 'number' && data.totalLogsCount > totalLogsCount.value) {
+        totalLogsCount.value = data.totalLogsCount;
       }
 
       // Check if any new open alert arrived for instant notification
@@ -584,6 +744,8 @@ export const useAdminStore = defineStore('admin', () => {
       }
       if (data.log) {
         logs.value.unshift(data.log);
+        invalidateAdminLogsPageCache();
+        void fetchAdminLogsPage(undefined, true, true);
       }
       invalidateAdminUsersPageCache();
       void fetchAdminUsersPage(undefined, true, true);
@@ -654,6 +816,8 @@ export const useAdminStore = defineStore('admin', () => {
       }
       if (data.log) {
         logs.value.unshift(data.log);
+        invalidateAdminLogsPageCache();
+        void fetchAdminLogsPage(undefined, true, true);
       }
       invalidateAdminUsersPageCache();
       void fetchAdminUsersPage(undefined, true, true);
@@ -753,6 +917,8 @@ export const useAdminStore = defineStore('admin', () => {
       users.value = users.value.filter((u) => u.uid !== targetUser.uid);
       if (data.log) {
         logs.value.unshift(data.log);
+        invalidateAdminLogsPageCache();
+        void fetchAdminLogsPage(undefined, true, true);
       }
       invalidateAdminUsersPageCache();
       void fetchAdminUsersPage(undefined, true, true);
@@ -789,6 +955,8 @@ export const useAdminStore = defineStore('admin', () => {
       }
       if (data.log) {
         logs.value.unshift(data.log);
+        invalidateAdminLogsPageCache();
+        void fetchAdminLogsPage(undefined, true, true);
       }
     } catch (err) {
       notify.notifyError('Gagal Memicu Simulasi Keamanan', err);
@@ -805,6 +973,8 @@ export const useAdminStore = defineStore('admin', () => {
       }
       if (data.log) {
         logs.value.unshift(data.log);
+        invalidateAdminLogsPageCache();
+        void fetchAdminLogsPage(undefined, true, true);
       }
       if (instantAlertNotification.value?.id === alertId) {
         instantAlertNotification.value = null;
@@ -1535,6 +1705,13 @@ export const useAdminStore = defineStore('admin', () => {
     isUsersPageLoading,
     totalUsersCount,
     logs,
+    paginatedLogs,
+    logsPage,
+    logsPageSize,
+    logsTotalFiltered,
+    logsTotalPages,
+    totalLogsCount,
+    isLogsPageLoading,
     alerts,
     isLoading,
     error,
@@ -1546,6 +1723,7 @@ export const useAdminStore = defineStore('admin', () => {
     pendingProUsersCount,
     fetchAdminOverview,
     fetchAdminUsersPage,
+    fetchAdminLogsPage,
     startRealtimeMonitoring,
     stopRealtimeMonitoring,
     toggleUserBlockStatus,

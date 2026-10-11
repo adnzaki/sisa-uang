@@ -49,6 +49,25 @@ const isOtpStep = computed(
       !authStore.otpVerified)
 );
 
+const isAddAccountMode = computed(() => route.query.mode === 'add-account');
+
+function getAccountInitials(nameOrEmail: string): string {
+  const clean = (nameOrEmail || 'U').trim();
+  const parts = clean.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  }
+  return clean.slice(0, 2).toUpperCase();
+}
+
+async function handleQuickSwitchFromAuth(targetUid: string) {
+  const ok = await authStore.switchAccount(targetUid);
+  if (ok) {
+    const defaultTarget = authStore.isSuperAdmin ? '/control-panel' : '/';
+    router.push(defaultTarget);
+  }
+}
+
 onMounted(() => {
   authStore.clearError();
 });
@@ -303,14 +322,33 @@ async function cancelOtpAndLogout() {
         v-else
         class="rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-8 shadow-xs space-y-6"
       >
+        <!-- Active Session Banner when opening /auth?mode=add-account -->
+        <div
+          v-if="isAddAccountMode && authStore.isAuthenticated && authStore.user"
+          class="rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/70 dark:bg-emerald-950/40 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+        >
+          <div class="text-xs text-emerald-900 dark:text-emerald-200">
+            <span class="font-bold">Mode Tambah Multi-Akun:</span> Masuk atau daftar akun lain untuk mempermudah berpindah akun tanpa perlu login ulang.
+          </div>
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shrink-0 transition-colors cursor-pointer"
+            @click="router.push(authStore.isSuperAdmin ? '/control-panel' : '/')"
+          >
+            Kembali ke {{ authStore.user.displayName }}
+          </button>
+        </div>
+
         <div class="space-y-1.5">
           <h1 class="text-2xl sm:text-3xl font-display italic text-slate-900 dark:text-slate-100">
             {{
-              activeTab === 'login'
-                ? t('auth.welcomeBack')
-                : activeTab === 'register'
-                  ? t('auth.createAccountTitle')
-                  : 'Reset Kata Sandi'
+              isAddAccountMode
+                ? 'Tambah Akun Pengguna'
+                : activeTab === 'login'
+                  ? t('auth.welcomeBack')
+                  : activeTab === 'register'
+                    ? t('auth.createAccountTitle')
+                    : 'Reset Kata Sandi'
             }}
           </h1>
           <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
@@ -320,6 +358,60 @@ async function cancelOtpAndLogout() {
                 : t('auth.subtitle')
             }}
           </p>
+        </div>
+
+        <!-- Saved Multi-Accounts Quick Switcher (shown if browser has saved accounts) -->
+        <div
+          v-if="authStore.savedAccounts.length > 0 && activeTab === 'login'"
+          class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 p-3.5 space-y-2.5"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Akun Tersimpan di Perangkat Ini ({{ authStore.savedAccounts.length }})
+            </span>
+            <span class="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
+              Klik untuk beralih cepat
+            </span>
+          </div>
+          <div class="space-y-1.5 max-h-44 overflow-y-auto pr-0.5">
+            <div
+              v-for="acc in authStore.savedAccounts"
+              :key="acc.user.uid"
+              class="flex items-center justify-between gap-2 p-2 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-500/60 transition-colors"
+            >
+              <button
+                type="button"
+                class="flex-1 min-w-0 flex items-center gap-2.5 text-left cursor-pointer"
+                @click="handleQuickSwitchFromAuth(acc.user.uid)"
+              >
+                <div class="w-8 h-8 rounded-lg bg-emerald-600 text-white text-xs font-bold flex items-center justify-center shrink-0">
+                  {{ getAccountInitials(acc.user.displayName || acc.user.email) }}
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="text-xs font-bold text-slate-900 dark:text-slate-100 truncate flex items-center gap-1.5">
+                    <span class="truncate">{{ acc.user.displayName }}</span>
+                    <span
+                      v-if="authStore.user?.uid === acc.user.uid && authStore.isAuthenticated"
+                      class="px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[9px] font-bold shrink-0"
+                    >
+                      AKTIF
+                    </span>
+                  </div>
+                  <div class="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate">
+                    @{{ acc.user.username }} · {{ acc.user.email }}
+                  </div>
+                </div>
+              </button>
+              <button
+                type="button"
+                class="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors shrink-0 cursor-pointer"
+                title="Hapus dari daftar akun tersimpan"
+                @click="authStore.removeSavedAccount(acc.user.uid)"
+              >
+                Hapus
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- Segmented Login / Register / Reset Password Switcher -->
