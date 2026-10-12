@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue';
+import { ref, onMounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { RouterLink, useRouter } from 'vue-router';
+import { RouterLink, useRouter, useRoute } from 'vue-router';
 import {
   Sun,
   Moon,
@@ -30,8 +30,14 @@ import {
   CheckCircle2,
   LogOut,
   ShieldAlert,
+  PenTool,
+  Plus,
+  ArrowUp,
+  ArrowDown,
+  MapPin,
+  FileCheck2,
 } from 'lucide-vue-next';
-import { useThemeStore } from '../stores/theme';
+import { useThemeStore, MAX_REPORT_SIGNERS } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
 import { usePWA } from '../composables/usePWA';
@@ -39,6 +45,7 @@ import PWAInstallButton from '../components/PWAInstallButton.vue';
 
 const { t, locale } = useI18n();
 const router = useRouter();
+const route = useRoute();
 const themeStore = useThemeStore();
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
@@ -146,12 +153,15 @@ const customDeviceLabel = ref(
 );
 
 onMounted(() => {
+  themeStore.loadReportSignatureConfig(authStore.user?.uid);
   void authStore.fetchDeviceSessions();
+  checkAndScrollToSection();
 });
 
 watch(
   () => authStore.user?.uid,
   (uid) => {
+    themeStore.loadReportSignatureConfig(uid);
     if (uid) {
       profileDisplayName.value = authStore.user?.displayName || '';
       profileUsername.value =
@@ -161,6 +171,90 @@ watch(
     }
   }
 );
+
+// =========================================================================
+// Report Signature Configuration (Up to 3 Signers + Per-Report Assignment)
+// =========================================================================
+const signatureSectionRef = ref<HTMLElement | null>(null);
+const highlightSignatureSection = ref(false);
+const newSignerName = ref('');
+const newSignerRole = ref('');
+
+const reportTypeDefinitions = [
+  {
+    id: 'kas_umum',
+    label: 'Laporan Kas Umum (Buku Kas Umum)',
+    shortLabel: 'Kas Umum',
+  },
+  {
+    id: 'rekonsiliasi_kas',
+    label: 'Laporan Rekonsiliasi Kas & Kepemilikan',
+    shortLabel: 'Rekonsiliasi Kas',
+  },
+  {
+    id: 'realisasi_anggaran',
+    label: 'Laporan Realisasi / Serapan Anggaran',
+    shortLabel: 'Realisasi Anggaran',
+  },
+];
+
+function checkAndScrollToSection() {
+  if (
+    route.query.section === 'report-signatures' ||
+    route.hash === '#report-signatures'
+  ) {
+    router.replace('/report-settings');
+  }
+}
+
+watch(
+  () => [route.query.section, route.hash],
+  () => {
+    checkAndScrollToSection();
+  }
+);
+
+function handleAddReportSigner() {
+  if (themeStore.reportSigners.length >= MAX_REPORT_SIGNERS) {
+    notificationStore.notifyError(
+      'Batas Maksimal Penandatangan',
+      `Anda hanya dapat menambahkan maksimal ${MAX_REPORT_SIGNERS} penandatangan laporan.`
+    );
+    return;
+  }
+
+  const cleanName = newSignerName.value.trim();
+  const cleanRole = newSignerRole.value.trim();
+  if (!cleanName && !cleanRole) {
+    notificationStore.notifyError(
+      'Data Penandatangan Kosong',
+      'Silakan isi minimal Nama Lengkap atau Jabatan Penandatangan terlebih dahulu.'
+    );
+    return;
+  }
+
+  const added = themeStore.addReportSigner(cleanName, cleanRole);
+  if (added) {
+    newSignerName.value = '';
+    newSignerRole.value = '';
+    notificationStore.notifySuccess(
+      'Penandatangan Ditambahkan',
+      `"${added.name || added.role}" telah ditambahkan ke daftar penandatangan laporan.`
+    );
+  }
+}
+
+function handleRemoveReportSigner(id: string, displayLabel: string) {
+  themeStore.removeReportSigner(id);
+  notificationStore.notifySuccess(
+    'Penandatangan Dihapus',
+    `Penandatangan "${displayLabel}" telah dihapus dari daftar.`
+  );
+}
+
+function isSignerEnabledForReport(reportType: string, signerId: string): boolean {
+  return (themeStore.reportActiveSignerIds[reportType] || []).includes(signerId);
+}
 
 function formatSessionTimestamp(iso?: string | null): string {
   if (!iso) return '-';
@@ -500,6 +594,34 @@ function handleGoToAddAccount() {
           </div>
         </button>
       </div>
+    </section>
+
+    <!-- Dedicated Report Settings Page Shortcut Card (for Regular Users) -->
+    <section
+      v-if="!authStore.isSuperAdmin"
+      class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/25 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 w-full min-w-0"
+    >
+      <div class="flex items-start gap-3 min-w-0">
+        <div class="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+          <PenTool class="w-5 h-5" />
+        </div>
+        <div class="space-y-1 min-w-0">
+          <h2 class="text-sm font-bold text-slate-900 dark:text-slate-100">
+            Pengaturan Laporan PDF (Kop Institusi, Judul &amp; Tanda Tangan)
+          </h2>
+          <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+            Pengaturan kop masjid/musholla/organisasi, kustomisasi judul laporan, serta daftar penandatangan kini tersedia di halaman khusus <strong>Pengaturan Laporan</strong>.
+          </p>
+        </div>
+      </div>
+
+      <RouterLink
+        to="/report-settings"
+        class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 shrink-0 transition-colors"
+      >
+        <FileCheck2 class="w-4 h-4 shrink-0" />
+        <span>Buka Pengaturan Laporan</span>
+      </RouterLink>
     </section>
 
     <!-- Account Profile Summary + DisplayName & Username Editor -->

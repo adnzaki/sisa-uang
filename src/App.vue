@@ -39,6 +39,7 @@ import {
   ArrowLeft,
   UserPlus,
   Trash2,
+  FileSpreadsheet,
 } from 'lucide-vue-next';
 import { useAuthStore } from './stores/auth';
 import { useThemeStore, ThemeMode } from './stores/theme';
@@ -482,7 +483,7 @@ watch(
     }
     mobileDrawerOpen.value = false;
     accountMenuOpen.value = false;
-    if (mainScrollContainer.value) {
+    if (mainScrollContainer.value && !route.query.section && !route.hash) {
       mainScrollContainer.value.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
     }
     if (route.query.denied === 'admin_only') {
@@ -514,6 +515,7 @@ const userNavItems = computed(() => [
   { name: t('nav.categories'), path: '/categories', icon: Tags },
   { name: t('nav.budgets'), path: '/budgets', icon: PieChart },
   { name: t('nav.analytics'), path: '/analytics', icon: BarChart3 },
+  { name: t('nav.reportSettings'), path: '/report-settings', icon: FileSpreadsheet },
   { name: t('nav.settings'), path: '/settings', icon: Settings },
 ]);
 

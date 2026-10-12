@@ -35,6 +35,7 @@ function closeModal() {
 const modalInstanceKey = `su_modal_${Math.random().toString(36).slice(2, 9)}`;
 let hasPushedHistoryState = false;
 let isClosedByBackButton = false;
+let openedAtFullPath = '';
 
 function handlePopState() {
   if (!isOpen.value) return;
@@ -87,6 +88,7 @@ watch(
     if (typeof window === 'undefined') return;
     if (val) {
       isClosedByBackButton = false;
+      openedAtFullPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
       try {
         const currentState = window.history.state || {};
         window.history.pushState(
@@ -101,13 +103,22 @@ watch(
     } else {
       if (hasPushedHistoryState && !isClosedByBackButton) {
         hasPushedHistoryState = false;
-        try {
-          if (window.history.state?.__sisaUangModalKey === modalInstanceKey) {
-            window.history.back();
+        const snapshotPath = openedAtFullPath;
+        // Defer history.back() to next microtask so if the modal was closed as part of a router.push(),
+        // we detect the route change and do NOT pop the new route back to the previous page!
+        setTimeout(() => {
+          try {
+            const currentFullPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+            if (
+              currentFullPath === snapshotPath &&
+              window.history.state?.__sisaUangModalKey === modalInstanceKey
+            ) {
+              window.history.back();
+            }
+          } catch {
+            // Ignore history errors
           }
-        } catch {
-          // Ignore history errors
-        }
+        }, 0);
       }
       isClosedByBackButton = false;
     }
@@ -123,16 +134,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('popstate', handlePopState);
   window.removeEventListener('keydown', handleKeydown);
-  if (hasPushedHistoryState && !isClosedByBackButton && typeof window !== 'undefined') {
-    hasPushedHistoryState = false;
-    try {
-      if (window.history.state?.__sisaUangModalKey === modalInstanceKey) {
-        window.history.back();
-      }
-    } catch {
-      // Ignore
-    }
-  }
+  hasPushedHistoryState = false;
 });
 </script>
 

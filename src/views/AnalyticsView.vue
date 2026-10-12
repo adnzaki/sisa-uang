@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 import {
   ChevronLeft,
   ChevronRight,
@@ -16,6 +17,9 @@ import {
   PieChart,
   Check,
   Crown,
+  PenTool,
+  Settings,
+  Calendar,
 } from 'lucide-vue-next';
 import {
   useFinanceStore,
@@ -40,10 +44,22 @@ import {
 export type AnalyticsRangeType = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom';
 
 const { locale } = useI18n();
+const router = useRouter();
 const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
+
+onMounted(() => {
+  themeStore.loadReportSignatureConfig(authStore.user?.uid);
+});
+
+watch(
+  () => authStore.user?.uid,
+  (uid) => {
+    themeStore.loadReportSignatureConfig(uid);
+  }
+);
 
 // Collapsible filter state ("SEMBUNYIKAN FILTER TANGGAL" / "TAMPILKAN FILTER TANGGAL")
 const showDateFilter = ref(true);
@@ -64,6 +80,7 @@ const pdfModalOpen = ref(false);
 const pdfReportType = ref<PdfReportType>('kas_umum');
 const pdfSelectedWallet = ref<string>('all');
 const pdfSelectedOwner = ref<string>('all');
+const pdfPrintDate = ref<string>(new Date().toISOString().slice(0, 10));
 const isGeneratingPdf = ref(false);
 
 const pdfReportTypeCards: {
@@ -109,10 +126,26 @@ function openPdfGeneratorModal() {
     });
     return;
   }
+  themeStore.loadReportSignatureConfig(authStore.user?.uid);
   pdfSelectedWallet.value = selectedWallet.value;
   pdfSelectedOwner.value = selectedOwner.value;
+  if (!pdfPrintDate.value) {
+    pdfPrintDate.value = toIsoDate(new Date());
+  }
   pdfModalOpen.value = true;
 }
+
+function goToSignatureSettings() {
+  router.push('/report-settings');
+}
+
+function isSignerSelectedForActivePdf(signerId: string): boolean {
+  return (themeStore.reportActiveSignerIds[pdfReportType.value] || []).includes(signerId);
+}
+
+const activeSignersForSelectedReport = computed(() =>
+  themeStore.getActiveSignersForReport(pdfReportType.value)
+);
 
 // Helper to format Date object as local YYYY-MM-DD
 function toIsoDate(d: Date): string {
@@ -627,6 +660,8 @@ const pdfPreviewSummary = computed(() =>
     userDisplayName: authStore.user?.displayName || 'Pengguna Sisa Uang',
     userEmail: authStore.user?.email || '-',
     locale: locale.value === 'en' ? 'en' : 'id',
+    letterhead: themeStore.reportLetterhead,
+    customReportTitle: themeStore.reportCustomTitles[pdfReportType.value],
   })
 );
 
@@ -660,6 +695,11 @@ function handleDownloadPdfReport() {
       userDisplayName: authStore.user?.displayName || 'Pengguna Sisa Uang',
       userEmail: authStore.user?.email || '-',
       locale: locale.value === 'en' ? 'en' : 'id',
+      printDateIso: pdfPrintDate.value || toIsoDate(new Date()),
+      signPlace: themeStore.reportSignPlace,
+      signers: activeSignersForSelectedReport.value,
+      letterhead: themeStore.reportLetterhead,
+      customReportTitle: themeStore.reportCustomTitles[pdfReportType.value],
     });
 
     pdfModalOpen.value = false;
@@ -688,21 +728,32 @@ function handleDownloadPdfReport() {
         </p>
       </div>
 
-      <button
-        type="button"
-        class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs cursor-pointer"
-        @click="openPdfGeneratorModal"
-      >
-        <FileDown class="w-4 h-4 shrink-0" />
-        <span>Generate Laporan PDF</span>
-        <span
-          v-if="!authStore.isProUser"
-          class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-extrabold uppercase tracking-wider"
+      <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+        <button
+          type="button"
+          class="w-full sm:w-auto min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+          @click="goToSignatureSettings"
         >
-          <Crown class="w-3 h-3 shrink-0" />
-          <span>PRO</span>
-        </span>
-      </button>
+          <Settings class="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>Pengaturan Laporan</span>
+        </button>
+
+        <button
+          type="button"
+          class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs cursor-pointer"
+          @click="openPdfGeneratorModal"
+        >
+          <FileDown class="w-4 h-4 shrink-0" />
+          <span>Generate Laporan PDF</span>
+          <span
+            v-if="!authStore.isProUser"
+            class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-extrabold uppercase tracking-wider"
+          >
+            <Crown class="w-3 h-3 shrink-0" />
+            <span>PRO</span>
+          </span>
+        </button>
+      </div>
     </div>
 
     <!-- =================================================================== -->
@@ -1187,7 +1238,154 @@ function handleDownloadPdfReport() {
           </div>
         </div>
 
-        <!-- 3. Ringkasan Pratinjau Data yang Akan Dicetak ke PDF -->
+        <!-- 3. Opsi Tanggal Cetak & Penandatangan Laporan -->
+        <div class="space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+              3. Tanggal Cetak, Kop &amp; Penandatangan
+            </label>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 hover:underline cursor-pointer"
+              @click="goToSignatureSettings"
+            >
+              <Settings class="w-3.5 h-3.5 shrink-0" />
+              <span>Buka Pengaturan Laporan (Kop, Judul &amp; Tanda Tangan)</span>
+            </button>
+          </div>
+
+          <!-- Tanggal Cetak Picker + Quick Presets -->
+          <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 p-3.5 space-y-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                <Calendar class="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>Tanggal Cetak Laporan</span>
+              </div>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  class="px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer"
+                  :class="
+                    pdfPrintDate === toIsoDate(new Date())
+                      ? 'border-emerald-600 bg-emerald-600 text-white'
+                      : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:border-emerald-500'
+                  "
+                  @click="pdfPrintDate = toIsoDate(new Date())"
+                >
+                  Hari Ini
+                </button>
+                <button
+                  type="button"
+                  class="px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer"
+                  :class="
+                    pdfPrintDate === activeBounds.endIso
+                      ? 'border-emerald-600 bg-emerald-600 text-white'
+                      : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:border-emerald-500'
+                  "
+                  @click="pdfPrintDate = activeBounds.endIso"
+                >
+                  Akhir Periode ({{ formatShortDisplayDate(activeBounds.endIso) }})
+                </button>
+              </div>
+            </div>
+
+            <MaterialDatePicker
+              v-model="pdfPrintDate"
+              label="Pilih Tanggal Cetak"
+            />
+          </div>
+
+          <!-- Penandatangan untuk Laporan Ini -->
+          <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 p-3.5 space-y-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                <PenTool class="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>
+                  Penandatangan untuk
+                  <strong class="text-slate-900 dark:text-slate-100">
+                    {{ pdfReportTypeCards.find((c) => c.id === pdfReportType)?.title }}
+                  </strong>
+                </span>
+              </div>
+              <span class="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold">
+                {{ activeSignersForSelectedReport.length }} / {{ themeStore.reportSigners.length }} Aktif
+              </span>
+            </div>
+
+            <!-- Empty state if user hasn't added any signers in Settings yet -->
+            <div
+              v-if="themeStore.reportSigners.length === 0"
+              class="rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/60 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+            >
+              <div class="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                Belum ada daftar penandatangan yang disimpan. Anda dapat menambahkan hingga <strong>3 penandatangan</strong> (nama &amp; jabatan) di menu Pengaturan.
+              </div>
+              <button
+                type="button"
+                class="min-h-[36px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 shrink-0 transition-colors cursor-pointer"
+                @click="goToSignatureSettings"
+              >
+                <PenTool class="w-3.5 h-3.5 shrink-0" />
+                <span>Tambah Penandatangan</span>
+              </button>
+            </div>
+
+            <!-- Signers Checklist for the currently selected PDF Report Type -->
+            <div v-else class="space-y-2">
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">
+                Pilih siapa saja yang akan menandatangani laporan ini (pilihan tersimpan otomatis per jenis laporan):
+              </p>
+              <div class="grid grid-cols-1 gap-2">
+                <button
+                  v-for="(signer, sIdx) in themeStore.reportSigners"
+                  :key="signer.id"
+                  type="button"
+                  class="w-full p-2.5 sm:p-3 rounded-xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer"
+                  :class="
+                    isSignerSelectedForActivePdf(signer.id)
+                      ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/35 ring-1 ring-emerald-500/20'
+                      : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700 opacity-75'
+                  "
+                  @click="themeStore.toggleSignerForReport(pdfReportType, signer.id)"
+                >
+                  <div class="flex items-center gap-2.5 min-w-0">
+                    <div
+                      class="w-6 h-6 rounded-lg text-[11px] font-bold flex items-center justify-center shrink-0 transition-colors"
+                      :class="
+                        isSignerSelectedForActivePdf(signer.id)
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                      "
+                    >
+                      {{ sIdx + 1 }}
+                    </div>
+                    <div class="min-w-0">
+                      <div class="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                        {{ signer.name || '(Nama belum diisi)' }}
+                      </div>
+                      <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                        {{ signer.role || 'Penandatangan' }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <span
+                    class="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase shrink-0"
+                    :class="
+                      isSignerSelectedForActivePdf(signer.id)
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                    "
+                  >
+                    {{ isSignerSelectedForActivePdf(signer.id) ? 'Ikut Tanda Tangan' : 'Tidak Disertakan' }}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. Ringkasan Pratinjau Data yang Akan Dicetak ke PDF -->
         <div class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/25 p-4 space-y-3">
           <div class="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-200/60 dark:border-emerald-900/50 pb-2.5">
             <div>

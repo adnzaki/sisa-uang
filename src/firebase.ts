@@ -1,14 +1,17 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import {
-  doc,
-  getDocFromServer,
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
+  setLogLevel,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 import { useNotificationStore } from './stores/notification';
+
+// Suppress noisy internal SDK connection timeout warnings ("Could not reach Cloud Firestore backend...")
+// while offline persistence seamlessly serves cached documents.
+setLogLevel('silent');
 
 // Blueprint validation constants (verbatim synced from firebase-blueprint.json)
 export const VALID_ID_PATTERN = /^[a-zA-Z0-9_\-]+$/;
@@ -40,7 +43,7 @@ const app = initializeApp(firebaseConfig);
 export const db = initializeFirestore(
   app,
   {
-    experimentalForceLongPolling: true,
+    experimentalAutoDetectLongPolling: true,
     localCache: persistentLocalCache({
       tabManager: persistentMultipleTabManager(),
     }),
@@ -102,6 +105,20 @@ export interface FirestoreErrorInfo {
   };
 }
 
+export function isFirestoreOfflineError(error: unknown): boolean {
+  const anyErr = error as any;
+  const code = String(anyErr?.code || '').toLowerCase();
+  const msg = String(anyErr?.message || error || '').toLowerCase();
+  return (
+    code === 'unavailable' ||
+    code.includes('unavailable') ||
+    msg.includes('could not reach cloud firestore backend') ||
+    msg.includes('client is offline') ||
+    msg.includes('offline mode') ||
+    msg.includes("backend didn't respond within")
+  );
+}
+
 export function handleFirestoreError(
   error: unknown,
   operationType: OperationType,
@@ -131,7 +148,9 @@ export function handleFirestoreError(
     operationType,
     path,
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  if (!isFirestoreOfflineError(error)) {
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+  }
   throw new Error(JSON.stringify(errInfo));
 }
 
