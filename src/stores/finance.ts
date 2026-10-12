@@ -113,6 +113,35 @@ export interface BudgetItem {
   updatedAt?: any;
 }
 
+export type AnnualBudgetMode = 'strict' | 'flexible';
+export type AnnualBudgetStatus = 'draft' | 'final';
+
+export interface AnnualBudgetMetaItem {
+  id: string;
+  year: string;
+  mode: AnnualBudgetMode;
+  status: AnnualBudgetStatus;
+  isRevisionSession: boolean;
+  revisionCount: number;
+  maxRevisions: number;
+  updatedAt?: any;
+}
+
+export interface AnnualCategoryBudgetItem {
+  id: string;
+  ownerId: string;
+  year: string;
+  category: string;
+  annualLimitAmount: number;
+  monthlyAllocations: Record<string, number>; // '01'..'12' -> nominal
+  allocatedTotal: number;
+  unallocatedAmount: number;
+  spentTotal: number;
+  monthlySpent: Record<string, number>;
+  firstAllocatedPeriod: string | null; // e.g., '2026-06'
+  allocatedMonthsList: string[]; // e.g., ['05', '07', '08']
+}
+
 export interface OwnershipSummaryItem {
   rawHolderName: string;
   displayHolderName: string;
@@ -129,6 +158,9 @@ export interface OwnershipSummaryItem {
 // In Firestore `sisa-uang`, user ID `ci4_user_46` (`default_category@sisa-uang.com`) holds the 45 global default categories
 export const DEFAULT_CATEGORY_OWNER_ID = 'ci4_user_46';
 export const BUDGET_PERIOD_MARKER_CATEGORY = '__PERIOD_MARKER__';
+export const ANNUAL_BUDGET_META_CATEGORY = '__ANNUAL_META__';
+export const ANNUAL_BUDGET_TOTAL_PREFIX = 'Y:';
+export const MAX_STRICT_ANNUAL_REVISIONS = 5;
 
 export const FALLBACK_EXPENSE_CATEGORIES = [
   'Makan dan Minum',
@@ -220,6 +252,7 @@ export const useFinanceStore = defineStore('finance', () => {
   const rawTransactions = ref<TransactionItem[]>([]);
   const budgets = ref<BudgetItem[]>([]);
   const budgetPeriods = ref<string[]>([]);
+  const annualBudgetMetaMap = ref<Record<string, AnnualBudgetMetaItem>>({});
 
   const userCategories = computed<CategoryItem[]>(() =>
     rawUserCategories.value
@@ -399,6 +432,10 @@ export const useFinanceStore = defineStore('finance', () => {
       localStorage.setItem(storageKey('user_categories', uid), JSON.stringify(rawUserCategories.value));
       localStorage.setItem(storageKey('budgets', uid), JSON.stringify(budgets.value));
       localStorage.setItem(storageKey('budget_periods', uid), JSON.stringify(budgetPeriods.value));
+      localStorage.setItem(
+        storageKey('annual_budget_meta', uid),
+        JSON.stringify(annualBudgetMetaMap.value)
+      );
       if (defaultCategories.value.length > 0) {
         localStorage.setItem('sisa_uang_real_default_categories', JSON.stringify(defaultCategories.value));
       }
@@ -1620,9 +1657,40 @@ export const useFinanceStore = defineStore('finance', () => {
       (b: BudgetItem) => !b.deleted && b.category !== '__SISAUANG_PRO__'
     );
 
+    const parsedMetaMap: Record<string, AnnualBudgetMetaItem> = {};
+    for (const b of allActiveBudgetDocs) {
+      if (b.category === ANNUAL_BUDGET_META_CATEGORY) {
+        const rawPeriod = String(b.period || '');
+        const match = rawPeriod.match(
+          /^YEAR:(\d{4}):(strict|flexible)(?::(draft|final)(?::(init|rev))?)?$/i
+        );
+        if (match) {
+          const yearStr = match[1];
+          const modeVal: AnnualBudgetMode =
+            match[2].toLowerCase() === 'strict' ? 'strict' : 'flexible';
+          const statusVal: AnnualBudgetStatus =
+            match[3] && match[3].toLowerCase() === 'final' ? 'final' : 'draft';
+          const isRevVal = match[4] ? match[4].toLowerCase() === 'rev' : false;
+          parsedMetaMap[yearStr] = {
+            id: b.id,
+            year: yearStr,
+            mode: modeVal,
+            status: statusVal,
+            isRevisionSession: statusVal === 'draft' ? isRevVal : false,
+            revisionCount: Math.max(0, Math.floor(Number(b.spentAmount || 0))),
+            maxRevisions: MAX_STRICT_ANNUAL_REVISIONS,
+            updatedAt: b.updatedAt,
+          };
+        }
+      }
+    }
+    annualBudgetMetaMap.value = parsedMetaMap;
+
     budgets.value = allActiveBudgetDocs.filter(
       (b: BudgetItem) =>
-        b.category !== BUDGET_PERIOD_MARKER_CATEGORY && b.category !== '__SISAUANG_PRO__'
+        b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
+        b.category !== ANNUAL_BUDGET_META_CATEGORY &&
+        b.category !== '__SISAUANG_PRO__'
     );
 
     const periodSet = new Set<string>(budgetPeriods.value);
@@ -1810,6 +1878,7 @@ export const useFinanceStore = defineStore('finance', () => {
     rawTransactions.value = [];
     budgets.value = [];
     budgetPeriods.value = [];
+    annualBudgetMetaMap.value = {};
 
     let hasRestoredLocalCache = false;
     let localSyncToken = 0;
@@ -1823,6 +1892,7 @@ export const useFinanceStore = defineStore('finance', () => {
       const savedTransactions = localStorage.getItem(storageKey('transactions', uid));
       const savedBudgets = localStorage.getItem(storageKey('budgets', uid));
       const savedBudgetPeriods = localStorage.getItem(storageKey('budget_periods', uid));
+      const savedAnnualMeta = localStorage.getItem(storageKey('annual_budget_meta', uid));
       const savedSyncToken =
         localStorage.getItem(storageKey('sync_token', uid)) ||
         localStorage.getItem(storageKey('last_sync_at', uid));
@@ -1841,12 +1911,16 @@ export const useFinanceStore = defineStore('finance', () => {
       if (savedUserCats) rawUserCategories.value = JSON.parse(savedUserCats);
       if (savedDefaultCats) defaultCategories.value = JSON.parse(savedDefaultCats);
       if (savedTransactions) rawTransactions.value = JSON.parse(savedTransactions);
+      if (savedAnnualMeta) {
+        annualBudgetMetaMap.value = JSON.parse(savedAnnualMeta);
+      }
       if (savedBudgets) {
         const parsedBudgets = JSON.parse(savedBudgets) as BudgetItem[];
         budgets.value = parsedBudgets.filter(
           (b) =>
             !b.deleted &&
             b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
+            b.category !== ANNUAL_BUDGET_META_CATEGORY &&
             b.category !== '__SISAUANG_PRO__'
         );
       }
@@ -2078,11 +2152,18 @@ export const useFinanceStore = defineStore('finance', () => {
     const cleanPeriod = targetPeriod || getCurrentMonthPeriod();
     const relevantBudgets =
       cleanPeriod === 'all'
-        ? budgets.value.filter((b) => !b.deleted && b.category !== BUDGET_PERIOD_MARKER_CATEGORY)
+        ? budgets.value.filter(
+            (b) =>
+              !b.deleted &&
+              b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
+              b.category !== ANNUAL_BUDGET_META_CATEGORY &&
+              !String(b.period || '').startsWith(ANNUAL_BUDGET_TOTAL_PREFIX)
+          )
         : budgets.value.filter(
             (b) =>
               !b.deleted &&
               b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
+              b.category !== ANNUAL_BUDGET_META_CATEGORY &&
               b.period === cleanPeriod
           );
 
@@ -3058,6 +3139,70 @@ export const useFinanceStore = defineStore('finance', () => {
       }
     }
 
+    // =========================================================================
+    // Annual Budget (Anggaran Setahun Penuh) Draft / Revision & Allocation Period Validation
+    // =========================================================================
+    if (payload.type === 'expense') {
+      const txYear = safeDate.slice(0, 4);
+      const txPeriod = safeDate.slice(0, 7);
+      const annualMeta = annualBudgetMetaMap.value[txYear];
+      if (annualMeta && /^\d{4}-\d{2}$/.test(txPeriod)) {
+        const annualCatItem = getAnnualCategoryBudgetsByYear(txYear).find(
+          (item) => item.category.trim().toLowerCase() === safeCategory.trim().toLowerCase()
+        );
+        if (annualCatItem) {
+          // 1. Jika anggaran tahunan masih berstatus DRAFT (awal maupun sedang proses perubahan anggaran),
+          //    tolak transaksi untuk kategori yang sudah dimasukkan ke dalam anggaran dan beri tahu pengguna untuk menyelesaikan sampai Final!
+          if (annualMeta.status !== 'final') {
+            const draftStageLabel = annualMeta.isRevisionSession
+              ? 'sedang dalam proses Perubahan Anggaran (Draft)'
+              : 'masih berstatus Draft (belum difinalisasi)';
+            const draftErr = `Anggaran Tahunan ${txYear} saat ini ${draftStageLabel}. Anda tidak dapat menambahkan transaksi untuk kategori "${safeCategory}" yang termasuk di dalam anggaran sebelum menyelesaikan proses penganggaran dan mengklik tombol "Finalisasi Anggaran" di menu Anggaran.`;
+            useNotificationStore().notifyError(
+              'Anggaran Tahunan Belum Difinalisasi (Status Draft)',
+              draftErr
+            );
+            throw new Error(draftErr);
+          }
+
+          // 2. Jika sudah Final, periksa periode alokasi minimum (Mode Ketat vs Mode Fleksibel)
+          if (annualCatItem.firstAllocatedPeriod && txPeriod < annualCatItem.firstAllocatedPeriod) {
+            const firstAllocLabel = formatPeriodLabel(annualCatItem.firstAllocatedPeriod);
+            const txPeriodLabel = formatPeriodLabel(txPeriod);
+            const allocMonthsLabels = annualCatItem.allocatedMonthsList
+              .map((mm) => formatPeriodLabel(`${txYear}-${mm}`))
+              .join(', ');
+
+            if (annualMeta.mode === 'strict') {
+              const remainingRevs = Math.max(
+                0,
+                MAX_STRICT_ANNUAL_REVISIONS - annualMeta.revisionCount
+              );
+              const strictErr = `Mode Ketat Anggaran Tahunan ${txYear}: Kategori "${safeCategory}" baru dialokasikan mulai periode ${firstAllocLabel} (${allocMonthsLabels}). Transaksi pada ${txPeriodLabel} tidak dapat disimpan karena belum masuk waktu alokasi anggaran. Silakan klik "Perubahan Anggaran" hingga Final terlebih dahulu di menu Anggaran (sisa kuota perubahan: ${remainingRevs}x dari ${MAX_STRICT_ANNUAL_REVISIONS}x).`;
+              useNotificationStore().notifyError(
+                'Belum Masuk Waktu Alokasi Anggaran (Mode Ketat)',
+                strictErr
+              );
+              throw new Error(strictErr);
+            } else {
+              // Mode Fleksibel: Tampilkan konfirmasi sebelum menyimpan
+              const confirmedEarlySpend = await useNotificationStore().requestConfirmation({
+                title: 'Konfirmasi Transaksi Sebelum Periode Alokasi',
+                message: `Kategori "${safeCategory}" pada Anggaran Tahunan ${txYear} (Mode Fleksibel) baru dialokasikan pada periode ${firstAllocLabel}, sedangkan transaksi ini dicatat pada ${txPeriodLabel}.`,
+                detail: `Bulan alokasi kategori ini: ${allocMonthsLabels}. Apakah Anda tetap ingin menyimpan transaksi pengeluaran Rp ${numericAmount.toLocaleString('id-ID')} ini sebelum masuk periode yang dialokasikan?`,
+                confirmLabel: 'Ya, Tetap Simpan Transaksi',
+                cancelLabel: 'Batal',
+                variant: 'warning',
+              });
+              if (!confirmedEarlySpend) {
+                throw new Error('Penyimpanan transaksi dibatalkan oleh pengguna.');
+              }
+            }
+          }
+        }
+      }
+    }
+
     await ensureFirestoreSessionForUser(uid);
     const txPath = `transactions/${id}`;
     const feeTxId = sanitizeId(`su_tx_fee_${Date.now()}`);
@@ -3335,6 +3480,66 @@ export const useFinanceStore = defineStore('finance', () => {
         addDelta(walletDeltas, newDestWallet.id, numericAmount);
       } else if (numericAdminFee > 0) {
         addDelta(walletDeltas, newWallet.id, -numericAdminFee);
+      }
+    }
+
+    // =========================================================================
+    // Annual Budget (Anggaran Setahun Penuh) Draft / Revision & Allocation Period Validation
+    // =========================================================================
+    if (payload.type === 'expense') {
+      const txYear = safeDate.slice(0, 4);
+      const txPeriod = safeDate.slice(0, 7);
+      const annualMeta = annualBudgetMetaMap.value[txYear];
+      if (annualMeta && /^\d{4}-\d{2}$/.test(txPeriod)) {
+        const annualCatItem = getAnnualCategoryBudgetsByYear(txYear).find(
+          (item) => item.category.trim().toLowerCase() === safeCategory.trim().toLowerCase()
+        );
+        if (annualCatItem) {
+          if (annualMeta.status !== 'final') {
+            const draftStageLabel = annualMeta.isRevisionSession
+              ? 'sedang dalam proses Perubahan Anggaran (Draft)'
+              : 'masih berstatus Draft (belum difinalisasi)';
+            const draftErr = `Anggaran Tahunan ${txYear} saat ini ${draftStageLabel}. Anda tidak dapat menyimpan perubahan transaksi untuk kategori "${safeCategory}" yang termasuk di dalam anggaran sebelum menyelesaikan proses penganggaran dan mengklik tombol "Finalisasi Anggaran" di menu Anggaran.`;
+            useNotificationStore().notifyError(
+              'Anggaran Tahunan Belum Difinalisasi (Status Draft)',
+              draftErr
+            );
+            throw new Error(draftErr);
+          }
+
+          if (annualCatItem.firstAllocatedPeriod && txPeriod < annualCatItem.firstAllocatedPeriod) {
+            const firstAllocLabel = formatPeriodLabel(annualCatItem.firstAllocatedPeriod);
+            const txPeriodLabel = formatPeriodLabel(txPeriod);
+            const allocMonthsLabels = annualCatItem.allocatedMonthsList
+              .map((mm) => formatPeriodLabel(`${txYear}-${mm}`))
+              .join(', ');
+
+            if (annualMeta.mode === 'strict') {
+              const remainingRevs = Math.max(
+                0,
+                MAX_STRICT_ANNUAL_REVISIONS - annualMeta.revisionCount
+              );
+              const strictErr = `Mode Ketat Anggaran Tahunan ${txYear}: Kategori "${safeCategory}" baru dialokasikan mulai periode ${firstAllocLabel} (${allocMonthsLabels}). Transaksi pada ${txPeriodLabel} tidak dapat disimpan karena belum masuk waktu alokasi anggaran. Silakan klik "Perubahan Anggaran" hingga Final terlebih dahulu di menu Anggaran (sisa kuota perubahan: ${remainingRevs}x dari ${MAX_STRICT_ANNUAL_REVISIONS}x).`;
+              useNotificationStore().notifyError(
+                'Belum Masuk Waktu Alokasi Anggaran (Mode Ketat)',
+                strictErr
+              );
+              throw new Error(strictErr);
+            } else {
+              const confirmedEarlySpend = await useNotificationStore().requestConfirmation({
+                title: 'Konfirmasi Transaksi Sebelum Periode Alokasi',
+                message: `Kategori "${safeCategory}" pada Anggaran Tahunan ${txYear} (Mode Fleksibel) baru dialokasikan pada periode ${firstAllocLabel}, sedangkan transaksi ini dicatat pada ${txPeriodLabel}.`,
+                detail: `Bulan alokasi kategori ini: ${allocMonthsLabels}. Apakah Anda tetap ingin menyimpan perubahan transaksi pengeluaran Rp ${numericAmount.toLocaleString('id-ID')} ini sebelum masuk periode yang dialokasikan?`,
+                confirmLabel: 'Ya, Tetap Simpan Transaksi',
+                cancelLabel: 'Batal',
+                variant: 'warning',
+              });
+              if (!confirmedEarlySpend) {
+                throw new Error('Perubahan transaksi dibatalkan oleh pengguna.');
+              }
+            }
+          }
+        }
       }
     }
 
@@ -3638,6 +3843,15 @@ export const useFinanceStore = defineStore('finance', () => {
       return false;
     }
 
+    const targetYearStr = cleanPeriod.slice(0, 4);
+    if (annualBudgetMetaMap.value[targetYearStr]) {
+      useNotificationStore().notifyError(
+        'Anggaran Setahun Penuh Sudah Aktif',
+        `Tahun ${targetYearStr} sudah menggunakan fitur Anggaran Setahun Penuh (Mapping Bulanan). Anda tidak dapat menambahkan periode anggaran bulanan terpisah pada tahun ${targetYearStr}.`
+      );
+      return false;
+    }
+
     const alreadyExists =
       budgetPeriods.value.includes(cleanPeriod) ||
       budgets.value.some((b) => !b.deleted && b.period === cleanPeriod);
@@ -3787,6 +4001,15 @@ export const useFinanceStore = defineStore('finance', () => {
       return false;
     }
 
+    const periodYear = period.slice(0, 4);
+    if (annualBudgetMetaMap.value[periodYear]) {
+      useNotificationStore().notifyError(
+        'Kelola Melalui Mapping Anggaran Tahunan',
+        `Tahun ${periodYear} menggunakan fitur Anggaran Setahun Penuh. Silakan kelola perubahan nominal dan pemetaan (mapping) bulanan kategori "${safeCategory}" melalui panel Anggaran Setahun Penuh.`
+      );
+      return false;
+    }
+
     // Match either by explicit editing ID or by (period + category)
     const existing = payload.id
       ? budgets.value.find((b) => b.id === payload.id)
@@ -3867,6 +4090,16 @@ export const useFinanceStore = defineStore('finance', () => {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
     const target = budgets.value.find((b) => b.id === budgetId);
+    if (target?.period) {
+      const targetYear = target.period.slice(0, 4);
+      if (/^\d{4}$/.test(targetYear) && annualBudgetMetaMap.value[targetYear]) {
+        useNotificationStore().notifyError(
+          'Kelola Melalui Mapping Anggaran Tahunan',
+          `Tahun ${targetYear} menggunakan fitur Anggaran Setahun Penuh. Untuk mengubah atau menghapus alokasi bulan ${formatPeriodLabel(target.period)}, gunakan menu Mapping Bulanan pada Anggaran Tahunan ${targetYear}.`
+        );
+        return false;
+      }
+    }
 
     const confirmed = await useNotificationStore().requestConfirmation({
       title: 'Konfirmasi Hapus Anggaran',
@@ -3912,6 +4145,806 @@ export const useFinanceStore = defineStore('finance', () => {
     return true;
   }
 
+  // =========================================================================
+  // Actions: Annual Full-Year Budget (Anggaran Setahun Penuh — Khusus PRO)
+  // =========================================================================
+
+  function hasAnnualBudgetForYear(yearInput: string | number): boolean {
+    const yStr = String(yearInput || '').trim();
+    return Boolean(annualBudgetMetaMap.value[yStr]);
+  }
+
+  function getAnnualBudgetMeta(yearInput: string | number): AnnualBudgetMetaItem | null {
+    const yStr = String(yearInput || '').trim();
+    return annualBudgetMetaMap.value[yStr] || null;
+  }
+
+  function getAnnualCategoryBudgetsByYear(yearInput: string | number): AnnualCategoryBudgetItem[] {
+    const yStr = String(yearInput || '').trim();
+    if (!/^\d{4}$/.test(yStr)) return [];
+    const annualPeriodKey = `${ANNUAL_BUDGET_TOTAL_PREFIX}${yStr}`;
+
+    const annualDocs = budgets.value.filter(
+      (b) =>
+        !b.deleted &&
+        b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
+        b.category !== ANNUAL_BUDGET_META_CATEGORY &&
+        b.period === annualPeriodKey
+    );
+
+    const monthKeys = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
+
+    return annualDocs
+      .map((annualDoc) => {
+        const catNorm = annualDoc.category.trim().toLowerCase();
+        const monthlyAllocations: Record<string, number> = {};
+        const monthlySpent: Record<string, number> = {};
+        const allocatedMonthsList: string[] = [];
+        let allocatedTotal = 0;
+        let spentTotal = 0;
+
+        for (const mm of monthKeys) {
+          const periodKey = `${yStr}-${mm}`;
+          const mBudget = budgets.value.find(
+            (b) =>
+              !b.deleted &&
+              b.period === periodKey &&
+              b.category.trim().toLowerCase() === catNorm
+          );
+          const allocAmt = mBudget ? Math.max(0, Number(mBudget.limitAmount || 0)) : 0;
+          monthlyAllocations[mm] = allocAmt;
+          if (allocAmt > 0) {
+            allocatedTotal += allocAmt;
+            allocatedMonthsList.push(mm);
+          }
+
+          const mSpent = transactions.value
+            .filter(
+              (tx) =>
+                tx.type === 'expense' &&
+                String(tx.date || '').slice(0, 7) === periodKey &&
+                tx.category.trim().toLowerCase() === catNorm
+            )
+            .reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+
+          monthlySpent[mm] = mSpent;
+          spentTotal += mSpent;
+        }
+
+        const annualLimit = Math.max(0, Number(annualDoc.limitAmount || 0));
+        const firstAllocatedPeriod =
+          allocatedMonthsList.length > 0 ? `${yStr}-${allocatedMonthsList[0]}` : null;
+
+        return {
+          id: annualDoc.id,
+          ownerId: annualDoc.ownerId,
+          year: yStr,
+          category: annualDoc.category,
+          annualLimitAmount: annualLimit,
+          monthlyAllocations,
+          allocatedTotal,
+          unallocatedAmount: annualLimit - allocatedTotal,
+          spentTotal,
+          monthlySpent,
+          firstAllocatedPeriod,
+          allocatedMonthsList,
+        };
+      })
+      .sort((a, b) => a.category.localeCompare(b.category));
+  }
+
+  function hashCategoryKey(rawCategory: string): string {
+    const clean = rawCategory
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 32);
+    return clean || 'cat';
+  }
+
+  function encodeAnnualMetaPeriod(
+    year: string,
+    mode: AnnualBudgetMode,
+    status: AnnualBudgetStatus,
+    isRevisionSession: boolean
+  ): string {
+    return `YEAR:${year}:${mode}:${status}:${status === 'draft' && isRevisionSession ? 'rev' : 'init'}`;
+  }
+
+  async function setupAnnualBudgetForYear(
+    yearInput: string | number,
+    mode: AnnualBudgetMode
+  ): Promise<boolean> {
+    const authStore = useAuthStore();
+    if (!authStore.isProUser) {
+      useNotificationStore().openProModal({
+        featureTitle: 'Anggaran Setahun Penuh (Mapping Bulanan)',
+        featureDescription:
+          'Fitur pembuatan anggaran satu tahun penuh sekaligus dengan pemetaan (mapping) alokasi bulanan serta opsi Mode Ketat / Fleksibel hanya tersedia untuk pelanggan SisaUang Pro.',
+        limitSummary: 'Fitur Eksklusif SisaUang Pro',
+      });
+      return false;
+    }
+
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
+    const yStr = String(yearInput || '').trim();
+    if (!/^\d{4}$/.test(yStr)) {
+      useNotificationStore().notifyError('Tahun Tidak Valid', 'Pilih tahun anggaran yang valid.');
+      return false;
+    }
+
+    const safeMode: AnnualBudgetMode = mode === 'strict' ? 'strict' : 'flexible';
+    const existingMeta = annualBudgetMetaMap.value[yStr];
+
+    if (
+      existingMeta &&
+      existingMeta.mode === 'strict' &&
+      existingMeta.revisionCount >= MAX_STRICT_ANNUAL_REVISIONS
+    ) {
+      useNotificationStore().notifyError(
+        'Batas Perubahan Mode Ketat Tercapai',
+        `Anggaran Tahunan ${yStr} berada dalam Mode Ketat dan telah mencapai batas maksimal perubahan (${MAX_STRICT_ANNUAL_REVISIONS}x).`
+      );
+      return false;
+    }
+
+    const metaDocId = existingMeta?.id || sanitizeId(`su_bgy_meta_${uid}_${yStr}`);
+    const nextRevisionCount = existingMeta ? existingMeta.revisionCount : 0;
+    const nextStatus: AnnualBudgetStatus = existingMeta ? existingMeta.status : 'draft';
+    const nextIsRevSession = existingMeta ? existingMeta.isRevisionSession : false;
+    const encodedPeriod = encodeAnnualMetaPeriod(
+      yStr,
+      safeMode,
+      nextStatus,
+      nextIsRevSession
+    );
+
+    await ensureFirestoreSessionForUser(uid);
+    try {
+      const batch = writeBatch(db);
+      if (existingMeta) {
+        batch.update(doc(db, 'budgets', metaDocId), {
+          category: ANNUAL_BUDGET_META_CATEGORY,
+          limitAmount: MAX_STRICT_ANNUAL_REVISIONS,
+          spentAmount: nextRevisionCount,
+          period: encodedPeriod,
+          deleted: false,
+          deletedAt: null,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        batch.set(doc(db, 'budgets', metaDocId), {
+          ownerId: uid,
+          category: ANNUAL_BUDGET_META_CATEGORY,
+          limitAmount: MAX_STRICT_ANNUAL_REVISIONS,
+          spentAmount: 0,
+          period: encodedPeriod,
+          deleted: false,
+          deletedAt: null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      // If existing monthly budgets exist in this year without an annual Y:YYYY total record yet,
+      // automatically synthesize their annual Y:YYYY total records so they immediately appear in the annual mapping!
+      const monthPrefix = `${yStr}-`;
+      const existingMonthlyInYear = budgets.value.filter(
+        (b) =>
+          !b.deleted &&
+          b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
+          b.category !== ANNUAL_BUDGET_META_CATEGORY &&
+          b.period.startsWith(monthPrefix)
+      );
+      const byCategory = new Map<string, { displayCat: string; sum: number }>();
+      for (const mb of existingMonthlyInYear) {
+        const key = mb.category.trim().toLowerCase();
+        const cur = byCategory.get(key) || { displayCat: mb.category, sum: 0 };
+        cur.sum += Math.max(0, Number(mb.limitAmount || 0));
+        byCategory.set(key, cur);
+      }
+
+      const annualPeriodKey = `${ANNUAL_BUDGET_TOTAL_PREFIX}${yStr}`;
+      const newAnnualItems: BudgetItem[] = [];
+
+      for (const [catLower, info] of byCategory.entries()) {
+        if (info.sum <= 0) continue;
+        const alreadyHasAnnualDoc = budgets.value.some(
+          (b) =>
+            !b.deleted &&
+            b.period === annualPeriodKey &&
+            b.category.trim().toLowerCase() === catLower
+        );
+        if (!alreadyHasAnnualDoc) {
+          const annualDocId = sanitizeId(
+            `su_bgy_cat_${uid}_${yStr}_${hashCategoryKey(info.displayCat)}`
+          );
+          batch.set(doc(db, 'budgets', annualDocId), {
+            ownerId: uid,
+            category: info.displayCat,
+            limitAmount: info.sum,
+            spentAmount: 0,
+            period: annualPeriodKey,
+            deleted: false,
+            deletedAt: null,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          newAnnualItems.push({
+            id: annualDocId,
+            ownerId: uid,
+            category: info.displayCat,
+            limitAmount: info.sum,
+            spentAmount: 0,
+            period: annualPeriodKey,
+            deleted: false,
+          });
+        }
+      }
+
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
+
+      for (const item of newAnnualItems) {
+        budgets.value.push(item);
+      }
+    } catch (err) {
+      useNotificationStore().notifyError('Gagal Mengaktifkan Anggaran Tahunan', err);
+      handleFirestoreError(
+        err,
+        existingMeta ? OperationType.UPDATE : OperationType.CREATE,
+        `budgets/${metaDocId}`
+      );
+    }
+
+    annualBudgetMetaMap.value = {
+      ...annualBudgetMetaMap.value,
+      [yStr]: {
+        id: metaDocId,
+        year: yStr,
+        mode: safeMode,
+        status: nextStatus,
+        isRevisionSession: nextIsRevSession,
+        revisionCount: nextRevisionCount,
+        maxRevisions: MAX_STRICT_ANNUAL_REVISIONS,
+      },
+    };
+    saveLocalSnapshot(uid, true);
+
+    await authStore.recordAuditLog(
+      'annual_budget_configured',
+      `Mengatur Anggaran Setahun Penuh Tahun ${yStr} dengan mode ${safeMode === 'strict' ? 'Ketat (Maks. 5x revisi)' : 'Fleksibel'} (Status: ${nextStatus === 'final' ? 'Final' : 'Draft'}).`,
+      'info'
+    );
+    useNotificationStore().notifySuccess(
+      existingMeta
+        ? 'Mode Anggaran Tahunan Diperbarui'
+        : 'Draft Anggaran Setahun Penuh Dibuat',
+      existingMeta
+        ? `Mode Anggaran Tahun ${yStr} diperbarui menjadi Mode ${safeMode === 'strict' ? 'Ketat (Maksimal 5x Perubahan)' : 'Fleksibel (Bebas Revisi)'}.`
+        : `Draft Anggaran Tahun ${yStr} berhasil dibuat dalam Mode ${safeMode === 'strict' ? 'Ketat (Maksimal 5x Perubahan)' : 'Fleksibel (Bebas Revisi)'}. Silakan tambahkan kategori beserta mapping bulanan, lalu klik "Finalisasi Anggaran" agar anggaran resmi aktif.`
+    );
+    return true;
+  }
+
+  /**
+   * Memulai proses Perubahan Anggaran (mengubah status dari Final -> Draft (Revisi)).
+   * Selama proses perubahan, anggaran berstatus Draft dan transaksi untuk kategori yang dianggarkan dikunci
+   * hingga pengguna mengklik "Finalisasi Anggaran" (baru dihitung 1x perubahan saat difinalisasi).
+   */
+  async function startAnnualBudgetRevision(yearInput: string | number): Promise<boolean> {
+    const authStore = useAuthStore();
+    if (!authStore.isProUser) {
+      useNotificationStore().openProModal({
+        featureTitle: 'Perubahan Anggaran Setahun Penuh',
+        featureDescription:
+          'Fitur perubahan dan pemetaan (mapping) anggaran tahunan hanya tersedia untuk pelanggan SisaUang Pro.',
+        limitSummary: 'Fitur Eksklusif SisaUang Pro',
+      });
+      return false;
+    }
+
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
+    const yStr = String(yearInput || '').trim();
+    const meta = annualBudgetMetaMap.value[yStr];
+    if (!meta) return false;
+
+    if (meta.status === 'draft') {
+      return true;
+    }
+
+    if (meta.mode === 'strict' && meta.revisionCount >= MAX_STRICT_ANNUAL_REVISIONS) {
+      useNotificationStore().notifyError(
+        'Kuota Perubahan Mode Ketat Habis',
+        `Anggaran Tahunan ${yStr} berada dalam Mode Ketat dan telah mencapai batas maksimal perubahan (${MAX_STRICT_ANNUAL_REVISIONS}x dari ${MAX_STRICT_ANNUAL_REVISIONS}x). Anggaran sudah terkunci permanen.`
+      );
+      return false;
+    }
+
+    const nextRevNumber = meta.revisionCount + 1;
+    const confirmed = await useNotificationStore().requestConfirmation({
+      title: `Aktifkan Perubahan Anggaran (${yStr})`,
+      message: `Apakah Anda yakin ingin membuka mode Perubahan Anggaran untuk Tahun ${yStr}?`,
+      detail:
+        meta.mode === 'strict'
+          ? `Selama proses perubahan berlangsung, Anggaran Tahun ${yStr} akan berstatus DRAFT dan Anda tidak dapat menambahkan transaksi untuk kategori yang ada di dalam anggaran hingga proses perubahan difinalisasi. Setelah klik Finalisasi nanti, perubahan ini akan dihitung sebagai Perubahan ke-${nextRevNumber} dari maksimal ${MAX_STRICT_ANNUAL_REVISIONS}x.`
+          : `Selama proses perubahan berlangsung, Anggaran Tahun ${yStr} akan berstatus DRAFT dan Anda tidak dapat menambahkan transaksi untuk kategori yang ada di dalam anggaran hingga Anda mengklik Finalisasi Anggaran.`,
+      confirmLabel: 'Ya, Mulai Perubahan Anggaran',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!confirmed) return false;
+
+    const encodedPeriod = encodeAnnualMetaPeriod(yStr, meta.mode, 'draft', true);
+
+    await ensureFirestoreSessionForUser(uid);
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'budgets', meta.id), {
+        category: ANNUAL_BUDGET_META_CATEGORY,
+        limitAmount: MAX_STRICT_ANNUAL_REVISIONS,
+        spentAmount: meta.revisionCount,
+        period: encodedPeriod,
+        deleted: false,
+        deletedAt: null,
+        updatedAt: serverTimestamp(),
+      });
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
+    } catch (err) {
+      useNotificationStore().notifyError('Gagal Mengaktifkan Perubahan Anggaran', err);
+      handleFirestoreError(err, OperationType.UPDATE, `budgets/${meta.id}`);
+    }
+
+    annualBudgetMetaMap.value = {
+      ...annualBudgetMetaMap.value,
+      [yStr]: {
+        ...meta,
+        status: 'draft',
+        isRevisionSession: true,
+      },
+    };
+    saveLocalSnapshot(uid, true);
+
+    await authStore.recordAuditLog(
+      'annual_budget_revision_started',
+      `Mengaktifkan mode Perubahan Anggaran (Draft) untuk Tahun ${yStr}.`,
+      'info'
+    );
+    useNotificationStore().notifySuccess(
+      'Mode Perubahan Anggaran Aktif (Draft)',
+      `Anggaran Tahun ${yStr} kini berstatus Draft. Silakan ubah atau tambahkan kategori beserta mapping bulanannya, lalu klik "Finalisasi Anggaran" untuk mengesahkan perubahan.`
+    );
+    return true;
+  }
+
+  /**
+   * Finalisasi Anggaran Setahun Penuh (mengubah status dari Draft -> Final).
+   * Apabila status Draft berasal dari proses Perubahan Anggaran (`isRevisionSession === true`),
+   * maka `revisionCount` akan ditambah 1x saat difinalisasi.
+   */
+  async function finalizeAnnualBudgetForYear(yearInput: string | number): Promise<boolean> {
+    const authStore = useAuthStore();
+    if (!authStore.isProUser) {
+      useNotificationStore().openProModal({
+        featureTitle: 'Finalisasi Anggaran Setahun Penuh',
+        featureDescription:
+          'Fitur finalisasi anggaran tahunan hanya tersedia untuk pelanggan SisaUang Pro.',
+        limitSummary: 'Fitur Eksklusif SisaUang Pro',
+      });
+      return false;
+    }
+
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
+    const yStr = String(yearInput || '').trim();
+    const meta = annualBudgetMetaMap.value[yStr];
+    if (!meta) return false;
+
+    if (meta.status === 'final') {
+      return true;
+    }
+
+    const annualCats = getAnnualCategoryBudgetsByYear(yStr);
+    if (annualCats.length === 0) {
+      useNotificationStore().notifyError(
+        'Belum Ada Kategori Anggaran',
+        `Tambahkan minimal 1 kategori beserta mapping bulanan pada Anggaran Tahun ${yStr} sebelum melakukan finalisasi anggaran.`
+      );
+      return false;
+    }
+
+    const unmappedCat = annualCats.find((c) => c.unallocatedAmount !== 0);
+    if (unmappedCat) {
+      useNotificationStore().notifyError(
+        'Masih Ada Selisih Mapping Bulanan',
+        `Kategori "${unmappedCat.category}" masih memiliki selisih penganggaran Rp ${Math.abs(unmappedCat.unallocatedAmount).toLocaleString('id-ID')}. Pastikan seluruh kategori memiliki selisih Rp 0 sebelum melakukan finalisasi.`
+      );
+      return false;
+    }
+
+    const isRev = meta.isRevisionSession;
+    const nextRevisionCount = isRev ? meta.revisionCount + 1 : meta.revisionCount;
+
+    if (isRev && meta.mode === 'strict' && nextRevisionCount > MAX_STRICT_ANNUAL_REVISIONS) {
+      useNotificationStore().notifyError(
+        'Kuota Perubahan Mode Ketat Habis',
+        `Anggaran Tahunan ${yStr} telah mencapai batas maksimal perubahan (${MAX_STRICT_ANNUAL_REVISIONS}x).`
+      );
+      return false;
+    }
+
+    const confirmed = await useNotificationStore().requestConfirmation({
+      title: isRev
+        ? `Finalisasi Perubahan Anggaran (${yStr})`
+        : `Finalisasi Anggaran Tahunan (${yStr})`,
+      message: isRev
+        ? `Apakah Anda yakin ingin memfinalisasi perubahan Anggaran Tahun ${yStr}?`
+        : `Apakah Anda yakin ingin memfinalisasi Anggaran Tahun ${yStr} (${annualCats.length} kategori)?`,
+      detail: isRev
+        ? meta.mode === 'strict'
+          ? `Setelah difinalisasi, perubahan ini resmi dihitung 1x perubahan (menjadi ${nextRevisionCount}/${MAX_STRICT_ANNUAL_REVISIONS}x di Mode Ketat) dan anggaran kembali dapat digunakan untuk pencatatan transaksi.`
+          : `Setelah difinalisasi, perubahan ini resmi tercatat (Perubahan ke-${nextRevisionCount}) dan anggaran kembali dapat digunakan untuk pencatatan transaksi.`
+        : `Setelah difinalisasi, Anggaran Tahun ${yStr} resmi berstatus FINAL dan aktif digunakan. Untuk mengubah anggaran di kemudian hari, Anda harus mengklik tombol "Perubahan Anggaran" terlebih dahulu.`,
+      confirmLabel: isRev ? 'Ya, Finalisasi Perubahan' : 'Ya, Finalisasi Anggaran',
+      cancelLabel: 'Batal',
+      variant: 'info',
+    });
+    if (!confirmed) return false;
+
+    const encodedPeriod = encodeAnnualMetaPeriod(yStr, meta.mode, 'final', false);
+
+    await ensureFirestoreSessionForUser(uid);
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'budgets', meta.id), {
+        category: ANNUAL_BUDGET_META_CATEGORY,
+        limitAmount: MAX_STRICT_ANNUAL_REVISIONS,
+        spentAmount: nextRevisionCount,
+        period: encodedPeriod,
+        deleted: false,
+        deletedAt: null,
+        updatedAt: serverTimestamp(),
+      });
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
+    } catch (err) {
+      useNotificationStore().notifyError('Gagal Memfinalisasi Anggaran Tahunan', err);
+      handleFirestoreError(err, OperationType.UPDATE, `budgets/${meta.id}`);
+    }
+
+    annualBudgetMetaMap.value = {
+      ...annualBudgetMetaMap.value,
+      [yStr]: {
+        ...meta,
+        status: 'final',
+        isRevisionSession: false,
+        revisionCount: nextRevisionCount,
+      },
+    };
+    saveLocalSnapshot(uid, true);
+
+    await authStore.recordAuditLog(
+      'annual_budget_finalized',
+      isRev
+        ? `Memfinalisasi Perubahan Anggaran Tahunan ${yStr} (Perubahan ke-${nextRevisionCount}).`
+        : `Memfinalisasi Anggaran Setahun Penuh Tahun ${yStr} (${annualCats.length} kategori).`,
+      'info'
+    );
+    useNotificationStore().notifySuccess(
+      isRev ? 'Perubahan Anggaran Difinalisasi' : 'Anggaran Tahunan Resmi Difinalisasi',
+      isRev
+        ? `Perubahan Anggaran Tahun ${yStr} telah disahkan menjadi Final${meta.mode === 'strict' ? ` (Perubahan ${nextRevisionCount}/${MAX_STRICT_ANNUAL_REVISIONS}x)` : ` (Perubahan ke-${nextRevisionCount})`} dan siap digunakan kembali.`
+        : `Anggaran Tahun ${yStr} kini berstatus FINAL dan resmi digunakan.`
+    );
+    return true;
+  }
+
+  async function saveAnnualCategoryBudgetWithMapping(payload: {
+    year: string;
+    category: string;
+    annualLimitAmount: number;
+    monthlyAllocations: Record<string, number>;
+    isEditingExisting?: boolean;
+  }): Promise<boolean> {
+    const authStore = useAuthStore();
+    if (!authStore.isProUser) {
+      useNotificationStore().openProModal({
+        featureTitle: 'Anggaran Setahun Penuh (Mapping Bulanan)',
+        featureDescription:
+          'Fitur penyimpanan anggaran tahunan dan pemetaan (mapping) bulanan per kategori khusus untuk pelanggan SisaUang Pro.',
+        limitSummary: 'Fitur Eksklusif SisaUang Pro',
+      });
+      return false;
+    }
+
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
+    const yStr = String(payload.year || '').trim();
+    if (!/^\d{4}$/.test(yStr)) {
+      useNotificationStore().notifyError('Tahun Tidak Valid', 'Tahun anggaran tidak valid.');
+      return false;
+    }
+
+    const meta = annualBudgetMetaMap.value[yStr];
+    if (!meta) {
+      useNotificationStore().notifyError(
+        'Anggaran Tahunan Belum Diaktifkan',
+        `Aktifkan pengaturan Anggaran Setahun Penuh untuk tahun ${yStr} terlebih dahulu.`
+      );
+      return false;
+    }
+
+    // Wajib berstatus Draft untuk bisa menambah / mengubah anggaran tahunan
+    if (meta.status === 'final') {
+      useNotificationStore().notifyError(
+        'Anggaran Sudah Berstatus Final',
+        `Anggaran Tahun ${yStr} sudah berstatus Final. Klik tombol "Perubahan Anggaran" terlebih dahulu untuk mengaktifkan mode edit (Draft).`
+      );
+      return false;
+    }
+
+    const safeCategory = sanitizeString(
+      payload.category,
+      MAX_CATEGORY_LENGTH,
+      'Makan dan Minum'
+    );
+    const annualTotal = Math.round(Number(payload.annualLimitAmount) || 0);
+    if (annualTotal <= 0) {
+      useNotificationStore().notifyError(
+        'Total Anggaran Tahunan Tidak Valid',
+        'Total anggaran satu tahun untuk kategori ini harus lebih dari Rp 0.'
+      );
+      return false;
+    }
+
+    const monthKeys = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
+    let mappedSum = 0;
+    const sanitizedMonthly: Record<string, number> = {};
+    for (const mm of monthKeys) {
+      const val = Math.max(0, Math.round(Number(payload.monthlyAllocations?.[mm]) || 0));
+      sanitizedMonthly[mm] = val;
+      mappedSum += val;
+    }
+
+    // Validasi wajib: Mapping bulanan harus sama persis dengan total anggaran setahun hingga tidak ada selisih penganggaran!
+    if (mappedSum !== annualTotal) {
+      const diff = annualTotal - mappedSum;
+      useNotificationStore().notifyError(
+        'Masih Terdapat Selisih Penganggaran Bulanan',
+        diff > 0
+          ? `Total mapping bulanan (Rp ${mappedSum.toLocaleString('id-ID')}) masih kurang Rp ${diff.toLocaleString('id-ID')} dari Total Anggaran Setahun (Rp ${annualTotal.toLocaleString('id-ID')}). Pastikan selisih penganggaran Rp 0 sebelum menyimpan.`
+          : `Total mapping bulanan (Rp ${mappedSum.toLocaleString('id-ID')}) melebihi Total Anggaran Setahun sebesar Rp ${Math.abs(diff).toLocaleString('id-ID')}. Pastikan selisih penganggaran Rp 0 sebelum menyimpan.`
+      );
+      return false;
+    }
+
+    const annualPeriodKey = `${ANNUAL_BUDGET_TOTAL_PREFIX}${yStr}`;
+    const catNorm = safeCategory.trim().toLowerCase();
+    const existingAnnualDoc = budgets.value.find(
+      (b) =>
+        !b.deleted &&
+        b.period === annualPeriodKey &&
+        b.category.trim().toLowerCase() === catNorm
+    );
+
+    const catSlug = hashCategoryKey(safeCategory);
+    const annualDocId =
+      existingAnnualDoc?.id || sanitizeId(`su_bgy_cat_${uid}_${yStr}_${catSlug}`);
+
+    await ensureFirestoreSessionForUser(uid);
+    try {
+      const batch = writeBatch(db);
+
+      // 1. Upsert annual category total document (`period: "Y:YYYY"`)
+      if (existingAnnualDoc) {
+        batch.update(doc(db, 'budgets', annualDocId), {
+          category: safeCategory,
+          limitAmount: annualTotal,
+          spentAmount: existingAnnualDoc.spentAmount || 0,
+          period: annualPeriodKey,
+          deleted: false,
+          deletedAt: null,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        batch.set(doc(db, 'budgets', annualDocId), {
+          ownerId: uid,
+          category: safeCategory,
+          limitAmount: annualTotal,
+          spentAmount: 0,
+          period: annualPeriodKey,
+          deleted: false,
+          deletedAt: null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      // 2. Sync each of the 12 months (`YYYY-01` .. `YYYY-12`)
+      for (const mm of monthKeys) {
+        const periodKey = `${yStr}-${mm}`;
+        const monthVal = sanitizedMonthly[mm];
+        const existingMonthDoc = budgets.value.find(
+          (b) =>
+            !b.deleted &&
+            b.period === periodKey &&
+            b.category.trim().toLowerCase() === catNorm
+        );
+
+        if (monthVal > 0) {
+          const mDocId =
+            existingMonthDoc?.id || sanitizeId(`su_bgy_m_${uid}_${yStr}_${mm}_${catSlug}`);
+          if (existingMonthDoc) {
+            batch.update(doc(db, 'budgets', mDocId), {
+              category: safeCategory,
+              limitAmount: monthVal,
+              spentAmount: existingMonthDoc.spentAmount || 0,
+              period: periodKey,
+              deleted: false,
+              deletedAt: null,
+              updatedAt: serverTimestamp(),
+            });
+          } else {
+            batch.set(doc(db, 'budgets', mDocId), {
+              ownerId: uid,
+              category: safeCategory,
+              limitAmount: monthVal,
+              spentAmount: 0,
+              period: periodKey,
+              deleted: false,
+              deletedAt: null,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        } else if (existingMonthDoc) {
+          // Month was unallocated (0) -> soft-delete the monthly budget doc
+          batch.update(doc(db, 'budgets', existingMonthDoc.id), {
+            deleted: true,
+            deletedAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
+    } catch (err) {
+      useNotificationStore().notifyError('Gagal Menyimpan Mapping Anggaran Tahunan', err);
+      handleFirestoreError(err, OperationType.WRITE, `budgets/${annualDocId}`);
+    }
+
+    // Update local state optimistically
+    if (existingAnnualDoc) {
+      existingAnnualDoc.category = safeCategory;
+      existingAnnualDoc.limitAmount = annualTotal;
+    } else {
+      budgets.value.push({
+        id: annualDocId,
+        ownerId: uid,
+        category: safeCategory,
+        limitAmount: annualTotal,
+        spentAmount: 0,
+        period: annualPeriodKey,
+        deleted: false,
+      });
+    }
+
+    for (const mm of monthKeys) {
+      const periodKey = `${yStr}-${mm}`;
+      const monthVal = sanitizedMonthly[mm];
+      const existingIdx = budgets.value.findIndex(
+        (b) =>
+          !b.deleted &&
+          b.period === periodKey &&
+          b.category.trim().toLowerCase() === catNorm
+      );
+
+      if (monthVal > 0) {
+        if (existingIdx >= 0) {
+          budgets.value[existingIdx].category = safeCategory;
+          budgets.value[existingIdx].limitAmount = monthVal;
+        } else {
+          const mDocId = sanitizeId(`su_bgy_m_${uid}_${yStr}_${mm}_${catSlug}`);
+          budgets.value.push({
+            id: mDocId,
+            ownerId: uid,
+            category: safeCategory,
+            limitAmount: monthVal,
+            spentAmount: 0,
+            period: periodKey,
+            deleted: false,
+          });
+        }
+        if (!budgetPeriods.value.includes(periodKey)) {
+          budgetPeriods.value.push(periodKey);
+        }
+      } else if (existingIdx >= 0) {
+        budgets.value.splice(existingIdx, 1);
+      }
+    }
+
+    budgetPeriods.value.sort((a, b) => b.localeCompare(a));
+    saveLocalSnapshot(uid, true);
+
+    const activeMonthsCount = monthKeys.filter((mm) => sanitizedMonthly[mm] > 0).length;
+    await authStore.recordAuditLog(
+      'annual_budget_mapped',
+      `Menyimpan draft mapping anggaran tahunan "${safeCategory}" (${yStr}) sebesar Rp ${annualTotal.toLocaleString('id-ID')} pada ${activeMonthsCount} bulan.`,
+      'info'
+    );
+
+    useNotificationStore().notifySuccess(
+      'Draft Mapping Kategori Tersimpan',
+      `Kategori "${safeCategory}" (Tahun ${yStr}) sebesar Rp ${annualTotal.toLocaleString('id-ID')} berhasil dipetakan ke ${activeMonthsCount} bulan. Jangan lupa klik "Finalisasi Anggaran" setelah seluruh penganggaran selesai.`
+    );
+    return true;
+  }
+
+  async function removeAnnualCategoryBudget(
+    yearInput: string | number,
+    categoryInput: string
+  ): Promise<boolean> {
+    const authStore = useAuthStore();
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
+    const yStr = String(yearInput || '').trim();
+    const catNorm = String(categoryInput || '').trim().toLowerCase();
+    const meta = annualBudgetMetaMap.value[yStr];
+
+    if (meta && meta.status === 'final') {
+      useNotificationStore().notifyError(
+        'Anggaran Sudah Berstatus Final',
+        `Anggaran Tahun ${yStr} sudah berstatus Final. Klik tombol "Perubahan Anggaran" terlebih dahulu untuk menghapus atau mengubah kategori anggaran.`
+      );
+      return false;
+    }
+
+    const annualPeriodKey = `${ANNUAL_BUDGET_TOTAL_PREFIX}${yStr}`;
+    const matchingDocs = budgets.value.filter(
+      (b) =>
+        !b.deleted &&
+        b.category.trim().toLowerCase() === catNorm &&
+        (b.period === annualPeriodKey || b.period.startsWith(`${yStr}-`))
+    );
+    if (matchingDocs.length === 0) return false;
+
+    const displayCat = matchingDocs[0].category;
+    const confirmed = await useNotificationStore().requestConfirmation({
+      title: 'Konfirmasi Hapus Kategori Anggaran Tahunan',
+      message: `Apakah Anda yakin ingin menghapus anggaran tahunan "${displayCat}" pada Draft Anggaran Tahun ${yStr}?`,
+      detail: `Seluruh pemetaan (mapping) alokasi bulanan untuk kategori "${displayCat}" di sepanjang Tahun ${yStr} juga akan ikut dihapus.`,
+      confirmLabel: 'Ya, Hapus Anggaran Kategori',
+    });
+    if (!confirmed) return false;
+
+    await ensureFirestoreSessionForUser(uid);
+    try {
+      const batch = writeBatch(db);
+      for (const docItem of matchingDocs) {
+        batch.update(doc(db, 'budgets', docItem.id), {
+          deleted: true,
+          deletedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      touchUserSyncTokenInBatch(batch, uid);
+      await batch.commit();
+    } catch (err) {
+      useNotificationStore().notifyError('Gagal Menghapus Anggaran Tahunan', err);
+      handleFirestoreError(err, OperationType.UPDATE, 'budgets');
+    }
+
+    const removedIds = new Set(matchingDocs.map((d) => d.id));
+    budgets.value = budgets.value.filter((b) => !removedIds.has(b.id));
+    saveLocalSnapshot(uid, true);
+
+    useNotificationStore().notifySuccess(
+      'Kategori Anggaran Tahunan Dihapus',
+      `Anggaran tahunan beserta mapping bulanan untuk kategori "${displayCat}" (Tahun ${yStr}) berhasil dihapus dari draft.`
+    );
+    return true;
+  }
+
   return {
     wallets,
     walletOwners,
@@ -3935,6 +4968,15 @@ export const useFinanceStore = defineStore('finance', () => {
     selectedPeriod,
     budgets,
     budgetPeriods,
+    annualBudgetMetaMap,
+    hasAnnualBudgetForYear,
+    getAnnualBudgetMeta,
+    getAnnualCategoryBudgetsByYear,
+    setupAnnualBudgetForYear,
+    startAnnualBudgetRevision,
+    finalizeAnnualBudgetForYear,
+    saveAnnualCategoryBudgetWithMapping,
+    removeAnnualCategoryBudget,
     enrichedBudgets,
     getEnrichedBudgetsByPeriod,
     ownershipSummary,
