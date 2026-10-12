@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, Check, Trash2 } from 'lucide-vue-next';
-import { useFinanceStore, formatHolderName } from '../stores/finance';
+import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, Check, Trash2, ShieldAlert, AlertTriangle } from 'lucide-vue-next';
+import {
+  useFinanceStore,
+  formatHolderName,
+  formatPeriodLabel,
+  MAX_STRICT_ANNUAL_REVISIONS,
+} from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
 import AppModal from './AppModal.vue';
 import CustomSelect, { type SelectOptionItem } from './CustomSelect.vue';
@@ -33,6 +38,63 @@ const isSubmitting = ref(false);
 const isInitializing = ref(false);
 
 const isEditMode = computed(() => Boolean(financeStore.editingTransaction));
+
+const earlyAnnualAllocationNotice = computed(() => {
+  if (txType.value !== 'expense') return null;
+  const cat = category.value.trim();
+  const txDate = String(date.value || '').slice(0, 10);
+  if (!cat || txDate.length < 7) return null;
+
+  const txYear = txDate.slice(0, 4);
+  const txPeriod = txDate.slice(0, 7);
+  const meta = financeStore.getAnnualBudgetMeta(txYear);
+  if (!meta) return null;
+
+  const annualCat = financeStore
+    .getAnnualCategoryBudgetsByYear(txYear)
+    .find((item) => item.category.trim().toLowerCase() === cat.toLowerCase());
+  if (!annualCat) return null;
+
+  if (meta.status !== 'final') {
+    return {
+      isDraftBlocked: true,
+      isRevisionSession: meta.isRevisionSession,
+      mode: meta.mode,
+      year: txYear,
+      category: annualCat.category,
+      txPeriodLabel: formatPeriodLabel(txPeriod),
+      firstPeriodLabel: annualCat.firstAllocatedPeriod
+        ? formatPeriodLabel(annualCat.firstAllocatedPeriod)
+        : '-',
+      allocMonthsLabels: annualCat.allocatedMonthsList
+        .map((mm) => formatPeriodLabel(`${txYear}-${mm}`))
+        .join(', '),
+      remainingRevs: Math.max(0, MAX_STRICT_ANNUAL_REVISIONS - meta.revisionCount),
+    };
+  }
+
+  if (annualCat.firstAllocatedPeriod && txPeriod < annualCat.firstAllocatedPeriod) {
+    const firstPeriodLabel = formatPeriodLabel(annualCat.firstAllocatedPeriod);
+    const txPeriodLabel = formatPeriodLabel(txPeriod);
+    const allocMonthsLabels = annualCat.allocatedMonthsList
+      .map((mm) => formatPeriodLabel(`${txYear}-${mm}`))
+      .join(', ');
+    const remainingRevs = Math.max(0, MAX_STRICT_ANNUAL_REVISIONS - meta.revisionCount);
+
+    return {
+      isDraftBlocked: false,
+      isRevisionSession: false,
+      mode: meta.mode,
+      year: txYear,
+      category: annualCat.category,
+      txPeriodLabel,
+      firstPeriodLabel,
+      allocMonthsLabels,
+      remainingRevs,
+    };
+  }
+  return null;
+});
 
 function formatNominalDisplay(val: number | string | ''): string {
   const digits = String(val ?? '')
@@ -407,7 +469,7 @@ async function handleSubmit() {
       />
 
       <!-- 7A. Kategori (Untuk Income / Expense) -->
-      <div v-if="txType !== 'transfer'">
+      <div v-if="txType !== 'transfer'" class="space-y-2.5">
         <CustomSelect
           v-model="category"
           :options="categoryOptions"
@@ -416,6 +478,60 @@ async function handleSubmit() {
           search-placeholder="Ketik untuk mencari kategori..."
           placeholder="Kategori"
         />
+
+        <!-- Peringatan Status Draft / Perubahan atau Alokasi Periode Anggaran Tahunan -->
+        <div
+          v-if="earlyAnnualAllocationNotice"
+          class="rounded-2xl border p-3 text-xs space-y-1"
+          :class="
+            earlyAnnualAllocationNotice.isDraftBlocked || earlyAnnualAllocationNotice.mode === 'strict'
+              ? 'border-rose-300 dark:border-rose-900/70 bg-rose-50/90 dark:bg-rose-950/40 text-rose-800 dark:text-rose-200'
+              : 'border-amber-300 dark:border-amber-900/70 bg-amber-50/90 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200'
+          "
+        >
+          <div class="flex items-center gap-1.5 font-bold">
+            <ShieldAlert
+              v-if="earlyAnnualAllocationNotice.isDraftBlocked || earlyAnnualAllocationNotice.mode === 'strict'"
+              class="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0"
+            />
+            <AlertTriangle
+              v-else
+              class="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0"
+            />
+            <span>
+              <template v-if="earlyAnnualAllocationNotice.isDraftBlocked">
+                {{
+                  earlyAnnualAllocationNotice.isRevisionSession
+                    ? `Anggaran ${earlyAnnualAllocationNotice.year} Sedang Proses Perubahan (Draft)`
+                    : `Anggaran ${earlyAnnualAllocationNotice.year} Masih Berstatus Draft`
+                }}
+              </template>
+              <template v-else>
+                {{
+                  earlyAnnualAllocationNotice.mode === 'strict'
+                    ? `Mode Ketat Anggaran ${earlyAnnualAllocationNotice.year}: Belum Masuk Periode Alokasi`
+                    : `Mode Fleksibel Anggaran ${earlyAnnualAllocationNotice.year}: Sebelum Periode Alokasi`
+                }}
+              </template>
+            </span>
+          </div>
+          <p class="text-[11px] leading-relaxed">
+            <template v-if="earlyAnnualAllocationNotice.isDraftBlocked">
+              Kategori <strong>{{ earlyAnnualAllocationNotice.category }}</strong> termasuk di dalam Anggaran Setahun Penuh Tahun <strong>{{ earlyAnnualAllocationNotice.year }}</strong> yang saat ini masih berstatus <strong>DRAFT</strong>. Transaksi untuk kategori ini tidak dapat disimpan sebelum Anda menyelesaikan proses penganggaran dan mengklik tombol <strong>Finalisasi Anggaran</strong> di halaman Anggaran.
+            </template>
+            <template v-else>
+              Kategori <strong>{{ earlyAnnualAllocationNotice.category }}</strong> baru dialokasikan mulai
+              <strong>{{ earlyAnnualAllocationNotice.firstPeriodLabel }}</strong> ({{ earlyAnnualAllocationNotice.allocMonthsLabels }}), sedangkan tanggal transaksi ini berada di
+              <strong>{{ earlyAnnualAllocationNotice.txPeriodLabel }}</strong>.
+              <template v-if="earlyAnnualAllocationNotice.mode === 'strict'">
+                Dalam <strong>Mode Ketat</strong>, transaksi sebelum periode alokasi tidak dapat disimpan sebelum Anda melakukan perubahan anggaran hingga Final terlebih dahulu (sisa kuota perubahan: <strong>{{ earlyAnnualAllocationNotice.remainingRevs }}x</strong> dari {{ MAX_STRICT_ANNUAL_REVISIONS }}x).
+              </template>
+              <template v-else>
+                Dalam <strong>Mode Fleksibel</strong>, Anda akan diminta konfirmasi saat menyimpan transaksi ini.
+              </template>
+            </template>
+          </p>
+        </div>
       </div>
 
       <!-- 7B. Biaya Admin + Sumber Dana Tujuan + Pemilik Tujuan (Untuk Transfer) -->

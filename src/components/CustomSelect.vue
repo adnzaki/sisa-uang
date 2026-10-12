@@ -408,7 +408,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <span v-else class="block text-slate-500 dark:text-slate-400 truncate">
-            {{ placeholder }}
+            {{ placeholder || ariaLabel || 'Pilih opsi...' }}
           </span>
         </div>
       </div>
