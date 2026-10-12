@@ -1803,14 +1803,6 @@ async function handleSubmitProPayment() {
                 </div>
                 <button
                   type="button"
-                  class="min-h-[40px] px-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-mono font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
-                  title="Ganti Bahasa"
-                  @click="toggleLocale"
-                >
-                  {{ locale.toUpperCase() }}
-                </button>
-                <button
-                  type="button"
                   class="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
                   aria-label="Tutup Menu Sidebar"
                   @click="mobileDrawerOpen = false"
