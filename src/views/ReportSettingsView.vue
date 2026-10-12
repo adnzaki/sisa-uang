@@ -21,6 +21,8 @@ import {
   Info,
   Type,
   Crown,
+  RefreshCw,
+  CheckCircle2,
 } from 'lucide-vue-next';
 import {
   useThemeStore,
@@ -318,6 +320,34 @@ function handleRemoveReportSigner(id: string, displayLabel: string) {
 function isSignerEnabledForReport(reportType: string, signerId: string): boolean {
   return (themeStore.reportActiveSignerIds[reportType] || []).includes(signerId);
 }
+
+const isManualSyncing = ref(false);
+
+async function handleManualSync() {
+  if (isManualSyncing.value) return;
+  isManualSyncing.value = true;
+  try {
+    const ok = await themeStore.syncReportSettingsNow(true);
+    if (ok) {
+      notificationStore.notifySuccess(
+        'Sinkronisasi Cloud Berhasil',
+        'Pengaturan kop laporan dan penandatangan berhasil dimuat dari Cloud. Data tersinkron otomatis antara Laptop & HP.'
+      );
+    } else {
+      notificationStore.notifyInfo(
+        'Sinkronisasi Selesai',
+        'Pengaturan laporan sudah menggunakan data terbaru.'
+      );
+    }
+  } catch {
+    notificationStore.notifyError(
+      'Gagal Menyinkronkan',
+      'Terjadi kendala saat menghubungi Cloud Firestore. Pengaturan lokal tetap aktif.'
+    );
+  } finally {
+    isManualSyncing.value = false;
+  }
+}
 </script>
 
 <template>
@@ -334,17 +364,71 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
           </span>
         </div>
         <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-          Kustomisasi kop institusi/organisasi (seperti Masjid, Musholla, Komunitas, atau Lembaga), judul masing-masing laporan, serta daftar penandatangan laporan PDF.
+          Kustomisasi kop institusi/organisasi (seperti Masjid, Musholla, Komunitas, atau Lembaga), judul masing-masing laporan, serta daftar penandatangan laporan PDF. Tersinkron otomatis di semua perangkat (Laptop &amp; HP).
         </p>
       </div>
 
-      <RouterLink
-        to="/analytics"
-        class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs"
-      >
-        <FileCheck2 class="w-4 h-4 shrink-0" />
-        <span>Buka Analitik &amp; Cetak PDF</span>
-      </RouterLink>
+      <div class="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full sm:w-auto shrink-0">
+        <button
+          type="button"
+          :disabled="isManualSyncing || themeStore.isReportSettingsSyncing"
+          class="w-full sm:w-auto min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer shadow-xs"
+          @click="handleManualSync"
+        >
+          <RefreshCw
+            class="w-4 h-4 text-emerald-600 shrink-0"
+            :class="{ 'animate-spin': isManualSyncing || themeStore.isReportSettingsSyncing }"
+          />
+          <span>{{ isManualSyncing || themeStore.isReportSettingsSyncing ? 'Menyinkronkan...' : 'Sinkronkan Cloud' }}</span>
+        </button>
+
+        <RouterLink
+          to="/analytics"
+          class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs"
+        >
+          <FileCheck2 class="w-4 h-4 shrink-0" />
+          <span>Buka Analitik &amp; Cetak PDF</span>
+        </RouterLink>
+      </div>
+    </div>
+
+    <!-- Real-time Cloud Sync Status Banner -->
+    <div
+      class="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2.5 text-xs text-slate-600 dark:text-slate-400"
+    >
+      <div class="flex items-center gap-2 min-w-0">
+        <div
+          class="w-2 h-2 rounded-full shrink-0"
+          :class="
+            themeStore.isReportSettingsSyncing
+              ? 'bg-amber-500 animate-pulse'
+              : themeStore.reportSettingsSyncStatus === 'error'
+                ? 'bg-rose-500'
+                : 'bg-emerald-500'
+          "
+        />
+        <div class="truncate">
+          <span class="font-medium text-slate-900 dark:text-slate-200">
+            {{
+              themeStore.isReportSettingsSyncing
+                ? 'Sedang menyinkronkan pengaturan ke Cloud...'
+                : 'Status Sinkronisasi Cloud:'
+            }}
+          </span>
+          <span class="ml-1 text-slate-500 dark:text-slate-400">
+            {{
+              themeStore.isReportSettingsSyncing
+                ? 'Mohon tunggu sesaat'
+                : 'Tersimpan & siap dibuka di Laptop maupun HP'
+            }}
+          </span>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 shrink-0 text-[11px] text-slate-500 dark:text-slate-400">
+        <CheckCircle2 class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+        <span>Cloud Firestore Aktif</span>
+      </div>
     </div>
 
     <!-- Pro Banner if Free User -->
