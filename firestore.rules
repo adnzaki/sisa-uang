@@ -34,7 +34,7 @@ service cloud.firestore {
     function isBootstrappedAdminEmail() {
       return isSignedIn() &&
         (
-          (request.auth.token.email_verified == true && request.auth.token.email == 'adnanzaki65@admin.sd.belajar.id') ||
+          request.auth.token.email == 'adnanzaki65@admin.sd.belajar.id' ||
           request.auth.token.email == 'vuedevo@gmail.com'
         );
     }
@@ -616,14 +616,25 @@ service cloud.firestore {
 
     // 10. Report Settings Collection (/report_settings/{settingId})
     match /report_settings/{settingId} {
-      allow get: if isSignedIn() && isValidId(settingId) && (existing().ownerId == request.auth.uid || settingId == 'default' || isAdmin());
-      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || resource.data.ownerId == 'default' || isAdmin());
+      allow get: if isSignedIn() && isValidId(settingId) && (
+        resource == null ||
+        resource.data.ownerId == request.auth.uid ||
+        settingId == request.auth.uid ||
+        settingId == 'default' ||
+        isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.ownerId == request.auth.uid ||
+        resource.data.ownerId == 'default' ||
+        isAdmin()
+      );
       allow create: if isSignedIn() &&
         isValidId(settingId) &&
         isValidReportSettings(incoming()) &&
         incoming().updatedAt == request.time &&
         (
           incoming().ownerId == request.auth.uid ||
+          incoming().ownerId == settingId ||
           incoming().ownerId == 'default' ||
           isAdmin()
         );
@@ -634,8 +645,8 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         (
           (
-            (existing().ownerId == request.auth.uid || existing().ownerId == 'default') &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['signers', 'activeSignerIds', 'signPlace', 'letterhead', 'customTitles', 'updatedAt']) &&
+            (existing().ownerId == request.auth.uid || existing().ownerId == settingId || existing().ownerId == 'default') &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['ownerId', 'signers', 'activeSignerIds', 'signPlace', 'letterhead', 'customTitles', 'updatedAt']) &&
             isNotBlocked()
           ) ||
           (

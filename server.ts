@@ -325,8 +325,8 @@ function savePersistedReportSettingsCache() {
 
 loadPersistedReportSettingsCache();
 
-const DEV_APP_URL = 'https://ais-dev-aeuhujfqf5ji6wultcvmh5-795639077267.asia-southeast1.run.app';
-const PRE_APP_URL = 'https://ais-pre-aeuhujfqf5ji6wultcvmh5-795639077267.asia-southeast1.run.app';
+const DEV_APP_URL = 'https://ais-dev-mmsxhrlhyl6nd34sur3nm5-416811674365.asia-southeast1.run.app';
+const PRE_APP_URL = 'https://ais-pre-mmsxhrlhyl6nd34sur3nm5-416811674365.asia-southeast1.run.app';
 
 async function syncReportSettingsToPeer(ownerId: string, record: ServerReportSettingsRecord) {
   try {

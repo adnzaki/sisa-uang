@@ -440,8 +440,13 @@ watch(mobileDrawerOpen, (isOpen) => {
 
 function handleAppVisibilityOrFocus() {
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-  if (authStore.isAuthenticated && !authStore.isSuperAdmin && authStore.user?.uid) {
-    void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid);
+  if (authStore.isAuthenticated && authStore.user?.uid) {
+    if (!authStore.isSuperAdmin) {
+      void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid);
+    }
+    if (typeof themeStore.fetchRemoteReportSettings === 'function') {
+      void themeStore.fetchRemoteReportSettings(authStore.user.uid);
+    }
   }
 }
 
@@ -465,6 +470,7 @@ watch(
   () => authStore.user?.uid,
   (uid) => {
     if (uid && authStore.isAuthenticated) {
+      themeStore.loadReportSignatureConfig(uid);
       if (authStore.isSuperAdmin) {
         financeStore.cleanupListeners();
         if (authStore.canAccessControlPanel) {
