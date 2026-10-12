@@ -1000,13 +1000,7 @@ async function handleSubmitProPayment() {
                 </div>
               </div>
             </RouterLink>
-            <button
-              type="button"
-              class="min-h-[38px] px-2.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-mono font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
-              @click="toggleLocale"
-            >
-              {{ locale.toUpperCase() }}
-            </button>
+            
           </div>
 
           <!-- Sisa Uang Compact Anchor Card (ONLY for Regular Users, hidden for Super Admin) -->
