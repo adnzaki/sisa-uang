@@ -1,6 +1,15 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { i18n } from '../i18n';
+import {
+  doc,
+  getDoc,
+  setDoc,
+  onSnapshot,
+  serverTimestamp,
+  type Unsubscribe,
+} from 'firebase/firestore';
+import { db, sanitizeId, isFirestoreOfflineError } from '../firebase';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 export type CurrencyCode = 'IDR' | 'USD';
@@ -111,8 +120,12 @@ export const useThemeStore = defineStore('theme', () => {
     };
   }
 
-  function loadReportSignatureConfig(ownerUid?: string | null) {
-    currentSignatureOwnerKey.value = ownerUid?.trim() || 'default';
+  const isReportSettingsSyncing = ref<boolean>(false);
+  const reportSettingsLastSyncedAt = ref<string>('');
+  const reportSettingsSyncStatus = ref<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+  let saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function readFromLocalStorage() {
     if (typeof localStorage === 'undefined') return;
     const {
       signersKey,
@@ -138,11 +151,9 @@ export const useThemeStore = defineStore('theme', () => {
               rowPosition: item.rowPosition === 'bottom' ? 'bottom' : 'top',
             }));
         }
-      } else {
-        reportSigners.value = [];
       }
     } catch {
-      reportSigners.value = [];
+      // Ignore
     }
 
     const validIds = new Set(reportSigners.value.map((s) => s.id));
@@ -167,30 +178,21 @@ export const useThemeStore = defineStore('theme', () => {
             realisasi_anggaran: sanitizeList((parsedMap as any).realisasi_anggaran),
           };
         }
-      } else {
-        const allIds = reportSigners.value.map((s) => s.id);
-        reportActiveSignerIds.value = {
-          kas_umum: [...allIds],
-          rekonsiliasi_kas: [...allIds],
-          realisasi_anggaran: [...allIds],
-        };
       }
     } catch {
-      const allIds = reportSigners.value.map((s) => s.id);
-      reportActiveSignerIds.value = {
-        kas_umum: [...allIds],
-        rekonsiliasi_kas: [...allIds],
-        realisasi_anggaran: [...allIds],
-      };
+      // Ignore
     }
 
     try {
-      reportSignPlace.value =
+      const rawPlace =
         localStorage.getItem(placeKey) ||
         localStorage.getItem(REPORT_SIGN_PLACE_KEY_PREFIX) ||
         '';
+      if (rawPlace) {
+        reportSignPlace.value = rawPlace;
+      }
     } catch {
-      reportSignPlace.value = '';
+      // Ignore
     }
 
     try {
@@ -226,39 +228,9 @@ export const useThemeStore = defineStore('theme', () => {
             },
           };
         }
-      } else {
-        reportLetterhead.value = {
-          enabled: false,
-          mode: 'text',
-          organizationName: '',
-          subtitle: '',
-          addressLine: '',
-          imageDataUrl: '',
-          imageWidthPx: 0,
-          imageHeightPx: 0,
-          enabledReports: {
-            kas_umum: true,
-            rekonsiliasi_kas: true,
-            realisasi_anggaran: true,
-          },
-        };
       }
     } catch {
-      reportLetterhead.value = {
-        enabled: false,
-        mode: 'text',
-        organizationName: '',
-        subtitle: '',
-        addressLine: '',
-        imageDataUrl: '',
-        imageWidthPx: 0,
-        imageHeightPx: 0,
-        enabledReports: {
-          kas_umum: true,
-          rekonsiliasi_kas: true,
-          realisasi_anggaran: true,
-        },
-      };
+      // Ignore
     }
 
     try {
@@ -274,48 +246,419 @@ export const useThemeStore = defineStore('theme', () => {
             realisasi_anggaran: String(parsedTitles.realisasi_anggaran || '').slice(0, 100),
           };
         }
-      } else {
-        reportCustomTitles.value = {
-          kas_umum: '',
-          rekonsiliasi_kas: '',
-          realisasi_anggaran: '',
-        };
       }
     } catch {
-      reportCustomTitles.value = {
-        kas_umum: '',
-        rekonsiliasi_kas: '',
-        realisasi_anggaran: '',
-      };
+      // Ignore
     }
   }
 
-  function persistReportSignatureConfig() {
-    if (typeof localStorage === 'undefined') return;
-    const {
-      signersKey,
-      activeMapKey,
-      placeKey,
-      letterheadKey,
-      customTitlesKey,
-    } = getSignatureStorageKeys(currentSignatureOwnerKey.value);
+  function applyRemoteReportSettings(remote: any) {
+    if (!remote) return;
+    if (Array.isArray(remote.signers)) {
+      reportSigners.value = remote.signers
+        .filter((item: any) => item && typeof item.id === 'string')
+        .slice(0, MAX_REPORT_SIGNERS)
+        .map((item: any) => ({
+          id: String(item.id),
+          name: String(item.name || '').trim(),
+          role: String(item.role || '').trim(),
+          rowPosition: item.rowPosition === 'bottom' ? 'bottom' : 'top',
+        }));
+    }
+
+    if (remote.activeSignerIds && typeof remote.activeSignerIds === 'object') {
+      const validIds = new Set(reportSigners.value.map((s) => s.id));
+      const sanitizeList = (arr: unknown): string[] =>
+        Array.isArray(arr)
+          ? arr
+              .map((v) => String(v))
+              .filter((id) => validIds.has(id))
+              .slice(0, MAX_REPORT_SIGNERS)
+          : reportSigners.value.map((s) => s.id);
+      reportActiveSignerIds.value = {
+        kas_umum: sanitizeList(remote.activeSignerIds.kas_umum),
+        rekonsiliasi_kas: sanitizeList(remote.activeSignerIds.rekonsiliasi_kas),
+        realisasi_anggaran: sanitizeList(remote.activeSignerIds.realisasi_anggaran),
+      };
+    }
+
+    if (typeof remote.signPlace === 'string') {
+      reportSignPlace.value = remote.signPlace.trim();
+    }
+
+    if (remote.letterhead && typeof remote.letterhead === 'object') {
+      const rawLh = remote.letterhead;
+      const rawEnabledReports = rawLh.enabledReports;
+      reportLetterhead.value = {
+        enabled: Boolean(rawLh.enabled),
+        mode: rawLh.mode === 'image' ? 'image' : 'text',
+        organizationName: String(rawLh.organizationName || '').slice(0, 100),
+        subtitle: String(rawLh.subtitle || '').slice(0, 120),
+        addressLine: String(rawLh.addressLine || '').slice(0, 160),
+        imageDataUrl: String(rawLh.imageDataUrl || ''),
+        imageWidthPx: Number(rawLh.imageWidthPx) || 0,
+        imageHeightPx: Number(rawLh.imageHeightPx) || 0,
+        enabledReports: {
+          kas_umum:
+            rawEnabledReports && typeof rawEnabledReports.kas_umum === 'boolean'
+              ? rawEnabledReports.kas_umum
+              : true,
+          rekonsiliasi_kas:
+            rawEnabledReports && typeof rawEnabledReports.rekonsiliasi_kas === 'boolean'
+              ? rawEnabledReports.rekonsiliasi_kas
+              : true,
+          realisasi_anggaran:
+            rawEnabledReports && typeof rawEnabledReports.realisasi_anggaran === 'boolean'
+              ? rawEnabledReports.realisasi_anggaran
+              : true,
+        },
+      };
+    }
+
+    if (remote.customTitles && typeof remote.customTitles === 'object') {
+      reportCustomTitles.value = {
+        kas_umum: String(remote.customTitles.kas_umum || '').slice(0, 100),
+        rekonsiliasi_kas: String(remote.customTitles.rekonsiliasi_kas || '').slice(0, 100),
+        realisasi_anggaran: String(remote.customTitles.realisasi_anggaran || '').slice(0, 100),
+      };
+    }
+
+    persistReportSignatureConfig(false);
+  }
+
+  let activeFirestoreUnsub: Unsubscribe | null = null;
+
+  function stopRealtimeFirestoreListener() {
+    if (activeFirestoreUnsub) {
+      try {
+        activeFirestoreUnsub();
+      } catch {
+        // Ignore
+      }
+      activeFirestoreUnsub = null;
+    }
+  }
+
+  function setupRealtimeFirestoreListener(key: string) {
+    stopRealtimeFirestoreListener();
     try {
-      const serializedSigners = JSON.stringify(reportSigners.value);
-      const serializedMap = JSON.stringify(reportActiveSignerIds.value);
-      const serializedLh = JSON.stringify(reportLetterhead.value);
-      const serializedTitles = JSON.stringify(reportCustomTitles.value);
-      localStorage.setItem(signersKey, serializedSigners);
-      localStorage.setItem(REPORT_SIGNERS_KEY_PREFIX, serializedSigners);
-      localStorage.setItem(activeMapKey, serializedMap);
-      localStorage.setItem(REPORT_ACTIVE_SIGNERS_KEY_PREFIX, serializedMap);
-      localStorage.setItem(placeKey, reportSignPlace.value.trim());
-      localStorage.setItem(REPORT_SIGN_PLACE_KEY_PREFIX, reportSignPlace.value.trim());
-      localStorage.setItem(letterheadKey, serializedLh);
-      localStorage.setItem(REPORT_LETTERHEAD_KEY_PREFIX, serializedLh);
-      localStorage.setItem(customTitlesKey, serializedTitles);
-      localStorage.setItem(REPORT_CUSTOM_TITLES_KEY_PREFIX, serializedTitles);
+      activeFirestoreUnsub = onSnapshot(
+        doc(db, 'report_settings', key),
+        (snap) => {
+          if (snap.exists() && !isReportSettingsSyncing.value) {
+            const remoteData = snap.data();
+            applyRemoteReportSettings(remoteData);
+            reportSettingsSyncStatus.value = 'synced';
+            reportSettingsLastSyncedAt.value =
+              remoteData.updatedAt?.toDate?.()?.toISOString?.() ||
+              (typeof remoteData.updatedAt === 'string'
+                ? remoteData.updatedAt
+                : new Date().toISOString());
+          }
+        },
+        (err) => {
+          if (!isFirestoreOfflineError(err)) {
+            console.warn('Firestore report_settings realtime notice:', err);
+          }
+        }
+      );
     } catch {
-      // Ignore storage quota errors
+      // Ignore
+    }
+  }
+
+  async function pushReportSettingsToFirestore(ownerUid?: string | null): Promise<boolean> {
+    const rawKey = ownerUid?.trim() || currentSignatureOwnerKey.value || 'default';
+    const key = sanitizeId(rawKey);
+
+    const firestorePayload = {
+      ownerId: key,
+      signers: reportSigners.value.map((s) => ({
+        id: String(s.id),
+        name: String(s.name || '').trim(),
+        role: String(s.role || '').trim(),
+        rowPosition: s.rowPosition === 'bottom' ? 'bottom' : 'top',
+      })),
+      activeSignerIds: {
+        kas_umum: Array.isArray(reportActiveSignerIds.value.kas_umum)
+          ? reportActiveSignerIds.value.kas_umum.map(String)
+          : [],
+        rekonsiliasi_kas: Array.isArray(reportActiveSignerIds.value.rekonsiliasi_kas)
+          ? reportActiveSignerIds.value.rekonsiliasi_kas.map(String)
+          : [],
+        realisasi_anggaran: Array.isArray(reportActiveSignerIds.value.realisasi_anggaran)
+          ? reportActiveSignerIds.value.realisasi_anggaran.map(String)
+          : [],
+      },
+      signPlace: String(reportSignPlace.value || '').trim(),
+      letterhead: {
+        enabled: Boolean(reportLetterhead.value.enabled),
+        mode: reportLetterhead.value.mode === 'image' ? 'image' : 'text',
+        organizationName: String(reportLetterhead.value.organizationName || '').slice(0, 100),
+        subtitle: String(reportLetterhead.value.subtitle || '').slice(0, 120),
+        addressLine: String(reportLetterhead.value.addressLine || '').slice(0, 160),
+        imageDataUrl: String(reportLetterhead.value.imageDataUrl || ''),
+        imageWidthPx: Number(reportLetterhead.value.imageWidthPx) || 0,
+        imageHeightPx: Number(reportLetterhead.value.imageHeightPx) || 0,
+        enabledReports: {
+          kas_umum: Boolean(reportLetterhead.value.enabledReports?.kas_umum ?? true),
+          rekonsiliasi_kas: Boolean(reportLetterhead.value.enabledReports?.rekonsiliasi_kas ?? true),
+          realisasi_anggaran: Boolean(reportLetterhead.value.enabledReports?.realisasi_anggaran ?? true),
+        },
+      },
+      customTitles: {
+        kas_umum: String(reportCustomTitles.value.kas_umum || '').slice(0, 100),
+        rekonsiliasi_kas: String(reportCustomTitles.value.rekonsiliasi_kas || '').slice(0, 100),
+        realisasi_anggaran: String(reportCustomTitles.value.realisasi_anggaran || '').slice(0, 100),
+      },
+      updatedAt: serverTimestamp(),
+    };
+
+    try {
+      await setDoc(doc(db, 'report_settings', key), firestorePayload, { merge: true });
+      if (key !== 'default') {
+        const defaultDoc = {
+          ...firestorePayload,
+          ownerId: 'default',
+        };
+        await setDoc(doc(db, 'report_settings', 'default'), defaultDoc, { merge: true }).catch(() => {});
+      }
+      return true;
+    } catch (err) {
+      if (!isFirestoreOfflineError(err)) {
+        console.warn('Firestore report_settings setDoc error:', err);
+      }
+      return false;
+    }
+  }
+
+  async function fetchRemoteReportSettings(ownerUid?: string | null): Promise<boolean> {
+    const rawKey = ownerUid?.trim() || currentSignatureOwnerKey.value || 'default';
+    const key = sanitizeId(rawKey);
+    isReportSettingsSyncing.value = true;
+    reportSettingsSyncStatus.value = 'syncing';
+
+    try {
+      let appliedFromFirestore = false;
+      // 1. Primary Cross-Device Source of Truth: Cloud Firestore (sisa-uang database)
+      try {
+        const docRef = doc(db, 'report_settings', key);
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          const remoteData = snap.data();
+          applyRemoteReportSettings(remoteData);
+          reportSettingsSyncStatus.value = 'synced';
+          reportSettingsLastSyncedAt.value =
+            remoteData.updatedAt?.toDate?.()?.toISOString?.() ||
+            (typeof remoteData.updatedAt === 'string'
+              ? remoteData.updatedAt
+              : new Date().toISOString());
+          appliedFromFirestore = true;
+        } else if (key !== 'default') {
+          // Fallback to default in Cloud Firestore if user document doesn't exist yet
+          const defaultSnap = await getDoc(doc(db, 'report_settings', 'default'));
+          if (defaultSnap.exists()) {
+            const defaultData = defaultSnap.data();
+            applyRemoteReportSettings(defaultData);
+            reportSettingsSyncStatus.value = 'synced';
+            reportSettingsLastSyncedAt.value =
+              defaultData.updatedAt?.toDate?.()?.toISOString?.() ||
+              (typeof defaultData.updatedAt === 'string'
+                ? defaultData.updatedAt
+                : new Date().toISOString());
+            appliedFromFirestore = true;
+          }
+        }
+      } catch (firestoreErr) {
+        if (!isFirestoreOfflineError(firestoreErr)) {
+          console.warn('Firestore report_settings getDoc notice:', firestoreErr);
+        }
+      }
+
+      // If retrieved from Cloud Firestore, activate realtime listener and return
+      if (appliedFromFirestore) {
+        setupRealtimeFirestoreListener(key);
+        isReportSettingsSyncing.value = false;
+        return true;
+      }
+
+      // 2. Secondary fallback: HTTP endpoint /api/users/:key/report-settings
+      try {
+        const res = await fetch(`/api/users/${encodeURIComponent(key)}/report-settings`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.exists && data.reportSettings) {
+            applyRemoteReportSettings(data.reportSettings);
+            reportSettingsSyncStatus.value = 'synced';
+            reportSettingsLastSyncedAt.value =
+              data.reportSettings.updatedAt || new Date().toISOString();
+            // Migrate server record to Cloud Firestore so all devices across preview & production sync
+            void pushReportSettingsToFirestore(key);
+            setupRealtimeFirestoreListener(key);
+            isReportSettingsSyncing.value = false;
+            return true;
+          }
+        }
+      } catch {
+        // Ignore server network error
+      }
+
+      // 3. If no remote record exists yet, but local config exists in browser,
+      // upload local config up to Cloud Firestore so other devices get it immediately!
+      const hasLocalConfig =
+        reportLetterhead.value.organizationName.trim().length > 0 ||
+        reportLetterhead.value.imageDataUrl.length > 0 ||
+        reportSigners.value.length > 0;
+      if (hasLocalConfig) {
+        void pushReportSettingsToFirestore(key);
+      }
+
+      setupRealtimeFirestoreListener(key);
+      reportSettingsSyncStatus.value = 'synced';
+      isReportSettingsSyncing.value = false;
+      return true;
+    } catch {
+      reportSettingsSyncStatus.value = 'idle';
+      isReportSettingsSyncing.value = false;
+      return false;
+    }
+  }
+
+  async function pushReportSettingsToServer(): Promise<boolean> {
+    const rawKey = currentSignatureOwnerKey.value || 'default';
+    const key = sanitizeId(rawKey);
+    isReportSettingsSyncing.value = true;
+    reportSettingsSyncStatus.value = 'syncing';
+    try {
+      // 1. Push to Cloud Firestore (cross-device source of truth)
+      await pushReportSettingsToFirestore(key);
+
+      // 2. Also send to server Express endpoint as backup
+      const payload = {
+        ownerId: key,
+        signers: reportSigners.value,
+        activeSignerIds: reportActiveSignerIds.value,
+        signPlace: reportSignPlace.value,
+        letterhead: reportLetterhead.value,
+        customTitles: reportCustomTitles.value,
+      };
+      try {
+        const res = await fetch(`/api/users/${encodeURIComponent(key)}/report-settings`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          reportSettingsLastSyncedAt.value = data.updatedAt || new Date().toISOString();
+        }
+      } catch {
+        // Ignore Express failure since Firestore succeeded
+      }
+
+      reportSettingsSyncStatus.value = 'synced';
+      reportSettingsLastSyncedAt.value = new Date().toISOString();
+      isReportSettingsSyncing.value = false;
+      return true;
+    } catch {
+      reportSettingsSyncStatus.value = 'error';
+      isReportSettingsSyncing.value = false;
+      return false;
+    }
+  }
+
+  function loadReportSignatureConfig(ownerUid?: string | null) {
+    const rawKey = ownerUid?.trim() || 'default';
+    currentSignatureOwnerKey.value = sanitizeId(rawKey);
+    readFromLocalStorage();
+    setupRealtimeFirestoreListener(currentSignatureOwnerKey.value);
+    void fetchRemoteReportSettings(currentSignatureOwnerKey.value);
+  }
+
+  function persistReportSignatureConfig(syncToServer = true) {
+    if (typeof localStorage !== 'undefined') {
+      const {
+        signersKey,
+        activeMapKey,
+        placeKey,
+        letterheadKey,
+        customTitlesKey,
+      } = getSignatureStorageKeys(currentSignatureOwnerKey.value);
+      try {
+        const serializedSigners = JSON.stringify(reportSigners.value);
+        const serializedMap = JSON.stringify(reportActiveSignerIds.value);
+        const serializedLh = JSON.stringify(reportLetterhead.value);
+        const serializedTitles = JSON.stringify(reportCustomTitles.value);
+        localStorage.setItem(signersKey, serializedSigners);
+        localStorage.setItem(REPORT_SIGNERS_KEY_PREFIX, serializedSigners);
+        localStorage.setItem(activeMapKey, serializedMap);
+        localStorage.setItem(REPORT_ACTIVE_SIGNERS_KEY_PREFIX, serializedMap);
+        localStorage.setItem(placeKey, reportSignPlace.value.trim());
+        localStorage.setItem(REPORT_SIGN_PLACE_KEY_PREFIX, reportSignPlace.value.trim());
+        localStorage.setItem(letterheadKey, serializedLh);
+        localStorage.setItem(REPORT_LETTERHEAD_KEY_PREFIX, serializedLh);
+        localStorage.setItem(customTitlesKey, serializedTitles);
+        localStorage.setItem(REPORT_CUSTOM_TITLES_KEY_PREFIX, serializedTitles);
+      } catch {
+        // Ignore storage quota errors
+      }
+    }
+
+    if (syncToServer) {
+      if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
+      saveDebounceTimer = setTimeout(() => {
+        void pushReportSettingsToServer();
+      }, 350);
+    }
+  }
+
+  async function syncReportSettingsNow(): Promise<boolean> {
+    isReportSettingsSyncing.value = true;
+    reportSettingsSyncStatus.value = 'syncing';
+    try {
+      // 1. Push local changes to Firestore first if any exist
+      const hasLocalConfig =
+        reportLetterhead.value.organizationName.trim().length > 0 ||
+        reportLetterhead.value.imageDataUrl.length > 0 ||
+        reportSigners.value.length > 0;
+      if (hasLocalConfig) {
+        await pushReportSettingsToServer();
+      }
+      // 2. Fetch latest remote state from Firestore
+      const ok = await fetchRemoteReportSettings(currentSignatureOwnerKey.value);
+      reportSettingsSyncStatus.value = ok ? 'synced' : 'synced';
+      return ok;
+    } catch {
+      reportSettingsSyncStatus.value = 'error';
+      return false;
+    } finally {
+      isReportSettingsSyncing.value = false;
+    }
+  }
+
+  function exportReportSettingsJson(): string {
+    const payload = {
+      version: '1.0',
+      exportedAt: new Date().toISOString(),
+      ownerId: currentSignatureOwnerKey.value,
+      signers: reportSigners.value,
+      activeSignerIds: reportActiveSignerIds.value,
+      signPlace: reportSignPlace.value,
+      letterhead: reportLetterhead.value,
+      customTitles: reportCustomTitles.value,
+    };
+    return JSON.stringify(payload, null, 2);
+  }
+
+  function importReportSettingsJson(jsonString: string): boolean {
+    try {
+      const parsed = JSON.parse(jsonString);
+      if (!parsed || typeof parsed !== 'object') return false;
+      applyRemoteReportSettings(parsed);
+      persistReportSignatureConfig(true);
+      return true;
+    } catch {
+      return false;
     }
   }
 

@@ -282,6 +282,68 @@ function savePersistedSessionsCache() {
 
 loadPersistedSessionsCache();
 
+export interface ServerReportSettingsRecord {
+  ownerId: string;
+  signers: any[];
+  activeSignerIds: Record<string, string[]>;
+  signPlace: string;
+  letterhead: any;
+  customTitles: any;
+  updatedAt: string;
+}
+
+const REPORT_SETTINGS_CACHE_FILE = path.join(__dirname, '.sisa_uang_report_settings_cache.json');
+const reportSettingsStore = new Map<string, ServerReportSettingsRecord>();
+
+function loadPersistedReportSettingsCache() {
+  try {
+    if (fs.existsSync(REPORT_SETTINGS_CACHE_FILE)) {
+      const raw = fs.readFileSync(REPORT_SETTINGS_CACHE_FILE, 'utf8');
+      const list = JSON.parse(raw) as ServerReportSettingsRecord[];
+      if (Array.isArray(list)) {
+        reportSettingsStore.clear();
+        for (const item of list) {
+          if (item && item.ownerId) {
+            reportSettingsStore.set(item.ownerId, item);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore cache read error
+  }
+}
+
+function savePersistedReportSettingsCache() {
+  try {
+    const list = Array.from(reportSettingsStore.values());
+    fs.writeFileSync(REPORT_SETTINGS_CACHE_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch {
+    // Ignore cache write error
+  }
+}
+
+loadPersistedReportSettingsCache();
+
+const DEV_APP_URL = 'https://ais-dev-aeuhujfqf5ji6wultcvmh5-795639077267.asia-southeast1.run.app';
+const PRE_APP_URL = 'https://ais-pre-aeuhujfqf5ji6wultcvmh5-795639077267.asia-southeast1.run.app';
+
+async function syncReportSettingsToPeer(ownerId: string, record: ServerReportSettingsRecord) {
+  try {
+    const peerUrls = [DEV_APP_URL, PRE_APP_URL];
+    for (const pUrl of peerUrls) {
+      void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/report-settings?peer=1`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record),
+        signal: AbortSignal.timeout(3000),
+      }).catch(() => {});
+    }
+  } catch {
+    // Ignore peer sync network error
+  }
+}
+
 const otpChallenges = new Map<string, OtpChallenge>();
 const verifiedAdminTokens = new Map<string, { email: string; verifiedAt: number }>();
 const failedLoginTracker = new Map<string, number>();
@@ -1534,6 +1596,72 @@ async function startServer() {
       updatedAt: user.updatedAt,
       sessionRevoked,
       isPrimaryDevice,
+    });
+  });
+
+  // =========================================================================
+  // Report Settings Sync Endpoints (/api/users/:uid/report-settings)
+  // =========================================================================
+  app.get('/api/users/:uid/report-settings', (req: Request, res: Response) => {
+    const uid = String(req.params.uid || '').trim();
+    let record = reportSettingsStore.get(uid);
+
+    if (!record && uid !== 'default') {
+      record = reportSettingsStore.get('default');
+    }
+
+    if (!record && reportSettingsStore.size > 0) {
+      record = Array.from(reportSettingsStore.values())[0];
+    }
+
+    if (!record) {
+      res.json({
+        exists: false,
+        reportSettings: null,
+      });
+      return;
+    }
+
+    res.json({
+      exists: true,
+      reportSettings: record,
+    });
+  });
+
+  app.put('/api/users/:uid/report-settings', (req: Request, res: Response) => {
+    const uid = String(req.params.uid || '').trim() || 'default';
+    const body = req.body || {};
+
+    const record: ServerReportSettingsRecord = {
+      ownerId: uid,
+      signers: Array.isArray(body.signers) ? body.signers : [],
+      activeSignerIds:
+        body.activeSignerIds && typeof body.activeSignerIds === 'object'
+          ? body.activeSignerIds
+          : {},
+      signPlace: String(body.signPlace || '').trim(),
+      letterhead:
+        body.letterhead && typeof body.letterhead === 'object' ? body.letterhead : null,
+      customTitles:
+        body.customTitles && typeof body.customTitles === 'object'
+          ? body.customTitles
+          : null,
+      updatedAt: nowIso(),
+    };
+
+    reportSettingsStore.set(uid, record);
+    reportSettingsStore.set('default', { ...record, ownerId: 'default' });
+    savePersistedReportSettingsCache();
+
+    const isFromPeer = req.query.peer === '1';
+    if (!isFromPeer) {
+      void syncReportSettingsToPeer(uid, record);
+    }
+
+    res.json({
+      success: true,
+      updatedAt: record.updatedAt,
+      reportSettings: record,
     });
   });
 

@@ -167,7 +167,7 @@ router.beforeEach((to, _from, next) => {
     return;
   }
 
-  // Super Admin only manages users, logs/alerts, and settings — block finance routes for Super Admin
+  // Super Admin only manages users, logs/alerts, and settings — block finance transaction routes for Super Admin
   const financePaths = [
     '/',
     '/transactions',
@@ -176,7 +176,6 @@ router.beforeEach((to, _from, next) => {
     '/categories',
     '/budgets',
     '/analytics',
-    '/report-settings',
   ];
   if (authStore.isAuthenticated && authStore.isSuperAdmin && financePaths.includes(to.path)) {
     next({ path: '/control-panel' });

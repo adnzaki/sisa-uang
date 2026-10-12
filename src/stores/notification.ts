@@ -19,7 +19,7 @@ export interface ConfirmDialogOptions {
   detail?: string | null;
   confirmLabel?: string;
   cancelLabel?: string;
-  variant?: 'danger' | 'warning';
+  variant?: 'danger' | 'warning' | 'info';
 }
 
 export interface ProModalOptions {

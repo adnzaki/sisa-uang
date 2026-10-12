@@ -224,6 +224,18 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidReportSettings(data) {
+      return data.keys().hasAll(['ownerId', 'signers', 'activeSignerIds', 'signPlace', 'letterhead', 'customTitles', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'signers', 'activeSignerIds', 'signPlace', 'letterhead', 'customTitles', 'updatedAt']) &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.signers is list && data.signers.size() <= 3 &&
+        data.activeSignerIds is map &&
+        data.signPlace is string && data.signPlace.size() <= 100 &&
+        data.letterhead is map &&
+        data.customTitles is map &&
+        data.updatedAt is timestamp;
+    }
+
     // =========================================================================
     // Collection Rules
     // =========================================================================
@@ -600,6 +612,38 @@ service cloud.firestore {
         (existing().status != 'resolved' || isAdmin()) &&
         isAdmin();
       allow delete: if isSignedIn() && isValidId(alertId) && isAdmin();
+    }
+
+    // 10. Report Settings Collection (/report_settings/{settingId})
+    match /report_settings/{settingId} {
+      allow get: if isSignedIn() && isValidId(settingId) && (existing().ownerId == request.auth.uid || settingId == 'default' || isAdmin());
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || resource.data.ownerId == 'default' || isAdmin());
+      allow create: if isSignedIn() &&
+        isValidId(settingId) &&
+        isValidReportSettings(incoming()) &&
+        incoming().updatedAt == request.time &&
+        (
+          incoming().ownerId == request.auth.uid ||
+          incoming().ownerId == 'default' ||
+          isAdmin()
+        );
+      allow update: if isSignedIn() &&
+        isValidId(settingId) &&
+        isValidReportSettings(incoming()) &&
+        (incoming().ownerId == existing().ownerId || isAdmin()) &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            (existing().ownerId == request.auth.uid || existing().ownerId == 'default') &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['signers', 'activeSignerIds', 'signPlace', 'letterhead', 'customTitles', 'updatedAt']) &&
+            isNotBlocked()
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['ownerId', 'signers', 'activeSignerIds', 'signPlace', 'letterhead', 'customTitles', 'updatedAt']) &&
+            isAdmin()
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(settingId) && isAdmin();
     }
   }
 }
