@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import {
@@ -140,6 +140,10 @@ watch(
   },
   { immediate: true }
 );
+
+onMounted(() => {
+  void financeStore.checkAndSyncIfRemoteChanged(undefined, true);
+});
 
 // All registered monthly periods (combining explicit budgetPeriods + periods that already have budget items)
 const allRegisteredPeriods = computed<string[]>(() => {

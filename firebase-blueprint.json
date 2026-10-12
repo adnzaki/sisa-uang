@@ -86,7 +86,17 @@
         "subscriptionStatus": {
           "type": "string",
           "description": "SisaUang Pro subscription tier status",
-          "enum": ["free", "pro"]
+          "enum": ["free", "pending", "pro"]
+        },
+        "subscriptionPlan": {
+          "type": "string",
+          "description": "SisaUang Pro subscription billing cycle",
+          "enum": ["monthly", "yearly"]
+        },
+        "subscriptionExpiresAt": {
+          "type": "string",
+          "description": "Subscription expiration date (YYYY-MM-DD)",
+          "maxLength": 40
         },
         "isPro": {
           "type": "boolean",
@@ -427,9 +437,9 @@
         },
         "period": {
           "type": "string",
-          "description": "Budget month period (YYYY-MM)",
+          "description": "Budget month or annual period identifier",
           "minLength": 6,
-          "maxLength": 20
+          "maxLength": 40
         },
         "createdAt": {
           "type": "string",
