@@ -2585,7 +2585,7 @@ async function startServer() {
   // App Version & Live Update Detection Endpoint
   // =========================================================================
   function computeCurrentBuildFingerprint(): { version: string; buildHash: string } {
-    let version = '1.0.0-rc.5';
+    let version = '1.0.0-rc.6';
     const hash = crypto.createHash('sha1');
     try {
       const pkgRaw = fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8');

@@ -5,88 +5,83 @@ import {
   Rocket,
   Layers,
   Check,
-  Users,
-  ShieldCheck,
-  Wallet,
-  Smartphone,
+  FileSpreadsheet,
+  PieChart,
+  Crown,
 } from 'lucide-vue-next';
 import { useNotificationStore } from '../stores/notification';
 import { useAuthStore } from '../stores/auth';
 import AppModal from './AppModal.vue';
 
-const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0_rc_5';
-const RELEASE_VERSION = '1.0.0-rc.5';
+const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0_rc_6';
+const RELEASE_VERSION = '1.0.0-rc.6';
 const RELEASE_DATE = 'Oktober 2026';
 
 const notificationStore = useNotificationStore();
 const authStore = useAuthStore();
 
-const activeFilter = ref<'all' | 'features' | 'interface'>('all');
+const activeFilter = ref<'all' | 'report' | 'budget'>('all');
 
 export interface ChangelogItem {
   id: string;
-  category: 'features' | 'interface';
+  category: 'report' | 'budget';
   badge: string;
   badgeColor: 'emerald' | 'indigo' | 'amber' | 'rose' | 'sky';
+  isProExclusive?: boolean;
   title: string;
   summary: string;
+  details: string[];
   icon: any;
 }
 
 const changelogItems: ChangelogItem[] = [
   {
-    id: 'smartphone-swipe-gestures',
-    category: 'interface',
-    badge: 'GESTURE SMARTPHONE',
-    badgeColor: 'sky',
-    title: 'Menambahkan Gesture Swipe Khusus Pengguna Smartphone',
-    summary:
-      'Dukungan navigasi sentuh layaknya aplikasi native: geser (swipe) kiri/kanan pada layar untuk berpindah antar menu Bottom Navbar dengan transisi halus, geser kiri/kanan untuk menutup popup banner notifikasi, serta geser ke kiri untuk menutup menu sidebar.',
-    icon: Smartphone,
-  },
-  {
-    id: 'multi-account-support',
-    category: 'features',
-    badge: 'MULTI-AKUN',
+    id: 'pro-report-settings',
+    category: 'report',
+    badge: 'PENGATURAN LAPORAN PDF',
     badgeColor: 'emerald',
-    title: 'Penambahan Dukungan Multi-Akun (Beralih Antar Akun Instan)',
+    isProExclusive: true,
+    title: 'Menambahkan Pengaturan Laporan PDF Resmi (Khusus Pelanggan Pro)',
     summary:
-      'Simpan beberapa akun pengguna sekaligus pada perangkat Anda dan beralih antar akun secara instan melalui menu profil di pojok kanan atas, halaman Pengaturan, maupun halaman Login tanpa harus memasukkan ulang kata sandi.',
-    icon: Users,
+      'Halaman khusus Pengaturan Laporan (Pengaturan → Laporan) yang memberikan kendali penuh bagi pelanggan SisaUang Pro dalam menyesuaikan identitas dokumen resmi pada Laporan Kas Umum, Rekonsiliasi Kas & Kepemilikan, serta Realisasi Anggaran:',
+    details: [
+      'Kop Laporan Institusi / Organisasi (Mode Teks & Gambar Banner): Mendukung pembuatan kop surat teks (Nama Masjid, Musholla, DKM, RT/RW, Yayasan, atau Organisasi beserta sub-judul dan alamat sekretariat) dilengkapi preset instan, maupun unggah gambar banner kop surat dengan resolusi proporsional asli.',
+      'Visibilitas Kop Fleksibel per Jenis Laporan: Opsi pemilihan laporan mana saja yang menampilkan Kop Surat karena tidak semua laporan resmi membutuhkan kop.',
+      'Kustomisasi Judul Dokumen Laporan: Ubah judul utama masing-masing jenis laporan PDF sesuai kebutuhan acara, kepanitiaan, atau periode pelaporan.',
+      'Manajemen Penandatangan & Tata Letak Tanda Tangan Formal: Tambahkan hingga 3 penandatangan laporan lengkap dengan Kota/Tempat penetapan, pengaturan urutan, penempatan Baris Atas / Baris Bawah, aktivasi penandatangan per laporan, serta tata letak formal otomatis (jika hanya 1 penandatangan otomatis ditempatkan di sisi kanan).',
+    ],
+    icon: FileSpreadsheet,
   },
   {
-    id: 'device-session-management',
-    category: 'features',
-    badge: 'MANAJEMEN SESI & OTP',
-    badgeColor: 'rose',
-    title: 'Penambahan Fitur Manajemen Perangkat, Sesi Aktif & Otorisasi Perangkat Utama',
+    id: 'pro-annual-budget-mapping',
+    category: 'budget',
+    badge: 'ANGGARAN SETAHUN PENUH',
+    badgeColor: 'amber',
+    isProExclusive: true,
+    title: 'Menambahkan Opsi Anggaran Setahun Penuh & Mapping Bulanan (Khusus Pelanggan Pro)',
     summary:
-      'Pantau seluruh perangkat yang masuk ke akun Anda secara real-time, tetapkan Perangkat Utama melalui verifikasi kode OTP 6 digit ke email terdaftar, serta hapus atau cabut (revoke) sesi login di perangkat lain dari jarak jauh.',
-    icon: ShieldCheck,
-  },
-  {
-    id: 'thousand-separator-money-inputs',
-    category: 'interface',
-    badge: 'FORMAT NOMINAL',
-    badgeColor: 'indigo',
-    title: 'Melengkapi Separator Ribuan Otomatis untuk Inputan Uang',
-    summary:
-      'Melengkapi pemformatan pemisah ribuan otomatis (titik/koma sesuai format mata uang IDR/USD) saat mengetik nominal uang di seluruh formulir, termasuk Saldo Awal Sumber Dana (Wallet), Transaksi, Kepemilikan Dana, dan Anggaran.',
-    icon: Wallet,
+      'Fitur penganggaran komprehensif untuk merencanakan anggaran satu tahun penuh sekaligus beserta pemetaan alokasi bulanan dan pengendalian disiplin belanja:',
+    details: [
+      'Mapping Bulanan Fleksibel Tanpa Selisih (Rp 0): Petakan total anggaran tahunan tiap kategori ke bulan-bulan yang direncanakan (tidak wajib diisi setiap bulan, misalnya hanya dialokasikan pada bulan Mei, Juli, dan Agustus) hingga selisih penganggaran Rp 0. Saat anggaran tahunan aktif, penambahan periode bulanan terpisah pada tahun tersebut otomatis dikunci.',
+      'Alur Status Draft, Finalisasi & Perubahan Anggaran: Anggaran yang baru disusun atau sedang diedit berstatus Draft hingga pengguna mengklik "Finalisasi Anggaran". Selama berstatus Draft atau dalam masa "Perubahan Anggaran", pencatatan transaksi untuk kategori di dalam anggaran dikunci sementara hingga anggaran difinalisasi kembali.',
+      'Opsi Mode Ketat (Disiplin Anggaran): Menolak pencatatan transaksi pengeluaran apabila belum memasuki bulan alokasi anggaran (wajib melakukan perubahan anggaran terlebih dahulu), tetap mengizinkan transaksi setelah melewati batas minimum bulan alokasi, serta membatasi revisi maksimal 5x setelah finalisasi.',
+      'Opsi Mode Fleksibel (Adaptif): Menampilkan konfirmasi pengingat apabila pengguna mencatat transaksi sebelum memasuki bulan alokasi yang direncanakan namun tetap mengizinkan penyimpanan transaksi, serta mendukung perubahan anggaran kapan saja tanpa batas jumlah revisi.',
+    ],
+    icon: PieChart,
   },
 ];
 
 const filterTabs = [
   { id: 'all' as const, label: 'Semua Pembaruan', count: changelogItems.length },
   {
-    id: 'features' as const,
-    label: 'Fitur Baru',
-    count: changelogItems.filter((i) => i.category === 'features').length,
+    id: 'report' as const,
+    label: 'Pengaturan Laporan (PRO)',
+    count: changelogItems.filter((i) => i.category === 'report').length,
   },
   {
-    id: 'interface' as const,
-    label: 'Input & Antarmuka',
-    count: changelogItems.filter((i) => i.category === 'interface').length,
+    id: 'budget' as const,
+    label: 'Anggaran Setahun (PRO)',
+    count: changelogItems.filter((i) => i.category === 'budget').length,
   },
 ];
 
@@ -104,7 +99,7 @@ function markChangelogSeenAndClose() {
   notificationStore.closeChangelogModal();
 }
 
-// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.0-rc.5 changelog yet
+// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.0-rc.6 changelog yet
 watch(
   () => [authStore.isReady, authStore.isAuthenticated, authStore.requiresOtp] as const,
   ([ready, authenticated, needOtp]) => {
@@ -148,7 +143,7 @@ watch(
             </span>
           </div>
           <p class="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-            Release Candidate 5 · {{ RELEASE_DATE }}
+            Release Candidate 6 · {{ RELEASE_DATE }}
           </p>
         </div>
       </div>
@@ -168,6 +163,12 @@ watch(
               <span>Rilis Baru · v{{ RELEASE_VERSION }}</span>
             </span>
             <span
+              class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/20 border border-amber-400/30 text-amber-300 text-[11px] font-bold uppercase tracking-wider"
+            >
+              <Crown class="w-3.5 h-3.5" />
+              <span>Eksklusif SisaUang Pro</span>
+            </span>
+            <span
               class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 text-slate-200 text-[11px] font-mono"
             >
               <Layers class="w-3.5 h-3.5 text-emerald-400" />
@@ -181,9 +182,9 @@ watch(
             </h3>
             <p class="text-xs sm:text-sm text-slate-300 leading-relaxed">
               Pembaruan versi <strong class="text-emerald-300 font-mono">{{ RELEASE_VERSION }}</strong> menghadirkan
-              gesture swipe khusus pengguna smartphone, dukungan multi-akun untuk beralih antar akun dengan cepat,
-              manajemen perangkat &amp; sesi aktif dengan otorisasi Perangkat Utama berbasis OTP email, serta
-              pelengkapan separator ribuan otomatis pada seluruh inputan uang.
+              dua fitur unggulan khusus pelanggan <strong class="text-amber-300">SisaUang Pro</strong>:
+              <strong>Pengaturan Laporan PDF Resmi</strong> (Kop Surat Teks/Gambar, Visibilitas Kop per Laporan, Judul Kustom &amp; Tata Letak Penandatangan Formal) serta
+              <strong>Opsi Anggaran Setahun Penuh</strong> dengan Mapping Bulanan, sistem Draft &amp; Finalisasi, dan pilihan Mode Ketat atau Fleksibel.
             </p>
           </div>
         </div>
@@ -195,7 +196,7 @@ watch(
           v-for="tab in filterTabs"
           :key="tab.id"
           type="button"
-          class="min-h-[36px] px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap flex items-center gap-1.5 transition-colors shrink-0 border"
+          class="min-h-[36px] px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap flex items-center gap-1.5 transition-colors shrink-0 border cursor-pointer"
           :class="
             activeFilter === tab.id
               ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
@@ -225,50 +226,65 @@ watch(
           class="rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 p-4 sm:p-5 space-y-3 transition-colors hover:border-emerald-500/40"
         >
           <!-- Top Row: Icon & Colorful Badge Aligned Horizontally -->
-          <div class="flex items-center gap-2.5">
-            <div
-              class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border"
-              :class="[
-                item.badgeColor === 'emerald'
-                  ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200/70 dark:border-emerald-900/60 text-emerald-600 dark:text-emerald-400'
-                  : item.badgeColor === 'sky'
-                    ? 'bg-sky-50 dark:bg-sky-950/60 border-sky-200/70 dark:border-sky-900/60 text-sky-600 dark:text-sky-400'
-                    : item.badgeColor === 'indigo'
-                      ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-200/70 dark:border-indigo-900/60 text-indigo-600 dark:text-indigo-400'
-                      : item.badgeColor === 'amber'
-                        ? 'bg-amber-50 dark:bg-amber-950/60 border-amber-200/70 dark:border-amber-900/60 text-amber-600 dark:text-amber-400'
-                        : 'bg-rose-50 dark:bg-rose-950/60 border-rose-200/70 dark:border-rose-900/60 text-rose-600 dark:text-rose-400',
-              ]"
-            >
-              <component :is="item.icon" class="w-4 h-4" />
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2.5">
+              <div
+                class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border"
+                :class="[
+                  item.badgeColor === 'emerald'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200/70 dark:border-emerald-900/60 text-emerald-600 dark:text-emerald-400'
+                    : item.badgeColor === 'sky'
+                      ? 'bg-sky-50 dark:bg-sky-950/60 border-sky-200/70 dark:border-sky-900/60 text-sky-600 dark:text-sky-400'
+                      : item.badgeColor === 'indigo'
+                        ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-200/70 dark:border-indigo-900/60 text-indigo-600 dark:text-indigo-400'
+                        : item.badgeColor === 'amber'
+                          ? 'bg-amber-50 dark:bg-amber-950/60 border-amber-200/70 dark:border-amber-900/60 text-amber-600 dark:text-amber-400'
+                          : 'bg-rose-50 dark:bg-rose-950/60 border-rose-200/70 dark:border-rose-900/60 text-rose-600 dark:text-rose-400',
+                ]"
+              >
+                <component :is="item.icon" class="w-4 h-4" />
+              </div>
+
+              <span
+                class="px-2.5 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold uppercase tracking-wider"
+                :class="[
+                  item.badgeColor === 'emerald'
+                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                    : item.badgeColor === 'sky'
+                      ? 'bg-sky-500/15 text-sky-700 dark:text-sky-300'
+                      : item.badgeColor === 'indigo'
+                        ? 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300'
+                        : item.badgeColor === 'amber'
+                          ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                          : 'bg-rose-500/15 text-rose-700 dark:text-rose-300',
+                ]"
+              >
+                {{ item.badge }}
+              </span>
             </div>
 
             <span
-              class="px-2.5 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold uppercase tracking-wider"
-              :class="[
-                item.badgeColor === 'emerald'
-                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                  : item.badgeColor === 'sky'
-                    ? 'bg-sky-500/15 text-sky-700 dark:text-sky-300'
-                    : item.badgeColor === 'indigo'
-                      ? 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300'
-                      : item.badgeColor === 'amber'
-                        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                        : 'bg-rose-500/15 text-rose-700 dark:text-rose-300',
-              ]"
+              v-if="item.isProExclusive"
+              class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-100 dark:bg-amber-950/80 border border-amber-300/70 dark:border-amber-800/70 text-amber-800 dark:text-amber-300 text-[10px] font-bold uppercase tracking-wider"
             >
-              {{ item.badge }}
+              <Crown class="w-3 h-3 shrink-0" />
+              <span>Khusus Pro</span>
             </span>
           </div>
 
-          <!-- Title & Summary Description Full-Width Below -->
-          <div class="space-y-1.5">
+          <!-- Title, Summary & Detailed Bullet Points -->
+          <div class="space-y-2">
             <h4 class="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 leading-snug">
               {{ item.title }}
             </h4>
             <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
               {{ item.summary }}
             </p>
+            <ul class="space-y-1.5 pt-1 text-xs text-slate-600 dark:text-slate-300 list-disc pl-4 leading-relaxed">
+              <li v-for="(detail, idx) in item.details" :key="idx">
+                {{ detail }}
+              </li>
+            </ul>
           </div>
         </div>
       </div>
@@ -281,7 +297,7 @@ watch(
         </div>
         <button
           type="button"
-          class="w-full sm:w-auto min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs"
+          class="w-full sm:w-auto min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs cursor-pointer"
           @click="markChangelogSeenAndClose"
         >
           <Check class="w-4 h-4 shrink-0" />
