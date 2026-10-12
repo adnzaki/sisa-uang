@@ -26,6 +26,8 @@ import {
   MAX_REPORT_SIGNERS,
   DEFAULT_REPORT_TITLES,
   type ReportCustomTitlesConfig,
+  type ReportSignerRowPosition,
+  type ReportSignerItem,
 } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
@@ -36,6 +38,7 @@ const notificationStore = useNotificationStore();
 
 const newSignerName = ref('');
 const newSignerRole = ref('');
+const newSignerRowPosition = ref<ReportSignerRowPosition>('top');
 const kopImageInputRef = ref<HTMLInputElement | null>(null);
 const isProcessingImage = ref(false);
 
@@ -73,51 +76,44 @@ function handleKopImageUpload(event: Event) {
     const img = new Image();
     img.onload = () => {
       try {
-        // Optimize & resize max width to 2400px (300 DPI print quality) while keeping aspect ratio so it fits smoothly in localStorage & PDF
-        const maxWidth = 2400;
-        const maxHeight = 600;
-        let targetW = img.naturalWidth || img.width || 1800;
-        let targetH = img.naturalHeight || img.height || 300;
+        // Preserve original dimensions & aspect ratio as uploaded; only scale down proportionally if exceeding 2400px
+        const maxDimension = 2400;
+        const naturalW = img.naturalWidth || img.width || 1200;
+        const naturalH = img.naturalHeight || img.height || 300;
+        const scale = Math.min(1, maxDimension / naturalW, maxDimension / naturalH);
+        const targetW = Math.max(1, Math.round(naturalW * scale));
+        const targetH = Math.max(1, Math.round(naturalH * scale));
 
-        if (targetW > maxWidth) {
-          const ratio = maxWidth / targetW;
-          targetW = maxWidth;
-          targetH = Math.round(targetH * ratio);
-        }
-        if (targetH > maxHeight) {
-          const ratio = maxHeight / targetH;
-          targetH = maxHeight;
-          targetW = Math.round(targetW * ratio);
-        }
-
-        const canvas = document.createElement('canvas');
-        canvas.width = targetW;
-        canvas.height = targetH;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          // Fill white background if JPEG, preserve transparency if PNG
-          const isPng = file.type === 'image/png';
-          if (!isPng) {
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, targetW, targetH);
+        let outputDataUrl = rawDataUrl;
+        if (scale < 1 || file.size > 1.5 * 1024 * 1024) {
+          const canvas = document.createElement('canvas');
+          canvas.width = targetW;
+          canvas.height = targetH;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const isPng = file.type === 'image/png';
+            if (!isPng) {
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, targetW, targetH);
+            }
+            ctx.drawImage(img, 0, 0, targetW, targetH);
+            outputDataUrl = isPng
+              ? canvas.toDataURL('image/png')
+              : canvas.toDataURL('image/jpeg', 0.92);
           }
-          ctx.drawImage(img, 0, 0, targetW, targetH);
-          const outputDataUrl = isPng
-            ? canvas.toDataURL('image/png')
-            : canvas.toDataURL('image/jpeg', 0.92);
-
-          themeStore.updateReportLetterhead({
-            enabled: true,
-            mode: 'image',
-            imageDataUrl: outputDataUrl,
-            imageWidthPx: targetW,
-            imageHeightPx: targetH,
-          });
-          notificationStore.notifySuccess(
-            'Gambar Kop Berhasil Diunggah',
-            `Resolusi tersimpan: ${targetW} × ${targetH} piksel. Siap dicetak pada dokumen PDF.`
-          );
         }
+
+        themeStore.updateReportLetterhead({
+          enabled: true,
+          mode: 'image',
+          imageDataUrl: outputDataUrl,
+          imageWidthPx: targetW,
+          imageHeightPx: targetH,
+        });
+        notificationStore.notifySuccess(
+          'Gambar Kop Berhasil Diunggah',
+          `Resolusi asli dipertahankan (${targetW} × ${targetH} piksel) tanpa di-stretch.`
+        );
       } catch {
         notificationStore.notifyError(
           'Gagal Memproses Gambar',
@@ -274,15 +270,40 @@ function handleAddReportSigner() {
     return;
   }
 
-  const added = themeStore.addReportSigner(cleanName, cleanRole);
+  const added = themeStore.addReportSigner(
+    cleanName,
+    cleanRole,
+    newSignerRowPosition.value
+  );
   if (added) {
     newSignerName.value = '';
     newSignerRole.value = '';
+    // If 2 signers are already in top row, default next slot to bottom row for convenience
+    const topCount = themeStore.reportSigners.filter((s) => s.rowPosition !== 'bottom').length;
+    newSignerRowPosition.value = topCount >= 2 ? 'bottom' : 'top';
     notificationStore.notifySuccess(
       'Penandatangan Ditambahkan',
-      `"${added.name || added.role}" telah ditambahkan ke daftar penandatangan laporan.`
+      `"${added.name || added.role}" telah ditambahkan pada ${added.rowPosition === 'bottom' ? 'Baris Bawah' : 'Baris Atas'}.`
     );
   }
+}
+
+function getSignerPositionDescription(signer: ReportSignerItem): string {
+  const isBottom = signer.rowPosition === 'bottom';
+  const rowLabel = isBottom ? 'Baris Bawah' : 'Baris Atas';
+  const sameRowSigners = themeStore.reportSigners.filter(
+    (s) => (s.rowPosition === 'bottom') === isBottom
+  );
+  const posIdx = sameRowSigners.findIndex((s) => s.id === signer.id);
+  if (sameRowSigners.length <= 1) {
+    if (themeStore.reportSigners.length === 1 || !isBottom) {
+      return `${rowLabel} · Posisi Kanan (Tunggal)`;
+    }
+    return `${rowLabel} · Posisi Tengah`;
+  }
+  if (posIdx === 0) return `${rowLabel} · Kolom Kiri`;
+  if (posIdx === sameRowSigners.length - 1) return `${rowLabel} · Kolom Kanan`;
+  return `${rowLabel} · Kolom Tengah`;
 }
 
 function handleRemoveReportSigner(id: string, displayLabel: string) {
@@ -301,11 +322,16 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
 <template>
   <div class="w-full max-w-full overflow-x-hidden space-y-6">
     <!-- Page Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
       <div class="min-w-0">
-        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-          Pengaturan Laporan PDF
-        </h1>
+        <div class="flex flex-wrap items-center gap-2">
+          <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+            Pengaturan · Laporan PDF
+          </h1>
+          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold uppercase tracking-wider">
+            <span>SisaUang Pro</span>
+          </span>
+        </div>
         <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
           Kustomisasi kop institusi/organisasi (seperti Masjid, Musholla, Komunitas, atau Lembaga), judul masing-masing laporan, serta daftar penandatangan laporan PDF.
         </p>
@@ -313,7 +339,7 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
 
       <RouterLink
         to="/analytics"
-        class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs"
+        class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs"
       >
         <FileCheck2 class="w-4 h-4 shrink-0" />
         <span>Buka Analitik &amp; Cetak PDF</span>
@@ -579,7 +605,7 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
               (atau minimal <span class="font-semibold">1200 × 200 piksel</span>).
             </li>
             <li>
-              <strong>Format &amp; Desain</strong>: Gunakan format <strong>PNG</strong> (latar belakang putih atau transparan) atau <strong>JPG/JPEG</strong> yang sudah memuat logo masjid/instansi beserta nama dan alamat lengkap dalam satu banner memanjang.
+              <strong>Format &amp; Desain</strong>: Gunakan format <strong>PNG</strong> (latar belakang putih atau transparan) atau <strong>JPG/JPEG</strong>. <em>Catatan: Ukuran di atas hanya bersifat rekomendasi — gambar kop yang Anda unggah akan ditampilkan apa adanya sesuai proporsi asli tanpa di-stretch.</em>
             </li>
           </ul>
         </div>
@@ -600,7 +626,7 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
                 <strong class="text-emerald-700 dark:text-emerald-400">
                   {{ themeStore.reportLetterhead.imageWidthPx || 'Auto' }} × {{ themeStore.reportLetterhead.imageHeightPx || 'Auto' }} px
                 </strong>
-                · Garis ganda kop otomatis ditambahkan di bawah gambar.
+                · Ditampilkan apa adanya sesuai gambar asli.
               </template>
               <template v-else>
                 Pilih gambar banner kop surat dari perangkat Anda (PNG/JPG, maks. 8 MB).
@@ -640,6 +666,48 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
         </div>
       </div>
 
+      <!-- Per-Report Letterhead Assignment Toggles -->
+      <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 p-3.5 sm:p-4 space-y-2.5">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span class="text-xs font-semibold text-slate-700 dark:text-slate-200">
+            Tampilkan Kop pada Jenis Laporan Berikut:
+          </span>
+          <span class="text-[11px] text-slate-500 dark:text-slate-400">
+            Pilih laporan mana saja yang menggunakan kop surat (fleksibel per laporan)
+          </span>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <button
+            v-for="rep in reportTypeDefinitions"
+            :key="`lh_rep_${rep.id}`"
+            type="button"
+            class="min-h-[42px] px-3.5 py-2 rounded-xl border text-left text-xs font-semibold flex items-center justify-between gap-2 transition-colors cursor-pointer"
+            :class="
+              themeStore.isLetterheadActiveForReport(rep.id)
+                ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200'
+                : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400'
+            "
+            @click="themeStore.toggleLetterheadForReport(rep.id)"
+          >
+            <div class="flex items-center gap-2 min-w-0">
+              <component :is="rep.icon" class="w-4 h-4 shrink-0 text-emerald-600" />
+              <span class="truncate">{{ rep.shortLabel }}</span>
+            </div>
+            <span
+              class="px-2 py-0.5 rounded text-[10px] font-bold uppercase shrink-0"
+              :class="
+                themeStore.isLetterheadActiveForReport(rep.id)
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-200 dark:bg-slate-800 text-slate-500'
+              "
+            >
+              {{ themeStore.isLetterheadActiveForReport(rep.id) ? 'Pakai Kop' : 'Tanpa Kop' }}
+            </span>
+          </button>
+        </div>
+      </div>
+
       <!-- Live Visual Preview of the Kop Laporan (Both Image Mode and Text Mode) -->
       <div
         v-if="
@@ -666,18 +734,17 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
           </span>
         </div>
 
-        <!-- Image Kop Preview -->
+        <!-- Image Kop Preview (no extra bottom border line; border only applies to text mode) -->
         <div
           v-if="
             themeStore.reportLetterhead.mode === 'image' &&
             themeStore.reportLetterhead.imageDataUrl
           "
-          class="pb-3 border-b-4 border-double border-slate-800 dark:border-slate-300"
         >
           <img
             :src="themeStore.reportLetterhead.imageDataUrl"
             alt="Pratinjau Kop Surat PDF"
-            class="w-full max-h-36 object-contain mx-auto rounded-lg bg-white"
+            class="max-w-full h-auto max-h-48 object-contain mx-auto rounded-lg bg-white"
           />
         </div>
 
@@ -849,7 +916,7 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
-          <div class="sm:col-span-5">
+          <div class="sm:col-span-4">
             <input
               v-model="newSignerName"
               type="text"
@@ -858,14 +925,40 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
               class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
             />
           </div>
-          <div class="sm:col-span-5">
+          <div class="sm:col-span-4">
             <input
               v-model="newSignerRole"
               type="text"
               maxlength="80"
-              placeholder="Jabatan / Peran (misal: Mengetahui, Ketua DKM / Bendahara)"
+              placeholder="Jabatan / Peran (misal: Sekretaris / Bendahara / Ketua)"
               class="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
             />
+          </div>
+          <div class="sm:col-span-2 flex rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-1 min-h-[44px]">
+            <button
+              type="button"
+              class="flex-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer"
+              :class="
+                newSignerRowPosition !== 'bottom'
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              "
+              @click="newSignerRowPosition = 'top'"
+            >
+              Atas
+            </button>
+            <button
+              type="button"
+              class="flex-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer"
+              :class="
+                newSignerRowPosition === 'bottom'
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              "
+              @click="newSignerRowPosition = 'bottom'"
+            >
+              Bawah
+            </button>
           </div>
           <div class="sm:col-span-2">
             <button
@@ -877,6 +970,9 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
             </button>
           </div>
         </div>
+        <p class="text-[11px] text-slate-500 dark:text-slate-400">
+          Tips: Pilih <strong>Atas</strong> untuk penandatangan sejajar di baris pertama (misal: Sekretaris &amp; Bendahara), dan pilih <strong>Bawah</strong> untuk penandatangan di baris kedua bawah (misal: Mengetahui, Ketua / Kepala).
+        </p>
       </form>
 
       <!-- Maximum Reached Banner -->
@@ -917,20 +1013,42 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
               <span class="text-xs font-bold text-slate-800 dark:text-slate-200">
                 Penandatangan #{{ idx + 1 }}
                 <span class="font-normal text-slate-500 dark:text-slate-400">
-                  ({{
-                    themeStore.reportSigners.length === 1
-                      ? 'Posisi Kanan / Tunggal'
-                      : idx === 0
-                        ? 'Kolom Kiri'
-                        : idx === themeStore.reportSigners.length - 1
-                          ? 'Kolom Kanan'
-                          : 'Kolom Tengah'
-                  }})
+                  ({{ getSignerPositionDescription(signer) }})
                 </span>
               </span>
             </div>
 
-            <div class="flex items-center gap-1.5">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <!-- Toggle Posisi Baris Atas / Bawah -->
+              <div class="inline-flex items-center rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-0.5 mr-1">
+                <button
+                  type="button"
+                  class="px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer"
+                  :class="
+                    signer.rowPosition !== 'bottom'
+                      ? 'bg-emerald-600 text-white'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+                  "
+                  title="Tempatkan di Baris Atas pada halaman PDF"
+                  @click="themeStore.updateReportSigner(signer.id, signer.name, signer.role, 'top')"
+                >
+                  Baris Atas
+                </button>
+                <button
+                  type="button"
+                  class="px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer"
+                  :class="
+                    signer.rowPosition === 'bottom'
+                      ? 'bg-emerald-600 text-white'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+                  "
+                  title="Tempatkan di Baris Bawah pada halaman PDF"
+                  @click="themeStore.updateReportSigner(signer.id, signer.name, signer.role, 'bottom')"
+                >
+                  Baris Bawah
+                </button>
+              </div>
+
               <button
                 type="button"
                 :disabled="idx === 0"
@@ -1036,6 +1154,126 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
                   {{ isSignerEnabledForReport(rep.id, signer.id) ? 'Aktif' : 'Nonaktif' }}
                 </span>
               </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Preview of Signature Block Layout (Baris Atas & Baris Bawah) -->
+        <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-4 sm:p-5 space-y-4">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-2.5">
+            <div class="text-[11px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+              Pratinjau Posisi Tanda Tangan di Dokumen PDF (Atas &amp; Bawah)
+            </div>
+            <span class="text-[11px] text-slate-400">
+              {{
+                themeStore.reportSigners.some((s) => s.rowPosition === 'bottom') &&
+                themeStore.reportSigners.some((s) => s.rowPosition !== 'bottom')
+                  ? 'Mode 2 Baris (Atas & Bawah)'
+                  : 'Mode 1 Baris Sejajar'
+              }}
+            </span>
+          </div>
+
+          <div class="space-y-5 py-1">
+            <!-- Row 1: Baris Atas -->
+            <div
+              v-if="themeStore.reportSigners.some((s) => s.rowPosition !== 'bottom')"
+              class="space-y-1.5"
+            >
+              <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 text-center">
+                Baris Atas
+              </div>
+              <div
+                class="grid gap-4"
+                :style="{
+                  gridTemplateColumns: `repeat(${themeStore.reportSigners.filter((s) => s.rowPosition !== 'bottom').length}, minmax(0, 1fr))`,
+                }"
+              >
+                <div
+                  v-for="(s, rIdx) in themeStore.reportSigners.filter((item) => item.rowPosition !== 'bottom')"
+                  :key="`preview_top_${s.id}`"
+                  class="text-center space-y-5 p-2.5 rounded-xl bg-slate-50/70 dark:bg-slate-900/60 border border-slate-200/60 dark:border-slate-800"
+                  :class="
+                    themeStore.reportSigners.filter((item) => item.rowPosition !== 'bottom').length === 1
+                      ? 'max-w-xs w-full ml-auto'
+                      : ''
+                  "
+                >
+                  <div class="space-y-0.5">
+                    <div
+                      v-if="
+                        rIdx ===
+                        themeStore.reportSigners.filter((item) => item.rowPosition !== 'bottom').length - 1
+                      "
+                      class="text-[10px] text-slate-500 dark:text-slate-400"
+                    >
+                      {{
+                        themeStore.reportSignPlace.trim()
+                          ? `${themeStore.reportSignPlace.trim()}, 11 Oktober 2026`
+                          : 'Tanggal Cetak: 11 Oktober 2026'
+                      }}
+                    </div>
+                    <div class="text-xs text-slate-700 dark:text-slate-300">
+                      {{ s.role || 'Penandatangan' }}
+                    </div>
+                  </div>
+                  <div class="text-xs font-bold text-slate-900 dark:text-slate-100 underline underline-offset-4">
+                    {{ s.name || '........................................' }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Row 2: Baris Bawah -->
+            <div
+              v-if="themeStore.reportSigners.some((s) => s.rowPosition === 'bottom')"
+              class="space-y-1.5"
+            >
+              <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 text-center">
+                Baris Bawah
+              </div>
+              <div
+                class="grid gap-4"
+                :style="{
+                  gridTemplateColumns: `repeat(${themeStore.reportSigners.filter((s) => s.rowPosition === 'bottom').length}, minmax(0, 1fr))`,
+                }"
+              >
+                <div
+                  v-for="(s, rIdx) in themeStore.reportSigners.filter((item) => item.rowPosition === 'bottom')"
+                  :key="`preview_bottom_${s.id}`"
+                  class="text-center space-y-5 p-2.5 rounded-xl bg-slate-50/70 dark:bg-slate-900/60 border border-slate-200/60 dark:border-slate-800"
+                  :class="
+                    themeStore.reportSigners.filter((item) => item.rowPosition === 'bottom').length === 1
+                      ? themeStore.reportSigners.length === 1
+                        ? 'max-w-xs w-full ml-auto'
+                        : 'max-w-xs w-full mx-auto'
+                      : ''
+                  "
+                >
+                  <div class="space-y-0.5">
+                    <div
+                      v-if="
+                        !themeStore.reportSigners.some((item) => item.rowPosition !== 'bottom') &&
+                        rIdx ===
+                          themeStore.reportSigners.filter((item) => item.rowPosition === 'bottom').length - 1
+                      "
+                      class="text-[10px] text-slate-500 dark:text-slate-400"
+                    >
+                      {{
+                        themeStore.reportSignPlace.trim()
+                          ? `${themeStore.reportSignPlace.trim()}, 11 Oktober 2026`
+                          : 'Tanggal Cetak: 11 Oktober 2026'
+                      }}
+                    </div>
+                    <div class="text-xs text-slate-700 dark:text-slate-300">
+                      {{ s.role || 'Penandatangan' }}
+                    </div>
+                  </div>
+                  <div class="text-xs font-bold text-slate-900 dark:text-slate-100 underline underline-offset-4">
+                    {{ s.name || '........................................' }}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

@@ -660,7 +660,7 @@ const pdfPreviewSummary = computed(() =>
     userDisplayName: authStore.user?.displayName || 'Pengguna Sisa Uang',
     userEmail: authStore.user?.email || '-',
     locale: locale.value === 'en' ? 'en' : 'id',
-    letterhead: themeStore.reportLetterhead,
+    letterhead: themeStore.getLetterheadForReport(pdfReportType.value),
     customReportTitle: themeStore.reportCustomTitles[pdfReportType.value],
   })
 );
@@ -698,7 +698,7 @@ function handleDownloadPdfReport() {
       printDateIso: pdfPrintDate.value || toIsoDate(new Date()),
       signPlace: themeStore.reportSignPlace,
       signers: activeSignersForSelectedReport.value,
-      letterhead: themeStore.reportLetterhead,
+      letterhead: themeStore.getLetterheadForReport(pdfReportType.value),
       customReportTitle: themeStore.reportCustomTitles[pdfReportType.value],
     });
 
@@ -718,7 +718,7 @@ function handleDownloadPdfReport() {
 <template>
   <div class="space-y-5 sm:space-y-6 max-w-full overflow-x-hidden">
     <!-- Page Title Header & Generate PDF Button -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+    <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
       <div class="min-w-0">
         <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
           Statistik & Analitik Keuangan
@@ -728,10 +728,10 @@ function handleDownloadPdfReport() {
         </p>
       </div>
 
-      <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:items-center gap-2.5 w-full lg:w-auto shrink-0">
         <button
           type="button"
-          class="w-full sm:w-auto min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+          class="w-full lg:w-auto min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
           @click="goToSignatureSettings"
         >
           <Settings class="w-4 h-4 text-emerald-600 shrink-0" />
@@ -740,7 +740,7 @@ function handleDownloadPdfReport() {
 
         <button
           type="button"
-          class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs cursor-pointer"
+          class="w-full lg:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs cursor-pointer"
           @click="openPdfGeneratorModal"
         >
           <FileDown class="w-4 h-4 shrink-0" />
@@ -1295,6 +1295,43 @@ function handleDownloadPdfReport() {
             />
           </div>
 
+          <!-- Status Kop Laporan untuk Jenis Laporan Ini -->
+          <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div class="space-y-0.5 min-w-0">
+              <div class="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Kop Laporan untuk
+                <strong class="text-slate-900 dark:text-slate-100">
+                  {{ pdfReportTypeCards.find((c) => c.id === pdfReportType)?.title }}
+                </strong>
+              </div>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">
+                {{
+                  themeStore.isLetterheadActiveForReport(pdfReportType)
+                    ? 'Kop surat aktif dan akan ditampilkan di bagian atas laporan ini.'
+                    : 'Laporan ini akan dicetak tanpa kop surat di bagian atas.'
+                }}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="min-h-[36px] px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 shrink-0 transition-colors cursor-pointer"
+              :class="
+                themeStore.isLetterheadActiveForReport(pdfReportType)
+                  ? 'border-emerald-600 bg-emerald-600 text-white'
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:border-emerald-500'
+              "
+              @click="themeStore.toggleLetterheadForReport(pdfReportType)"
+            >
+              <span>
+                {{
+                  themeStore.isLetterheadActiveForReport(pdfReportType)
+                    ? 'Pakai Kop Surat'
+                    : 'Tanpa Kop Surat'
+                }}
+              </span>
+            </button>
+          </div>
+
           <!-- Penandatangan untuk Laporan Ini -->
           <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 p-3.5 space-y-2.5">
             <div class="flex flex-wrap items-center justify-between gap-2">
@@ -1360,8 +1397,20 @@ function handleDownloadPdfReport() {
                       {{ sIdx + 1 }}
                     </div>
                     <div class="min-w-0">
-                      <div class="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
-                        {{ signer.name || '(Nama belum diisi)' }}
+                      <div class="flex flex-wrap items-center gap-1.5">
+                        <span class="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                          {{ signer.name || '(Nama belum diisi)' }}
+                        </span>
+                        <span
+                          class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider"
+                          :class="
+                            signer.rowPosition === 'bottom'
+                              ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                              : 'bg-sky-500/15 text-sky-700 dark:text-sky-300'
+                          "
+                        >
+                          {{ signer.rowPosition === 'bottom' ? 'Baris Bawah' : 'Baris Atas' }}
+                        </span>
                       </div>
                       <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate">
                         {{ signer.role || 'Penandatangan' }}
@@ -1369,16 +1418,33 @@ function handleDownloadPdfReport() {
                     </div>
                   </div>
 
-                  <span
-                    class="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase shrink-0"
-                    :class="
-                      isSignerSelectedForActivePdf(signer.id)
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
-                    "
-                  >
-                    {{ isSignerSelectedForActivePdf(signer.id) ? 'Ikut Tanda Tangan' : 'Tidak Disertakan' }}
-                  </span>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      class="px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-emerald-500 text-[10px] font-semibold text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
+                      title="Ubah posisi baris tanda tangan (Atas / Bawah)"
+                      @click.stop="
+                        themeStore.updateReportSigner(
+                          signer.id,
+                          signer.name,
+                          signer.role,
+                          signer.rowPosition === 'bottom' ? 'top' : 'bottom'
+                        )
+                      "
+                    >
+                      Pindah ke {{ signer.rowPosition === 'bottom' ? 'Atas' : 'Bawah' }}
+                    </button>
+                    <span
+                      class="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase shrink-0"
+                      :class="
+                        isSignerSelectedForActivePdf(signer.id)
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                      "
+                    >
+                      {{ isSignerSelectedForActivePdf(signer.id) ? 'Ikut Tanda Tangan' : 'Tidak Disertakan' }}
+                    </span>
+                  </div>
                 </button>
               </div>
             </div>

@@ -6,13 +6,22 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 export type CurrencyCode = 'IDR' | 'USD';
 export type NumberFontMode = 'sans' | 'mono';
 
+export type ReportSignerRowPosition = 'top' | 'bottom';
+
 export interface ReportSignerItem {
   id: string;
   name: string;
   role: string;
+  rowPosition: ReportSignerRowPosition;
 }
 
 export type ReportLetterheadMode = 'text' | 'image';
+
+export interface ReportLetterheadEnabledReports {
+  kas_umum: boolean;
+  rekonsiliasi_kas: boolean;
+  realisasi_anggaran: boolean;
+}
 
 export interface ReportLetterheadConfig {
   enabled: boolean;
@@ -23,6 +32,7 @@ export interface ReportLetterheadConfig {
   imageDataUrl: string; // Base64 PNG/JPEG banner image for full-width kop surat
   imageWidthPx: number;
   imageHeightPx: number;
+  enabledReports: ReportLetterheadEnabledReports;
 }
 
 export interface ReportCustomTitlesConfig {
@@ -77,6 +87,11 @@ export const useThemeStore = defineStore('theme', () => {
     imageDataUrl: '',
     imageWidthPx: 0,
     imageHeightPx: 0,
+    enabledReports: {
+      kas_umum: true,
+      rekonsiliasi_kas: true,
+      realisasi_anggaran: true,
+    },
   });
   const reportCustomTitles = ref<ReportCustomTitlesConfig>({
     kas_umum: '',
@@ -120,6 +135,7 @@ export const useThemeStore = defineStore('theme', () => {
               id: String(item.id),
               name: String(item.name || '').trim(),
               role: String(item.role || '').trim(),
+              rowPosition: item.rowPosition === 'bottom' ? 'bottom' : 'top',
             }));
         }
       } else {
@@ -184,6 +200,7 @@ export const useThemeStore = defineStore('theme', () => {
       if (rawLh) {
         const parsedLh = JSON.parse(rawLh);
         if (parsedLh && typeof parsedLh === 'object') {
+          const rawEnabledReports = parsedLh.enabledReports;
           reportLetterhead.value = {
             enabled: Boolean(parsedLh.enabled),
             mode: parsedLh.mode === 'image' ? 'image' : 'text',
@@ -193,6 +210,20 @@ export const useThemeStore = defineStore('theme', () => {
             imageDataUrl: String(parsedLh.imageDataUrl || ''),
             imageWidthPx: Number(parsedLh.imageWidthPx) || 0,
             imageHeightPx: Number(parsedLh.imageHeightPx) || 0,
+            enabledReports: {
+              kas_umum:
+                rawEnabledReports && typeof rawEnabledReports.kas_umum === 'boolean'
+                  ? rawEnabledReports.kas_umum
+                  : true,
+              rekonsiliasi_kas:
+                rawEnabledReports && typeof rawEnabledReports.rekonsiliasi_kas === 'boolean'
+                  ? rawEnabledReports.rekonsiliasi_kas
+                  : true,
+              realisasi_anggaran:
+                rawEnabledReports && typeof rawEnabledReports.realisasi_anggaran === 'boolean'
+                  ? rawEnabledReports.realisasi_anggaran
+                  : true,
+            },
           };
         }
       } else {
@@ -205,6 +236,11 @@ export const useThemeStore = defineStore('theme', () => {
           imageDataUrl: '',
           imageWidthPx: 0,
           imageHeightPx: 0,
+          enabledReports: {
+            kas_umum: true,
+            rekonsiliasi_kas: true,
+            realisasi_anggaran: true,
+          },
         };
       }
     } catch {
@@ -217,6 +253,11 @@ export const useThemeStore = defineStore('theme', () => {
         imageDataUrl: '',
         imageWidthPx: 0,
         imageHeightPx: 0,
+        enabledReports: {
+          kas_umum: true,
+          rekonsiliasi_kas: true,
+          realisasi_anggaran: true,
+        },
       };
     }
 
@@ -313,8 +354,56 @@ export const useThemeStore = defineStore('theme', () => {
         patch.imageHeightPx !== undefined
           ? Number(patch.imageHeightPx) || 0
           : reportLetterhead.value.imageHeightPx,
+      enabledReports: patch.enabledReports
+        ? {
+            kas_umum: Boolean(patch.enabledReports.kas_umum),
+            rekonsiliasi_kas: Boolean(patch.enabledReports.rekonsiliasi_kas),
+            realisasi_anggaran: Boolean(patch.enabledReports.realisasi_anggaran),
+          }
+        : reportLetterhead.value.enabledReports || {
+            kas_umum: true,
+            rekonsiliasi_kas: true,
+            realisasi_anggaran: true,
+          },
     };
     persistReportSignatureConfig();
+  }
+
+  function toggleLetterheadForReport(reportType: keyof ReportCustomTitlesConfig) {
+    const currentMap = reportLetterhead.value.enabledReports || {
+      kas_umum: true,
+      rekonsiliasi_kas: true,
+      realisasi_anggaran: true,
+    };
+    const nextVal = !currentMap[reportType];
+    const nextMap: ReportLetterheadEnabledReports = {
+      ...currentMap,
+      [reportType]: nextVal,
+    };
+    const anyEnabled =
+      nextMap.kas_umum || nextMap.rekonsiliasi_kas || nextMap.realisasi_anggaran;
+    reportLetterhead.value = {
+      ...reportLetterhead.value,
+      enabled: nextVal ? true : anyEnabled ? reportLetterhead.value.enabled : false,
+      enabledReports: nextMap,
+    };
+    persistReportSignatureConfig();
+  }
+
+  function isLetterheadActiveForReport(reportType: keyof ReportCustomTitlesConfig): boolean {
+    if (!reportLetterhead.value.enabled) return false;
+    const map = reportLetterhead.value.enabledReports;
+    if (!map) return true;
+    return map[reportType] !== false;
+  }
+
+  function getLetterheadForReport(
+    reportType: keyof ReportCustomTitlesConfig
+  ): ReportLetterheadConfig {
+    return {
+      ...reportLetterhead.value,
+      enabled: isLetterheadActiveForReport(reportType),
+    };
   }
 
   function updateReportCustomTitle(
@@ -344,13 +433,18 @@ export const useThemeStore = defineStore('theme', () => {
     persistReportSignatureConfig();
   }
 
-  function addReportSigner(name = '', role = ''): ReportSignerItem | null {
+  function addReportSigner(
+    name = '',
+    role = '',
+    rowPosition: ReportSignerRowPosition = 'top'
+  ): ReportSignerItem | null {
     if (reportSigners.value.length >= MAX_REPORT_SIGNERS) return null;
     const id = `sig_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const newSigner: ReportSignerItem = {
       id,
       name: name.trim(),
       role: role.trim(),
+      rowPosition: rowPosition === 'bottom' ? 'bottom' : 'top',
     };
     reportSigners.value.push(newSigner);
     // By default enable this new signer across all report types
@@ -364,11 +458,19 @@ export const useThemeStore = defineStore('theme', () => {
     return newSigner;
   }
 
-  function updateReportSigner(id: string, name: string, role: string) {
+  function updateReportSigner(
+    id: string,
+    name: string,
+    role: string,
+    rowPosition?: ReportSignerRowPosition
+  ) {
     const target = reportSigners.value.find((s) => s.id === id);
     if (!target) return;
     target.name = name.slice(0, 80);
     target.role = role.slice(0, 80);
+    if (rowPosition === 'top' || rowPosition === 'bottom') {
+      target.rowPosition = rowPosition;
+    }
     persistReportSignatureConfig();
   }
 
@@ -534,6 +636,9 @@ export const useThemeStore = defineStore('theme', () => {
     loadReportSignatureConfig,
     setReportSignPlace,
     updateReportLetterhead,
+    toggleLetterheadForReport,
+    isLetterheadActiveForReport,
+    getLetterheadForReport,
     updateReportCustomTitle,
     resetReportCustomTitles,
     getResolvedReportTitle,

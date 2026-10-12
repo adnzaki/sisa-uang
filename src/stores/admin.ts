@@ -853,10 +853,55 @@ export const useAdminStore = defineStore('admin', () => {
 
         try {
           await updateDoc(doc(targetDb, 'users', safeTargetUid), {
+            subscriptionStatus: nextSubStatus,
+            isPro: nextIsPro,
             updatedAt: serverTimestamp(),
           });
         } catch {
-          // Ignore if user doc not yet in Firestore
+          try {
+            await updateDoc(doc(targetDb, 'users', safeTargetUid), {
+              updatedAt: serverTimestamp(),
+            });
+          } catch {
+            // Ignore if user doc not yet in Firestore
+          }
+        }
+
+        // Also if targetUser has an email matching another Firestore user doc (e.g. Google OAuth UID vs ci4_user_1), update that doc & marker too so all devices sync seamlessly
+        if (targetUser.email) {
+          try {
+            const emailMatches = await getDocs(
+              query(collection(targetDb, 'users'), where('email', '==', targetUser.email.toLowerCase()))
+            );
+            for (const matchedDoc of emailMatches.docs) {
+              if (matchedDoc.id !== safeTargetUid) {
+                const altMarkerId = sanitizeId(`su_sub_pro_${matchedDoc.id}`);
+                await setDoc(
+                  doc(targetDb, 'budgets', altMarkerId),
+                  {
+                    ownerId: matchedDoc.id,
+                    category: '__SISAUANG_PRO__',
+                    limitAmount: 1,
+                    spentAmount: 0,
+                    period: markerPeriod,
+                    deleted: !nextIsPro,
+                    deletedAt: nextIsPro ? null : serverTimestamp(),
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                  },
+                  { merge: true }
+                ).catch(() => {});
+
+                await updateDoc(doc(targetDb, 'users', matchedDoc.id), {
+                  subscriptionStatus: nextSubStatus,
+                  isPro: nextIsPro,
+                  updatedAt: serverTimestamp(),
+                }).catch(() => {});
+              }
+            }
+          } catch {
+            // Ignore email query error
+          }
         }
       } catch {
         // Fallback handled by Express server registry (.data/users-cache.json)

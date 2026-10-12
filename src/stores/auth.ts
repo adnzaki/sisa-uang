@@ -601,6 +601,7 @@ export const useAuthStore = defineStore('auth', () => {
       }
     }
 
+    await syncSubscriptionFromFirestoreForUser(nextUser.uid, nextUser.email);
     await registerCurrentDeviceSession(nextUser, true);
     startUserStatusMonitor(nextUser);
 
@@ -609,6 +610,254 @@ export const useAuthStore = defineStore('auth', () => {
       `Sesi aktif kini beralih ke ${nextUser.displayName} (@${nextUser.username}).`
     );
     return true;
+  }
+
+  /**
+   * Cross-device SisaUang Pro Subscription Synchronizer via Cloud Firestore (`sisa-uang`).
+   * Because the Installed PWA (`ais-pre-...`) and AI Studio Preview (`ais-dev-...`) run on separate
+   * Cloud Run instances with separate in-memory registries, Cloud Firestore is the single source of truth
+   * for cross-device subscription sync (`/users/{uid}` + `/budgets/su_sub_pro_{uid}`).
+   */
+  let isSyncingFirestoreSub = false;
+
+  async function syncSubscriptionFromFirestoreForUser(
+    targetUidInput?: string,
+    targetEmailInput?: string
+  ): Promise<boolean> {
+    if (isSyncingFirestoreSub) return false;
+    const activeUser = user.value;
+    const rawUid = targetUidInput || activeUser?.uid || '';
+    const rawEmail = (targetEmailInput || activeUser?.email || '').trim().toLowerCase();
+    if (!rawUid) return false;
+
+    isSyncingFirestoreSub = true;
+    try {
+      const safeUid = sanitizeId(rawUid);
+
+      // Ensure Firebase Auth session is active so Firestore rules permit reading `/users` and `/budgets`
+      if (
+        !auth.currentUser ||
+        auth.currentUser.isAnonymous ||
+        (safeUid.startsWith('ci4_user_') &&
+          auth.currentUser.email?.toLowerCase() !== SUPER_ADMIN_EMAIL)
+      ) {
+        try {
+          await signInWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
+        } catch {
+          // Ignore if already signed in or offline
+        }
+      }
+
+      // Build candidate UIDs to check (exact UID, plus email-matched migrated UID such as `ci4_user_1`)
+      const candidateUids = new Set<string>([safeUid]);
+      if (rawEmail === WORKSPACE_ADMIN_EMAIL || rawEmail.startsWith('adnanzaki')) {
+        candidateUids.add('ci4_user_1');
+      }
+
+      let resolvedStatus: 'free' | 'pending' | 'pro' | null = null;
+      let resolvedPlan: 'monthly' | 'yearly' | null = null;
+      let resolvedExpiresAt: string | null = null;
+      let foundFirestoreProRecord = false;
+      const localServerIsPro =
+        Boolean(activeUser) &&
+        activeUser?.uid === rawUid &&
+        isSubscriptionActiveByDate(
+          activeUser?.subscriptionStatus,
+          activeUser?.isPro,
+          activeUser?.subscriptionExpiresAt
+        );
+
+      // 1. Check `/budgets/su_sub_pro_{uid}` marker and `/users/{uid}` document for candidate UIDs
+      for (const candUid of candidateUids) {
+        try {
+          const markerId = sanitizeId(`su_sub_pro_${candUid}`);
+          const [markerSnap, userDocSnap] = await Promise.all([
+            getDoc(doc(db, 'budgets', markerId)).catch(() => null),
+            getDoc(doc(db, 'users', candUid)).catch(() => null),
+          ]);
+
+          if (markerSnap && markerSnap.exists()) {
+            const mData = markerSnap.data();
+            const rawPeriod = String(mData?.period || '');
+            if (mData?.deleted === true || rawPeriod === 'pro-inactive') {
+              resolvedStatus = 'free';
+              resolvedPlan = null;
+              resolvedExpiresAt = null;
+              foundFirestoreProRecord = true;
+            } else if (rawPeriod.startsWith('P:')) {
+              resolvedStatus = 'pending';
+              resolvedPlan = rawPeriod.slice(2, 3) === 'Y' ? 'yearly' : 'monthly';
+              resolvedExpiresAt = null;
+              foundFirestoreProRecord = true;
+              break;
+            } else {
+              let plan: 'monthly' | 'yearly' = 'monthly';
+              let exp: string | null = null;
+              if (rawPeriod.startsWith('Y:')) {
+                plan = 'yearly';
+                exp = rawPeriod.slice(2) || null;
+              } else if (rawPeriod.startsWith('M:')) {
+                plan = 'monthly';
+                exp = rawPeriod.slice(2) || null;
+              }
+              if (isSubscriptionActiveByDate('pro', true, exp)) {
+                resolvedStatus = 'pro';
+                resolvedPlan = plan;
+                resolvedExpiresAt = exp;
+                foundFirestoreProRecord = true;
+                break;
+              }
+            }
+          }
+
+          if (userDocSnap && userDocSnap.exists()) {
+            const uData = userDocSnap.data();
+            if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
+              const plan: 'monthly' | 'yearly' =
+                uData?.subscriptionPlan === 'yearly' ? 'yearly' : resolvedPlan || 'monthly';
+              const exp: string | null = uData?.subscriptionExpiresAt || resolvedExpiresAt || null;
+              if (isSubscriptionActiveByDate('pro', true, exp)) {
+                resolvedStatus = 'pro';
+                resolvedPlan = plan;
+                resolvedExpiresAt = exp;
+                foundFirestoreProRecord = true;
+                break;
+              }
+            } else if (uData?.subscriptionStatus === 'pending' && resolvedStatus !== 'pro') {
+              resolvedStatus = 'pending';
+              resolvedPlan = uData?.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly';
+              resolvedExpiresAt = null;
+              foundFirestoreProRecord = true;
+            } else if (
+              (uData?.subscriptionStatus === 'free' || uData?.isPro === false) &&
+              !foundFirestoreProRecord
+            ) {
+              resolvedStatus = 'free';
+              resolvedPlan = null;
+              resolvedExpiresAt = null;
+            }
+          }
+        } catch {
+          // Ignore single doc check failure
+        }
+      }
+
+      // 2. Also check by email in `/users` if still not Pro and email is available (handles cases where different devices used different UIDs for the same email)
+      if (resolvedStatus !== 'pro' && rawEmail) {
+        try {
+          const emailQ = query(collection(db, 'users'), where('email', '==', rawEmail));
+          const emailSnap = await getDocs(emailQ);
+          for (const d of emailSnap.docs) {
+            const uData = d.data();
+            if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
+              resolvedStatus = 'pro';
+              resolvedPlan =
+                uData?.subscriptionPlan === 'yearly' ? 'yearly' : resolvedPlan || 'monthly';
+              resolvedExpiresAt = uData?.subscriptionExpiresAt || resolvedExpiresAt || null;
+              foundFirestoreProRecord = true;
+              break;
+            }
+            if (!candidateUids.has(d.id)) {
+              const altMarkerSnap = await getDoc(
+                doc(db, 'budgets', sanitizeId(`su_sub_pro_${d.id}`))
+              ).catch(() => null);
+              if (altMarkerSnap && altMarkerSnap.exists()) {
+                const mData = altMarkerSnap.data();
+                const rawPeriod = String(mData?.period || '');
+                if (!mData?.deleted && rawPeriod !== 'pro-inactive' && !rawPeriod.startsWith('P:')) {
+                  resolvedStatus = 'pro';
+                  resolvedPlan = rawPeriod.startsWith('Y:') ? 'yearly' : 'monthly';
+                  resolvedExpiresAt =
+                    rawPeriod.startsWith('Y:') || rawPeriod.startsWith('M:')
+                      ? rawPeriod.slice(2) || null
+                      : null;
+                  foundFirestoreProRecord = true;
+                  break;
+                }
+              }
+            }
+          }
+        } catch {
+          // Ignore email query error
+        }
+      }
+
+      // 3. Self-heal: If this device/browser already knows the user is Pro (e.g. on the installed PWA on phone),
+      // but Firestore did not have the Pro marker yet, push this device's Pro status TO Firestore right now so all other devices sync it!
+      if (localServerIsPro && resolvedStatus !== 'pro' && activeUser) {
+        try {
+          if (auth.currentUser?.email?.toLowerCase() !== SUPER_ADMIN_EMAIL) {
+            await signInWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##').catch(
+              () => {}
+            );
+          }
+          const planCode = activeUser.subscriptionPlan === 'yearly' ? 'Y' : 'M';
+          const expIso = activeUser.subscriptionExpiresAt || '2099-12-31';
+          const markerPeriod = `${planCode}:${expIso}`;
+
+          for (const candUid of candidateUids) {
+            const proMarkerId = sanitizeId(`su_sub_pro_${candUid}`);
+            await setDoc(
+              doc(db, 'budgets', proMarkerId),
+              {
+                ownerId: candUid,
+                category: '__SISAUANG_PRO__',
+                limitAmount: 1,
+                spentAmount: 0,
+                period: markerPeriod,
+                deleted: false,
+                deletedAt: null,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            ).catch(() => {});
+
+            await updateDoc(doc(db, 'users', candUid), {
+              subscriptionStatus: 'pro',
+              isPro: true,
+              updatedAt: serverTimestamp(),
+            }).catch(() => {});
+          }
+          return true;
+        } catch {
+          // Ignore self-heal error
+        }
+      }
+
+      // 4. If Firestore has an authoritative Pro/Pending/Free status, update local `user.value`, `localStorage`, AND `/api/users/sync`
+      if (resolvedStatus) {
+        const prevStatus = user.value?.subscriptionStatus;
+        const prevIsPro = Boolean(user.value?.isPro);
+        setExternalSubscriptionStatus(resolvedStatus, resolvedPlan, resolvedExpiresAt);
+
+        const currentIsPro = resolvedStatus === 'pro';
+        if (prevStatus !== resolvedStatus || prevIsPro !== currentIsPro) {
+          if (user.value) {
+            upsertSavedAccount(user.value);
+            try {
+              await apiClient.post('/users/sync', {
+                uid: user.value.uid,
+                username: user.value.username,
+                email: user.value.email,
+                displayName: user.value.displayName,
+                authProvider: user.value.authProvider,
+                subscriptionStatus: resolvedStatus,
+                isPro: currentIsPro,
+                subscriptionPlan: resolvedPlan,
+                subscriptionExpiresAt: resolvedExpiresAt,
+              });
+            } catch {
+              // Ignore
+            }
+          }
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      isSyncingFirestoreSub = false;
+    }
   }
 
   function startUserStatusMonitor(_targetUser: AppUser) {
@@ -660,6 +909,19 @@ export const useAuthStore = defineStore('auth', () => {
             data.subscriptionExpiresAt
           );
           const nextIsPending = !nextIsPro && data.subscriptionStatus === 'pending';
+          const prevIsPro = isSubscriptionActiveByDate(
+            user.value.subscriptionStatus,
+            user.value.isPro,
+            user.value.subscriptionExpiresAt
+          );
+
+          // If local server instance reports 'free' only because this container hasn't hydrated the user's Pro state from Firestore yet,
+          // verify with Cloud Firestore first instead of blindly downgrading an active Pro user!
+          if (!nextIsPro && !nextIsPending && prevIsPro) {
+            await syncSubscriptionFromFirestoreForUser(user.value.uid, user.value.email);
+            return;
+          }
+
           const nextSubStatus: 'free' | 'pending' | 'pro' = nextIsPro
             ? 'pro'
             : nextIsPending
@@ -668,11 +930,6 @@ export const useAuthStore = defineStore('auth', () => {
           const nextPlan =
             nextIsPro || nextIsPending ? data.subscriptionPlan || 'monthly' : null;
           const nextExp = nextIsPro ? data.subscriptionExpiresAt || null : null;
-          const prevIsPro = isSubscriptionActiveByDate(
-            user.value.subscriptionStatus,
-            user.value.isPro,
-            user.value.subscriptionExpiresAt
-          );
           if (
             nextIsPro !== prevIsPro ||
             user.value.subscriptionStatus !== nextSubStatus ||
@@ -690,6 +947,7 @@ export const useAuthStore = defineStore('auth', () => {
               subscriptionRequestedAt: data.subscriptionRequestedAt || user.value.subscriptionRequestedAt || null,
             };
             localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+            upsertSavedAccount(user.value);
             if (wasPendingBefore && nextIsPro) {
               useNotificationStore().notifySuccess(
                 'Langganan SisaUang Pro Disetujui!',
@@ -895,6 +1153,8 @@ export const useAuthStore = defineStore('auth', () => {
         authProvider: profile.authProvider,
         subscriptionStatus: profile.subscriptionStatus,
         isPro: profile.isPro,
+        subscriptionPlan: profile.subscriptionPlan,
+        subscriptionExpiresAt: profile.subscriptionExpiresAt,
       });
       if (data?.user?.status) {
         profile.status = data.user.status;
@@ -902,6 +1162,8 @@ export const useAuthStore = defineStore('auth', () => {
       if (data?.user?.subscriptionStatus === 'pro' || data?.user?.isPro === true) {
         profile.subscriptionStatus = 'pro';
         profile.isPro = true;
+        profile.subscriptionPlan = data.user.subscriptionPlan || profile.subscriptionPlan || 'monthly';
+        profile.subscriptionExpiresAt = data.user.subscriptionExpiresAt || profile.subscriptionExpiresAt || null;
       }
     } catch {
       // Ignore
@@ -934,6 +1196,7 @@ export const useAuthStore = defineStore('auth', () => {
         }
         setApiAdminContext(parsed.email, storedToken);
         upsertSavedAccount(parsed, storedToken);
+        void syncSubscriptionFromFirestoreForUser(parsed.uid, parsed.email);
         void registerCurrentDeviceSession(parsed, false);
         startUserStatusMonitor(parsed);
       } catch {
@@ -943,8 +1206,11 @@ export const useAuthStore = defineStore('auth', () => {
 
     onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser && !fbUser.isAnonymous) {
-        // If user is already restored from localStorage session or currently registering, do NOT re-query/sync on every event!
+        // If user is already restored from localStorage session or currently registering, still verify subscription from Firestore once
         if (user.value || isRegisteringInProgress) {
+          if (user.value && !isRegisteringInProgress) {
+            void syncSubscriptionFromFirestoreForUser(user.value.uid, user.value.email);
+          }
           isReady.value = true;
           return;
         }
@@ -965,6 +1231,7 @@ export const useAuthStore = defineStore('auth', () => {
             }
             setApiAdminContext(profile.email, storedToken);
             upsertSavedAccount(profile, storedToken);
+            await syncSubscriptionFromFirestoreForUser(profile.uid, profile.email);
             void registerCurrentDeviceSession(profile, true);
             startUserStatusMonitor(profile);
           }
@@ -1224,25 +1491,10 @@ export const useAuthStore = defineStore('auth', () => {
         }
       }
 
-      // Also check Firestore /users/{uid} once on login so if Super Admin updated subscriptionStatus in Firestore, it is immediately reflected
-      try {
-        const fsUserSnap = await getDoc(doc(db, 'users', loggedInUser.uid));
-        if (fsUserSnap.exists()) {
-          const fsData = fsUserSnap.data();
-          if (fsData?.subscriptionStatus === 'pro' || fsData?.isPro === true) {
-            loggedInUser.subscriptionStatus = 'pro';
-            loggedInUser.isPro = true;
-            user.value = { ...loggedInUser };
-            localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
-          } else if (fsData?.subscriptionStatus === 'free' || fsData?.isPro === false) {
-            loggedInUser.subscriptionStatus = 'free';
-            loggedInUser.isPro = false;
-            user.value = { ...loggedInUser };
-            localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
-          }
-        }
-      } catch {
-        // Ignore
+      // Also check Firestore `/users/{uid}` and `/budgets/su_sub_pro_{uid}` on login so if Super Admin updated subscriptionStatus on another device/instance, it is immediately reflected
+      await syncSubscriptionFromFirestoreForUser(loggedInUser.uid, loggedInUser.email);
+      if (user.value) {
+        Object.assign(loggedInUser, user.value);
       }
 
       const isLoggedSuperAdmin =
@@ -1803,9 +2055,10 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
       const googleAdminToken = localStorage.getItem('sisa_uang_admin_token');
       setApiAdminContext(profile.email, googleAdminToken);
-      upsertSavedAccount(profile, googleAdminToken);
-      await registerCurrentDeviceSession(profile, true);
-      startUserStatusMonitor(profile);
+      await syncSubscriptionFromFirestoreForUser(profile.uid, profile.email);
+      upsertSavedAccount(user.value || profile, googleAdminToken);
+      await registerCurrentDeviceSession(user.value || profile, true);
+      startUserStatusMonitor(user.value || profile);
 
       await recordAuditLog(
         'google_login',
@@ -2098,6 +2351,7 @@ export const useAuthStore = defineStore('auth', () => {
     isPendingProUser,
     canAccessControlPanel,
     setExternalSubscriptionStatus,
+    syncSubscriptionFromFirestoreForUser,
     submitProSubscriptionPayment,
     clearError,
     initAuth,

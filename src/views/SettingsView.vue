@@ -203,8 +203,28 @@ function checkAndScrollToSection() {
     route.query.section === 'report-signatures' ||
     route.hash === '#report-signatures'
   ) {
-    router.replace('/report-settings');
+    handleOpenReportSettings();
   }
+}
+
+function handleOpenReportSettings() {
+  if (!authStore.isSuperAdmin && !authStore.isProUser) {
+    notificationStore.showPopup({
+      type: 'warning',
+      title: 'Khusus Pelanggan SisaUang Pro',
+      message: 'Pengaturan laporan hanya tersedia untuk pelanggan SisaUang Pro.',
+      detail:
+        'Berlangganan SisaUang Pro untuk mengatur kop institusi/masjid/organisasi, judul laporan, serta daftar penandatangan PDF.',
+    });
+    notificationStore.openProModal({
+      featureTitle: 'Pengaturan Laporan PDF (Kop, Judul & Tanda Tangan)',
+      featureDescription:
+        'Pengaturan laporan hanya tersedia untuk pelanggan SisaUang Pro. Dengan SisaUang Pro, Anda dapat menyesuaikan kop surat institusi/masjid/musholla, mengubah judul masing-masing laporan, serta menambahkan hingga 3 penandatangan PDF.',
+      limitSummary: 'Khusus Pelanggan Pro',
+    });
+    return;
+  }
+  router.push('/report-settings');
 }
 
 watch(
@@ -347,7 +367,7 @@ function handleGoToAddAccount() {
     <!-- Page Header -->
     <div>
       <h1 class="text-xl sm:text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-        {{ t('nav.settings') }}
+        {{ t('nav.settings') }} · {{ t('nav.settingsGeneral') }}
       </h1>
       <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
         Konfigurasi tema tampilan, bahasa antarmuka, dan profil akun personal Anda.
@@ -606,22 +626,32 @@ function handleGoToAddAccount() {
           <PenTool class="w-5 h-5" />
         </div>
         <div class="space-y-1 min-w-0">
-          <h2 class="text-sm font-bold text-slate-900 dark:text-slate-100">
-            Pengaturan Laporan PDF (Kop Institusi, Judul &amp; Tanda Tangan)
-          </h2>
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="text-sm font-bold text-slate-900 dark:text-slate-100">
+              Pengaturan Laporan PDF (Kop Institusi, Judul &amp; Tanda Tangan)
+            </h2>
+            <span
+              v-if="!authStore.isProUser"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 text-[10px] font-bold uppercase tracking-wider"
+            >
+              <Crown class="w-3 h-3 shrink-0" />
+              <span>Khusus Pelanggan Pro</span>
+            </span>
+          </div>
           <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-            Pengaturan kop masjid/musholla/organisasi, kustomisasi judul laporan, serta daftar penandatangan kini tersedia di halaman khusus <strong>Pengaturan Laporan</strong>.
+            Pengaturan kop masjid/musholla/organisasi, kustomisasi judul laporan, serta daftar penandatangan kini tersedia di sub-menu <strong>Pengaturan &rarr; Laporan</strong> (eksklusif untuk pelanggan SisaUang Pro).
           </p>
         </div>
       </div>
 
-      <RouterLink
-        to="/report-settings"
-        class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 shrink-0 transition-colors"
+      <button
+        type="button"
+        class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 shrink-0 transition-colors cursor-pointer"
+        @click="handleOpenReportSettings"
       >
         <FileCheck2 class="w-4 h-4 shrink-0" />
         <span>Buka Pengaturan Laporan</span>
-      </RouterLink>
+      </button>
     </section>
 
     <!-- Account Profile Summary + DisplayName & Username Editor -->

@@ -40,6 +40,7 @@ import {
   UserPlus,
   Trash2,
   FileSpreadsheet,
+  SlidersHorizontal,
 } from 'lucide-vue-next';
 import { useAuthStore } from './stores/auth';
 import { useThemeStore, ThemeMode } from './stores/theme';
@@ -515,9 +516,46 @@ const userNavItems = computed(() => [
   { name: t('nav.categories'), path: '/categories', icon: Tags },
   { name: t('nav.budgets'), path: '/budgets', icon: PieChart },
   { name: t('nav.analytics'), path: '/analytics', icon: BarChart3 },
-  { name: t('nav.reportSettings'), path: '/report-settings', icon: FileSpreadsheet },
-  { name: t('nav.settings'), path: '/settings', icon: Settings },
 ]);
+
+const isSettingsRouteActive = computed(
+  () => route.path === '/settings' || route.path === '/report-settings'
+);
+
+const settingsDropdownOpen = ref<boolean>(
+  route.path === '/settings' || route.path === '/report-settings'
+);
+
+watch(
+  () => route.path,
+  (newPath) => {
+    if (newPath === '/settings' || newPath === '/report-settings') {
+      settingsDropdownOpen.value = true;
+    }
+  }
+);
+
+function handleNavigateReportSettings() {
+  if (!authStore.isSuperAdmin && !authStore.isProUser) {
+    mobileDrawerOpen.value = false;
+    notificationStore.showPopup({
+      type: 'warning',
+      title: 'Khusus Pelanggan SisaUang Pro',
+      message: 'Pengaturan laporan hanya tersedia untuk pelanggan SisaUang Pro.',
+      detail:
+        'Berlangganan SisaUang Pro untuk mengatur kop institusi/masjid/organisasi, judul laporan, serta daftar penandatangan PDF.',
+    });
+    notificationStore.openProModal({
+      featureTitle: 'Pengaturan Laporan PDF (Kop, Judul & Tanda Tangan)',
+      featureDescription:
+        'Pengaturan laporan hanya tersedia untuk pelanggan SisaUang Pro. Dengan SisaUang Pro, Anda dapat menyesuaikan kop surat institusi/masjid/musholla, mengubah judul masing-masing laporan, serta menambahkan hingga 3 penandatangan PDF.',
+      limitSummary: 'Khusus Pelanggan Pro',
+    });
+    return;
+  }
+  mobileDrawerOpen.value = false;
+  router.push('/report-settings');
+}
 
 // Super Admin navigation items (Strictly User Management, Activity Logs, Alerts, and Settings)
 const adminNavItems = computed(() => [
@@ -1020,6 +1058,74 @@ async function handleSubmitProPayment() {
               <component :is="item.icon" class="w-4 h-4 shrink-0" />
               <span class="truncate">{{ item.name }}</span>
             </RouterLink>
+
+            <!-- Unified Parent Dropdown: Pengaturan -> Umum | Laporan -->
+            <div class="space-y-1 pt-0.5">
+              <button
+                type="button"
+                class="w-full min-h-[42px] flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-medium transition-colors cursor-pointer"
+                :class="
+                  isSettingsRouteActive
+                    ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-semibold'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                "
+                :aria-expanded="settingsDropdownOpen"
+                @click="settingsDropdownOpen = !settingsDropdownOpen"
+              >
+                <span class="flex items-center gap-3 min-w-0">
+                  <Settings class="w-4 h-4 shrink-0" />
+                  <span class="truncate">{{ t('nav.settings') }}</span>
+                </span>
+                <ChevronDown
+                  class="w-4 h-4 shrink-0 transition-transform duration-200"
+                  :class="settingsDropdownOpen ? 'rotate-180' : ''"
+                />
+              </button>
+
+              <!-- Child Submenu Items: Umum | Laporan -->
+              <div
+                v-if="settingsDropdownOpen"
+                class="ml-4 pl-3 border-l-2 border-slate-200/80 dark:border-slate-800 space-y-1"
+              >
+                <RouterLink
+                  to="/settings"
+                  class="min-h-[38px] flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors"
+                  :class="
+                    route.path === '/settings'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                  "
+                >
+                  <span class="flex items-center gap-2.5 truncate">
+                    <SlidersHorizontal class="w-3.5 h-3.5 shrink-0" />
+                    <span class="truncate">{{ t('nav.settingsGeneral') }}</span>
+                  </span>
+                </RouterLink>
+
+                <button
+                  type="button"
+                  class="w-full min-h-[38px] flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors cursor-pointer text-left"
+                  :class="
+                    route.path === '/report-settings'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                  "
+                  @click="handleNavigateReportSettings"
+                >
+                  <span class="flex items-center gap-2.5 truncate">
+                    <FileSpreadsheet class="w-3.5 h-3.5 shrink-0" />
+                    <span class="truncate">{{ t('nav.settingsReport') }}</span>
+                  </span>
+                  <span
+                    v-if="!authStore.isProUser"
+                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 text-[9px] font-bold uppercase tracking-wider shrink-0"
+                  >
+                    <Crown class="w-2.5 h-2.5 shrink-0" />
+                    <span>PRO</span>
+                  </span>
+                </button>
+              </div>
+            </div>
           </nav>
 
           <!-- Super Admin Navigation Menu (No Finance Menus) -->
@@ -1768,6 +1874,73 @@ async function handleSubmitProPayment() {
                 <component :is="item.icon" class="w-4 h-4 shrink-0" />
                 <span>{{ item.name }}</span>
               </RouterLink>
+
+              <!-- Unified Parent Dropdown: Pengaturan -> Umum | Laporan (Mobile & Tablet Drawer) -->
+              <div class="space-y-1 pt-0.5">
+                <button
+                  type="button"
+                  class="w-full min-h-[44px] flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                  :class="
+                    isSettingsRouteActive
+                      ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-semibold'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  "
+                  :aria-expanded="settingsDropdownOpen"
+                  @click="settingsDropdownOpen = !settingsDropdownOpen"
+                >
+                  <span class="flex items-center gap-3 min-w-0">
+                    <Settings class="w-4 h-4 shrink-0" />
+                    <span class="truncate">{{ t('nav.settings') }}</span>
+                  </span>
+                  <ChevronDown
+                    class="w-4 h-4 shrink-0 transition-transform duration-200"
+                    :class="settingsDropdownOpen ? 'rotate-180' : ''"
+                  />
+                </button>
+
+                <div
+                  v-if="settingsDropdownOpen"
+                  class="ml-4 pl-3 border-l-2 border-slate-200 dark:border-slate-800 space-y-1"
+                >
+                  <RouterLink
+                    to="/settings"
+                    class="min-h-[40px] flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-colors"
+                    :class="
+                      route.path === '/settings'
+                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    "
+                  >
+                    <span class="flex items-center gap-2.5 truncate">
+                      <SlidersHorizontal class="w-4 h-4 shrink-0" />
+                      <span class="truncate">{{ t('nav.settingsGeneral') }}</span>
+                    </span>
+                  </RouterLink>
+
+                  <button
+                    type="button"
+                    class="w-full min-h-[40px] flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer text-left"
+                    :class="
+                      route.path === '/report-settings'
+                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    "
+                    @click="handleNavigateReportSettings"
+                  >
+                    <span class="flex items-center gap-2.5 truncate">
+                      <FileSpreadsheet class="w-4 h-4 shrink-0" />
+                      <span class="truncate">{{ t('nav.settingsReport') }}</span>
+                    </span>
+                    <span
+                      v-if="!authStore.isProUser"
+                      class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 text-[10px] font-bold uppercase tracking-wider shrink-0"
+                    >
+                      <Crown class="w-3 h-3 shrink-0" />
+                      <span>PRO</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
             </nav>
 
             <!-- Mobile & Tablet Drawer Navigation: Super Admin (No Finance Menus) -->
@@ -1882,7 +2055,7 @@ async function handleSubmitProPayment() {
           to="/settings"
           class="min-h-[48px] flex flex-col items-center justify-center gap-0.5 transition-colors"
           :class="
-            route.path === '/settings'
+            isSettingsRouteActive
               ? 'text-emerald-600 dark:text-emerald-400'
               : 'text-slate-500 dark:text-slate-400'
           "
@@ -2045,7 +2218,7 @@ async function handleSubmitProPayment() {
                 <Check class="w-2.5 h-2.5 stroke-[3]" />
               </div>
               <span>
-                <strong>Laporan PDF Resmi &amp; Rekonsiliasi:</strong> Unduh Laporan Kas Umum, Rekonsiliasi Kas, dan Realisasi Anggaran di halaman Analitik.
+                <strong>Laporan PDF Resmi &amp; Pengaturan Laporan:</strong> Unduh Laporan Kas Umum, Rekonsiliasi Kas, dan Realisasi Anggaran, serta kustomisasi Kop Institusi, Judul Laporan, dan Penandatangan PDF.
               </span>
             </li>
             <li class="flex items-start gap-2.5">

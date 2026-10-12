@@ -16,6 +16,7 @@ export interface PdfReportSignerPayload {
   id: string;
   name: string;
   role: string;
+  rowPosition?: 'top' | 'bottom';
 }
 
 export interface PdfReportLetterheadPayload {
@@ -472,7 +473,6 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
     printDateIso && /^\d{4}-\d{2}-\d{2}$/.test(printDateIso.slice(0, 10))
       ? printDateIso.slice(0, 10)
       : new Date().toISOString().slice(0, 10);
-  const formattedPrintDateShort = formatDateId(effectivePrintIso);
   const formattedPrintDateLong = formatLongDateId(effectivePrintIso);
   const activeSigners = (signers || [])
     .filter((s) => s && (s.name.trim().length > 0 || s.role.trim().length > 0))
@@ -517,26 +517,46 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
   if (hasActiveLetterhead && letterhead) {
     if (isImageLetterhead && letterhead.imageDataUrl) {
       const contentWidthMm = pageWidth - marginX * 2;
-      const imgW = Number(letterhead.imageWidthPx) || 2400;
-      const imgH = Number(letterhead.imageHeightPx) || 400;
-      const aspect = imgW > 0 && imgH > 0 ? imgW / imgH : 6;
-      const maxHeightMm = orientation === 'landscape' ? 32 : 30;
-      const minHeightMm = 14;
-      const computedHeightMm = Math.min(
-        maxHeightMm,
-        Math.max(minHeightMm, contentWidthMm / aspect)
-      );
+      let naturalW = Number(letterhead.imageWidthPx) || 0;
+      let naturalH = Number(letterhead.imageHeightPx) || 0;
+
+      try {
+        const imgProps = doc.getImageProperties(letterhead.imageDataUrl);
+        if (imgProps && imgProps.width > 0 && imgProps.height > 0) {
+          naturalW = imgProps.width;
+          naturalH = imgProps.height;
+        }
+      } catch {
+        // Fallback to stored dimensions if getImageProperties fails
+      }
+
+      if (naturalW <= 0) naturalW = 1800;
+      if (naturalH <= 0) naturalH = 300;
+
+      const aspect = naturalW / naturalH;
+      const maxHeightMm = orientation === 'landscape' ? 38 : 42;
+
+      // Convert pixel width to mm (at 96 DPI baseline) capped at printable contentWidthMm, preserving 100% original aspect ratio
+      let drawWidthMm = Math.min(contentWidthMm, (naturalW * 25.4) / 96);
+      let drawHeightMm = drawWidthMm / aspect;
+
+      if (drawHeightMm > maxHeightMm) {
+        drawHeightMm = maxHeightMm;
+        drawWidthMm = drawHeightMm * aspect;
+      }
+
       const imgTopY = 10;
+      const drawX = marginX + (contentWidthMm - drawWidthMm) / 2;
 
       try {
         const format = letterhead.imageDataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
         doc.addImage(
           letterhead.imageDataUrl,
           format,
-          marginX,
+          drawX,
           imgTopY,
-          contentWidthMm,
-          computedHeightMm,
+          drawWidthMm,
+          drawHeightMm,
           undefined,
           'FAST'
         );
@@ -544,14 +564,7 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
         // Fallback if image format cannot be decoded
       }
 
-      const lineY = imgTopY + computedHeightMm + 2;
-      doc.setDrawColor(15, 23, 42);
-      doc.setLineWidth(0.75);
-      doc.line(marginX, lineY, pageWidth - marginX, lineY);
-      doc.setLineWidth(0.25);
-      doc.line(marginX, lineY + 1.1, pageWidth - marginX, lineY + 1.1);
-
-      bannerTopY = lineY + 4.5;
+      bannerTopY = imgTopY + drawHeightMm + 4;
     } else {
       let kopY = 13;
       const orgName = letterhead.organizationName.trim();
@@ -611,23 +624,12 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
     const subBannerLine =
       hasActiveLetterhead && letterhead?.organizationName.trim()
         ? `${letterhead.organizationName.trim()} · Periode Aktif: ${periodRangeLabel} (${rangeModeLabel})`
-        : `Sisa Uang — Your Finance Assistant · Periode Aktif: ${periodRangeLabel} (${rangeModeLabel})`;
+        : `Periode Aktif: ${periodRangeLabel} (${rangeModeLabel})`;
     doc.text(subBannerLine, marginX + 5, bannerTopY + 15);
     doc.text(
       `Cakupan Sumber Dana: ${preview.scopeWalletLabel}   |   Cakupan Kepemilikan: ${preview.scopeOwnerLabel}`,
       marginX + 5,
       bannerTopY + 20.5
-    );
-
-    doc.setFontSize(8);
-    doc.text(`Tgl Cetak: ${formattedPrintDateShort}`, pageWidth - marginX - 5, bannerTopY + 9, {
-      align: 'right',
-    });
-    doc.text(
-      `Akun: ${userDisplayName} (${userEmail})`,
-      pageWidth - marginX - 5,
-      bannerTopY + 15,
-      { align: 'right' }
     );
   }
 
@@ -1688,7 +1690,15 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
     : `Tanggal Cetak: ${formattedPrintDateLong}`;
 
   if (activeSigners.length > 0) {
-    const requiredBlockHeight = 42;
+    const topRowSigners = activeSigners.filter((s) => s.rowPosition !== 'bottom');
+    const bottomRowSigners = activeSigners.filter((s) => s.rowPosition === 'bottom');
+    const signerRows = [topRowSigners, bottomRowSigners].filter((row) => row.length > 0);
+
+    const rowBlockHeight = 33;
+    const rowGapHeight = 8;
+    const requiredBlockHeight =
+      10 + signerRows.length * rowBlockHeight + (signerRows.length - 1) * rowGapHeight;
+
     if (currentY + requiredBlockHeight > pageHeight - 16) {
       doc.addPage();
       currentY = 22;
@@ -1697,47 +1707,75 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
     }
 
     const usableWidth = pageWidth - marginX * 2;
-    const colCount = activeSigners.length;
-    const colWidth = usableWidth / colCount;
+    const singleRightColWidth = Math.min(76, usableWidth * 0.42);
+    const getColPosition = (rowIdx: number, colCount: number, colIdx: number) => {
+      // Formal rule: if there is only 1 signer in total (or 1 signer in the top row), place it on the right side
+      if (colCount === 1 && (activeSigners.length === 1 || rowIdx === 0)) {
+        return {
+          colCenterX: pageWidth - marginX - singleRightColWidth / 2,
+          maxColTextWidth: singleRightColWidth - 4,
+        };
+      }
+      // If 1 signer is on the bottom row below a multi-signer top row (e.g. Ketua / Kepala under Sekretaris & Bendahara), center it
+      if (colCount === 1) {
+        return {
+          colCenterX: marginX + usableWidth / 2,
+          maxColTextWidth: Math.min(85, usableWidth * 0.5),
+        };
+      }
+      const colWidth = usableWidth / colCount;
+      return {
+        colCenterX: marginX + colWidth * colIdx + colWidth / 2,
+        maxColTextWidth: Math.min(85, colWidth - 6),
+      };
+    };
 
-    // Print Date line aligned above the rightmost signature column
-    const rightmostCenterX = marginX + colWidth * (colCount - 1) + colWidth / 2;
+    const firstRow = signerRows[0];
+    const rightmostFirstRowPos = getColPosition(0, firstRow.length, firstRow.length - 1);
+
+    // Print Date line aligned above the rightmost signature column of the first row
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9.2);
     doc.setTextColor(15, 23, 42);
-    doc.text(printDateLine, rightmostCenterX, currentY, { align: 'center' });
+    doc.text(printDateLine, rightmostFirstRowPos.colCenterX, currentY, { align: 'center' });
 
-    const roleStartY = currentY + 5.5;
-    const nameStartY = roleStartY + 23;
+    let rowCursorY = currentY + 5.5;
 
-    activeSigners.forEach((signer, idx) => {
-      const colCenterX = marginX + colWidth * idx + colWidth / 2;
-      const maxColTextWidth = colWidth - 6;
+    signerRows.forEach((rowSigners, rowIdx) => {
+      const colCount = rowSigners.length;
+      const roleStartY = rowCursorY;
+      const nameStartY = roleStartY + 23;
 
-      // Jabatan / Role
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9.2);
-      doc.setTextColor(15, 23, 42);
-      const roleText = signer.role.trim() || 'Penandatangan';
-      const splitRole = doc.splitTextToSize(roleText, maxColTextWidth);
-      doc.text(splitRole, colCenterX, roleStartY, { align: 'center' });
+      rowSigners.forEach((signer, idx) => {
+        const { colCenterX, maxColTextWidth } = getColPosition(rowIdx, colCount, idx);
 
-      // Nama Penandatangan (Bold + Underline)
-      const nameText = signer.name.trim() || '........................................';
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9.5);
-      doc.setTextColor(0, 0, 0);
-      doc.text(nameText, colCenterX, nameStartY, { align: 'center' });
+        // Jabatan / Role
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9.2);
+        doc.setTextColor(15, 23, 42);
+        const roleText = signer.role.trim() || 'Penandatangan';
+        const splitRole = doc.splitTextToSize(roleText, maxColTextWidth);
+        doc.text(splitRole, colCenterX, roleStartY, { align: 'center' });
 
-      const textW = Math.min(maxColTextWidth, Math.max(32, doc.getTextWidth(nameText) + 2));
-      doc.setDrawColor(15, 23, 42);
-      doc.setLineWidth(0.3);
-      doc.line(
-        colCenterX - textW / 2,
-        nameStartY + 1.2,
-        colCenterX + textW / 2,
-        nameStartY + 1.2
-      );
+        // Nama Penandatangan (Bold + Underline)
+        const nameText = signer.name.trim() || '........................................';
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9.5);
+        doc.setTextColor(0, 0, 0);
+        doc.text(nameText, colCenterX, nameStartY, { align: 'center' });
+
+        const textW = Math.min(maxColTextWidth, Math.max(32, doc.getTextWidth(nameText) + 2));
+        doc.setDrawColor(15, 23, 42);
+        doc.setLineWidth(0.3);
+        doc.line(
+          colCenterX - textW / 2,
+          nameStartY + 1.2,
+          colCenterX + textW / 2,
+          nameStartY + 1.2
+        );
+      });
+
+      rowCursorY = nameStartY + 9.5;
     });
   } else if (reportType === 'rekonsiliasi_kas') {
     // Even if no signers are selected on Rekonsiliasi Kas, show the selected Tanggal Cetak cleanly on the right
@@ -1765,10 +1803,10 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
   for (let p = 1; p <= totalPages; p++) {
     doc.setPage(p);
     doc.setFont('helvetica', 'italic');
-    doc.setFontSize(7.5);
+    doc.setFontSize(7.2);
     doc.setTextColor(120, 120, 120);
     doc.text(
-      `Dokumen dibuat melalui Sisa Uang - Your Finance Assistant · Tanggal Cetak: ${formattedPrintDateLong} (${nowTimeStr})`,
+      `Dokumen dibuat melalui Sisa Uang - Your Finance Assistant · Tanggal Cetak: ${formattedPrintDateLong} (${nowTimeStr}) · Akun: ${userDisplayName}`,
       marginX,
       pageHeight - 8
     );
