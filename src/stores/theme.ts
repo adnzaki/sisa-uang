@@ -6,6 +6,44 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 export type CurrencyCode = 'IDR' | 'USD';
 export type NumberFontMode = 'sans' | 'mono';
 
+export interface ReportSignerItem {
+  id: string;
+  name: string;
+  role: string;
+}
+
+export type ReportLetterheadMode = 'text' | 'image';
+
+export interface ReportLetterheadConfig {
+  enabled: boolean;
+  mode: ReportLetterheadMode; // 'text' (Teks & Garis Kop) or 'image' (Gambar Kop Banner Penuh)
+  organizationName: string; // e.g., "DEWAN KEMAKMURAN MASJID (DKM) AL-IKHLAS" or "PENGURUS MUSHOLLA AR-RAHMAN"
+  subtitle: string; // e.g., "Panitia Pembangunan & Pengelolaan Kas Umat"
+  addressLine: string; // e.g., "Jl. Melati Raya No. 12, RT 04 / RW 02 · Telp: 0812-xxxx-xxxx"
+  imageDataUrl: string; // Base64 PNG/JPEG banner image for full-width kop surat
+  imageWidthPx: number;
+  imageHeightPx: number;
+}
+
+export interface ReportCustomTitlesConfig {
+  kas_umum: string;
+  rekonsiliasi_kas: string;
+  realisasi_anggaran: string;
+}
+
+const REPORT_SIGNERS_KEY_PREFIX = 'sisa_uang_report_signers_v1';
+const REPORT_ACTIVE_SIGNERS_KEY_PREFIX = 'sisa_uang_report_active_signers_v1';
+const REPORT_SIGN_PLACE_KEY_PREFIX = 'sisa_uang_report_sign_place_v1';
+const REPORT_LETTERHEAD_KEY_PREFIX = 'sisa_uang_report_letterhead_v1';
+const REPORT_CUSTOM_TITLES_KEY_PREFIX = 'sisa_uang_report_custom_titles_v1';
+export const MAX_REPORT_SIGNERS = 3;
+
+export const DEFAULT_REPORT_TITLES: ReportCustomTitlesConfig = {
+  kas_umum: 'Laporan Kas Umum (Buku Kas Umum)',
+  rekonsiliasi_kas: 'Laporan Rekonsiliasi Kas',
+  realisasi_anggaran: 'Laporan Realisasi / Serapan Anggaran',
+};
+
 export const useThemeStore = defineStore('theme', () => {
   const themeMode = ref<ThemeMode>(
     (localStorage.getItem('sisa_uang_theme') as ThemeMode) || 'system'
@@ -19,6 +57,373 @@ export const useThemeStore = defineStore('theme', () => {
     (localStorage.getItem('sisa_uang_number_font') as NumberFontMode) || 'sans'
   );
   const appLogoUrl = ref<string>(localStorage.getItem('sisa_uang_logo_url') || '');
+
+  // =========================================================================
+  // Report Configuration (Letterhead / Kop, Custom Report Titles, Up to 3 Signers, Sign Place)
+  // =========================================================================
+  const reportSigners = ref<ReportSignerItem[]>([]);
+  const reportActiveSignerIds = ref<Record<string, string[]>>({
+    kas_umum: [],
+    rekonsiliasi_kas: [],
+    realisasi_anggaran: [],
+  });
+  const reportSignPlace = ref<string>('');
+  const reportLetterhead = ref<ReportLetterheadConfig>({
+    enabled: false,
+    mode: 'text',
+    organizationName: '',
+    subtitle: '',
+    addressLine: '',
+    imageDataUrl: '',
+    imageWidthPx: 0,
+    imageHeightPx: 0,
+  });
+  const reportCustomTitles = ref<ReportCustomTitlesConfig>({
+    kas_umum: '',
+    rekonsiliasi_kas: '',
+    realisasi_anggaran: '',
+  });
+  const currentSignatureOwnerKey = ref<string>('default');
+
+  function getSignatureStorageKeys(ownerKey = currentSignatureOwnerKey.value) {
+    const suffix = ownerKey && ownerKey !== 'default' ? `_${ownerKey}` : '';
+    return {
+      signersKey: `${REPORT_SIGNERS_KEY_PREFIX}${suffix}`,
+      activeMapKey: `${REPORT_ACTIVE_SIGNERS_KEY_PREFIX}${suffix}`,
+      placeKey: `${REPORT_SIGN_PLACE_KEY_PREFIX}${suffix}`,
+      letterheadKey: `${REPORT_LETTERHEAD_KEY_PREFIX}${suffix}`,
+      customTitlesKey: `${REPORT_CUSTOM_TITLES_KEY_PREFIX}${suffix}`,
+    };
+  }
+
+  function loadReportSignatureConfig(ownerUid?: string | null) {
+    currentSignatureOwnerKey.value = ownerUid?.trim() || 'default';
+    if (typeof localStorage === 'undefined') return;
+    const {
+      signersKey,
+      activeMapKey,
+      placeKey,
+      letterheadKey,
+      customTitlesKey,
+    } = getSignatureStorageKeys(currentSignatureOwnerKey.value);
+
+    try {
+      const rawSigners =
+        localStorage.getItem(signersKey) || localStorage.getItem(REPORT_SIGNERS_KEY_PREFIX);
+      if (rawSigners) {
+        const parsed = JSON.parse(rawSigners);
+        if (Array.isArray(parsed)) {
+          reportSigners.value = parsed
+            .filter((item) => item && typeof item.id === 'string')
+            .slice(0, MAX_REPORT_SIGNERS)
+            .map((item) => ({
+              id: String(item.id),
+              name: String(item.name || '').trim(),
+              role: String(item.role || '').trim(),
+            }));
+        }
+      } else {
+        reportSigners.value = [];
+      }
+    } catch {
+      reportSigners.value = [];
+    }
+
+    const validIds = new Set(reportSigners.value.map((s) => s.id));
+
+    try {
+      const rawActive =
+        localStorage.getItem(activeMapKey) ||
+        localStorage.getItem(REPORT_ACTIVE_SIGNERS_KEY_PREFIX);
+      if (rawActive) {
+        const parsedMap = JSON.parse(rawActive);
+        if (parsedMap && typeof parsedMap === 'object') {
+          const sanitizeList = (arr: unknown): string[] =>
+            Array.isArray(arr)
+              ? arr
+                  .map((v) => String(v))
+                  .filter((id) => validIds.has(id))
+                  .slice(0, MAX_REPORT_SIGNERS)
+              : reportSigners.value.map((s) => s.id);
+          reportActiveSignerIds.value = {
+            kas_umum: sanitizeList((parsedMap as any).kas_umum),
+            rekonsiliasi_kas: sanitizeList((parsedMap as any).rekonsiliasi_kas),
+            realisasi_anggaran: sanitizeList((parsedMap as any).realisasi_anggaran),
+          };
+        }
+      } else {
+        const allIds = reportSigners.value.map((s) => s.id);
+        reportActiveSignerIds.value = {
+          kas_umum: [...allIds],
+          rekonsiliasi_kas: [...allIds],
+          realisasi_anggaran: [...allIds],
+        };
+      }
+    } catch {
+      const allIds = reportSigners.value.map((s) => s.id);
+      reportActiveSignerIds.value = {
+        kas_umum: [...allIds],
+        rekonsiliasi_kas: [...allIds],
+        realisasi_anggaran: [...allIds],
+      };
+    }
+
+    try {
+      reportSignPlace.value =
+        localStorage.getItem(placeKey) ||
+        localStorage.getItem(REPORT_SIGN_PLACE_KEY_PREFIX) ||
+        '';
+    } catch {
+      reportSignPlace.value = '';
+    }
+
+    try {
+      const rawLh =
+        localStorage.getItem(letterheadKey) ||
+        localStorage.getItem(REPORT_LETTERHEAD_KEY_PREFIX);
+      if (rawLh) {
+        const parsedLh = JSON.parse(rawLh);
+        if (parsedLh && typeof parsedLh === 'object') {
+          reportLetterhead.value = {
+            enabled: Boolean(parsedLh.enabled),
+            mode: parsedLh.mode === 'image' ? 'image' : 'text',
+            organizationName: String(parsedLh.organizationName || '').slice(0, 100),
+            subtitle: String(parsedLh.subtitle || '').slice(0, 120),
+            addressLine: String(parsedLh.addressLine || '').slice(0, 160),
+            imageDataUrl: String(parsedLh.imageDataUrl || ''),
+            imageWidthPx: Number(parsedLh.imageWidthPx) || 0,
+            imageHeightPx: Number(parsedLh.imageHeightPx) || 0,
+          };
+        }
+      } else {
+        reportLetterhead.value = {
+          enabled: false,
+          mode: 'text',
+          organizationName: '',
+          subtitle: '',
+          addressLine: '',
+          imageDataUrl: '',
+          imageWidthPx: 0,
+          imageHeightPx: 0,
+        };
+      }
+    } catch {
+      reportLetterhead.value = {
+        enabled: false,
+        mode: 'text',
+        organizationName: '',
+        subtitle: '',
+        addressLine: '',
+        imageDataUrl: '',
+        imageWidthPx: 0,
+        imageHeightPx: 0,
+      };
+    }
+
+    try {
+      const rawTitles =
+        localStorage.getItem(customTitlesKey) ||
+        localStorage.getItem(REPORT_CUSTOM_TITLES_KEY_PREFIX);
+      if (rawTitles) {
+        const parsedTitles = JSON.parse(rawTitles);
+        if (parsedTitles && typeof parsedTitles === 'object') {
+          reportCustomTitles.value = {
+            kas_umum: String(parsedTitles.kas_umum || '').slice(0, 100),
+            rekonsiliasi_kas: String(parsedTitles.rekonsiliasi_kas || '').slice(0, 100),
+            realisasi_anggaran: String(parsedTitles.realisasi_anggaran || '').slice(0, 100),
+          };
+        }
+      } else {
+        reportCustomTitles.value = {
+          kas_umum: '',
+          rekonsiliasi_kas: '',
+          realisasi_anggaran: '',
+        };
+      }
+    } catch {
+      reportCustomTitles.value = {
+        kas_umum: '',
+        rekonsiliasi_kas: '',
+        realisasi_anggaran: '',
+      };
+    }
+  }
+
+  function persistReportSignatureConfig() {
+    if (typeof localStorage === 'undefined') return;
+    const {
+      signersKey,
+      activeMapKey,
+      placeKey,
+      letterheadKey,
+      customTitlesKey,
+    } = getSignatureStorageKeys(currentSignatureOwnerKey.value);
+    try {
+      const serializedSigners = JSON.stringify(reportSigners.value);
+      const serializedMap = JSON.stringify(reportActiveSignerIds.value);
+      const serializedLh = JSON.stringify(reportLetterhead.value);
+      const serializedTitles = JSON.stringify(reportCustomTitles.value);
+      localStorage.setItem(signersKey, serializedSigners);
+      localStorage.setItem(REPORT_SIGNERS_KEY_PREFIX, serializedSigners);
+      localStorage.setItem(activeMapKey, serializedMap);
+      localStorage.setItem(REPORT_ACTIVE_SIGNERS_KEY_PREFIX, serializedMap);
+      localStorage.setItem(placeKey, reportSignPlace.value.trim());
+      localStorage.setItem(REPORT_SIGN_PLACE_KEY_PREFIX, reportSignPlace.value.trim());
+      localStorage.setItem(letterheadKey, serializedLh);
+      localStorage.setItem(REPORT_LETTERHEAD_KEY_PREFIX, serializedLh);
+      localStorage.setItem(customTitlesKey, serializedTitles);
+      localStorage.setItem(REPORT_CUSTOM_TITLES_KEY_PREFIX, serializedTitles);
+    } catch {
+      // Ignore storage quota errors
+    }
+  }
+
+  function updateReportLetterhead(patch: Partial<ReportLetterheadConfig>) {
+    reportLetterhead.value = {
+      enabled:
+        patch.enabled !== undefined ? Boolean(patch.enabled) : reportLetterhead.value.enabled,
+      mode:
+        patch.mode !== undefined
+          ? patch.mode === 'image'
+            ? 'image'
+            : 'text'
+          : reportLetterhead.value.mode,
+      organizationName: (
+        patch.organizationName !== undefined
+          ? patch.organizationName
+          : reportLetterhead.value.organizationName
+      ).slice(0, 100),
+      subtitle: (
+        patch.subtitle !== undefined ? patch.subtitle : reportLetterhead.value.subtitle
+      ).slice(0, 120),
+      addressLine: (
+        patch.addressLine !== undefined
+          ? patch.addressLine
+          : reportLetterhead.value.addressLine
+      ).slice(0, 160),
+      imageDataUrl:
+        patch.imageDataUrl !== undefined
+          ? patch.imageDataUrl
+          : reportLetterhead.value.imageDataUrl,
+      imageWidthPx:
+        patch.imageWidthPx !== undefined
+          ? Number(patch.imageWidthPx) || 0
+          : reportLetterhead.value.imageWidthPx,
+      imageHeightPx:
+        patch.imageHeightPx !== undefined
+          ? Number(patch.imageHeightPx) || 0
+          : reportLetterhead.value.imageHeightPx,
+    };
+    persistReportSignatureConfig();
+  }
+
+  function updateReportCustomTitle(
+    reportType: keyof ReportCustomTitlesConfig,
+    customTitle: string
+  ) {
+    reportCustomTitles.value[reportType] = customTitle.slice(0, 100);
+    persistReportSignatureConfig();
+  }
+
+  function resetReportCustomTitles() {
+    reportCustomTitles.value = {
+      kas_umum: '',
+      rekonsiliasi_kas: '',
+      realisasi_anggaran: '',
+    };
+    persistReportSignatureConfig();
+  }
+
+  function getResolvedReportTitle(reportType: keyof ReportCustomTitlesConfig): string {
+    const custom = (reportCustomTitles.value[reportType] || '').trim();
+    return custom || DEFAULT_REPORT_TITLES[reportType];
+  }
+
+  function setReportSignPlace(place: string) {
+    reportSignPlace.value = place.slice(0, 60);
+    persistReportSignatureConfig();
+  }
+
+  function addReportSigner(name = '', role = ''): ReportSignerItem | null {
+    if (reportSigners.value.length >= MAX_REPORT_SIGNERS) return null;
+    const id = `sig_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const newSigner: ReportSignerItem = {
+      id,
+      name: name.trim(),
+      role: role.trim(),
+    };
+    reportSigners.value.push(newSigner);
+    // By default enable this new signer across all report types
+    for (const rKey of ['kas_umum', 'rekonsiliasi_kas', 'realisasi_anggaran']) {
+      const current = reportActiveSignerIds.value[rKey] || [];
+      if (!current.includes(id)) {
+        reportActiveSignerIds.value[rKey] = [...current, id];
+      }
+    }
+    persistReportSignatureConfig();
+    return newSigner;
+  }
+
+  function updateReportSigner(id: string, name: string, role: string) {
+    const target = reportSigners.value.find((s) => s.id === id);
+    if (!target) return;
+    target.name = name.slice(0, 80);
+    target.role = role.slice(0, 80);
+    persistReportSignatureConfig();
+  }
+
+  function removeReportSigner(id: string) {
+    reportSigners.value = reportSigners.value.filter((s) => s.id !== id);
+    for (const rKey of ['kas_umum', 'rekonsiliasi_kas', 'realisasi_anggaran']) {
+      reportActiveSignerIds.value[rKey] = (reportActiveSignerIds.value[rKey] || []).filter(
+        (item) => item !== id
+      );
+    }
+    persistReportSignatureConfig();
+  }
+
+  function moveReportSigner(id: string, direction: -1 | 1) {
+    const idx = reportSigners.value.findIndex((s) => s.id === id);
+    if (idx === -1) return;
+    const targetIdx = idx + direction;
+    if (targetIdx < 0 || targetIdx >= reportSigners.value.length) return;
+    const copy = [...reportSigners.value];
+    const [moved] = copy.splice(idx, 1);
+    copy.splice(targetIdx, 0, moved);
+    reportSigners.value = copy;
+    persistReportSignatureConfig();
+  }
+
+  function toggleSignerForReport(reportType: string, signerId: string) {
+    const current = new Set(reportActiveSignerIds.value[reportType] || []);
+    if (current.has(signerId)) {
+      current.delete(signerId);
+    } else {
+      current.add(signerId);
+    }
+    // Preserve the order defined in reportSigners
+    reportActiveSignerIds.value[reportType] = reportSigners.value
+      .map((s) => s.id)
+      .filter((id) => current.has(id));
+    persistReportSignatureConfig();
+  }
+
+  function setSignersForReport(reportType: string, signerIds: string[]) {
+    const chosenSet = new Set(signerIds);
+    reportActiveSignerIds.value[reportType] = reportSigners.value
+      .map((s) => s.id)
+      .filter((id) => chosenSet.has(id));
+    persistReportSignatureConfig();
+  }
+
+  function getActiveSignersForReport(reportType: string): ReportSignerItem[] {
+    const activeIds = new Set(reportActiveSignerIds.value[reportType] || []);
+    return reportSigners.value.filter(
+      (s) => activeIds.has(s.id) && (s.name.trim().length > 0 || s.role.trim().length > 0)
+    );
+  }
+
+  loadReportSignatureConfig();
 
   const systemPrefersDark = ref<boolean>(
     typeof window !== 'undefined' && window.matchMedia
@@ -111,13 +516,33 @@ export const useThemeStore = defineStore('theme', () => {
     resolvedTheme,
     currency,
     numberFont,
+    moneyFont: numberFont,
     appLogoUrl,
+    reportSigners,
+    reportActiveSignerIds,
+    reportSignPlace,
+    reportLetterhead,
+    reportCustomTitles,
     setTheme,
     setCurrency,
     setNumberFont,
+    setMoneyFont: setNumberFont,
     setAppLogoUrl,
     setLocale,
     formatMoney,
     initThemeListener,
+    loadReportSignatureConfig,
+    setReportSignPlace,
+    updateReportLetterhead,
+    updateReportCustomTitle,
+    resetReportCustomTitles,
+    getResolvedReportTitle,
+    addReportSigner,
+    updateReportSigner,
+    removeReportSigner,
+    moveReportSigner,
+    toggleSignerForReport,
+    setSignersForReport,
+    getActiveSignersForReport,
   };
 });

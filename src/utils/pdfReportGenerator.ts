@@ -12,6 +12,23 @@ import {
 
 export type PdfReportType = 'kas_umum' | 'rekonsiliasi_kas' | 'realisasi_anggaran';
 
+export interface PdfReportSignerPayload {
+  id: string;
+  name: string;
+  role: string;
+}
+
+export interface PdfReportLetterheadPayload {
+  enabled: boolean;
+  mode?: 'text' | 'image';
+  organizationName: string;
+  subtitle: string;
+  addressLine: string;
+  imageDataUrl?: string;
+  imageWidthPx?: number;
+  imageHeightPx?: number;
+}
+
 export interface GeneratePdfReportPayload {
   reportType: PdfReportType;
   startIso: string;
@@ -28,6 +45,11 @@ export interface GeneratePdfReportPayload {
   userDisplayName: string;
   userEmail: string;
   locale: 'id' | 'en';
+  printDateIso?: string; // Optional custom YYYY-MM-DD print date
+  signPlace?: string; // Optional city/place for signature date line
+  signers?: PdfReportSignerPayload[]; // Up to 3 signers configured for this report
+  letterhead?: PdfReportLetterheadPayload; // Optional institution/mosque/organization letterhead (Kop Laporan)
+  customReportTitle?: string; // Optional custom main report title override
 }
 
 export interface PdfReportPreviewSummary {
@@ -328,6 +350,11 @@ export function computePdfReportPreview(
     realisasi_anggaran: 'Laporan Realisasi / Serapan Anggaran',
   };
 
+  const resolvedTitle =
+    payload.customReportTitle && payload.customReportTitle.trim().length > 0
+      ? payload.customReportTitle.trim()
+      : reportTitles[reportType];
+
   const liveBalance = getScopeLiveBalance(
     wallets,
     walletOwners,
@@ -398,7 +425,7 @@ export function computePdfReportPreview(
     totalBudgetLimit > 0 ? Math.round((totalBudgetRealized / totalBudgetLimit) * 100) : 0;
 
   return {
-    reportTitle: reportTitles[reportType],
+    reportTitle: resolvedTitle,
     scopeWalletLabel,
     scopeOwnerLabel,
     saldoAwal,
@@ -432,9 +459,43 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
     formatMoney,
     userDisplayName,
     userEmail,
+    printDateIso,
+    signPlace,
+    signers,
+    letterhead,
+    customReportTitle,
   } = payload;
 
   const preview = computePdfReportPreview(payload);
+
+  const effectivePrintIso =
+    printDateIso && /^\d{4}-\d{2}-\d{2}$/.test(printDateIso.slice(0, 10))
+      ? printDateIso.slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+  const formattedPrintDateShort = formatDateId(effectivePrintIso);
+  const formattedPrintDateLong = formatLongDateId(effectivePrintIso);
+  const activeSigners = (signers || [])
+    .filter((s) => s && (s.name.trim().length > 0 || s.role.trim().length > 0))
+    .slice(0, 3);
+
+  const isImageLetterhead = Boolean(
+    letterhead &&
+      letterhead.enabled &&
+      letterhead.mode === 'image' &&
+      letterhead.imageDataUrl &&
+      letterhead.imageDataUrl.startsWith('data:image/')
+  );
+
+  const isTextLetterhead = Boolean(
+    letterhead &&
+      letterhead.enabled &&
+      letterhead.mode !== 'image' &&
+      (letterhead.organizationName.trim().length > 0 ||
+        letterhead.subtitle.trim().length > 0 ||
+        letterhead.addressLine.trim().length > 0)
+  );
+
+  const hasActiveLetterhead = isImageLetterhead || isTextLetterhead;
 
   // Use Portrait for Formal Reconciliation & Budget Absorption, and Landscape for multi-column General Cash Ledger
   const orientation = reportType === 'kas_umum' ? 'landscape' : 'portrait';
@@ -447,46 +508,125 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const marginX = 14;
+  const centerX = pageWidth / 2;
+
+  // =========================================================================
+  // 0. Optional Formal Institution / Mosque / Organization Letterhead (KOP)
+  // =========================================================================
+  let bannerTopY = 12;
+  if (hasActiveLetterhead && letterhead) {
+    if (isImageLetterhead && letterhead.imageDataUrl) {
+      const contentWidthMm = pageWidth - marginX * 2;
+      const imgW = Number(letterhead.imageWidthPx) || 2400;
+      const imgH = Number(letterhead.imageHeightPx) || 400;
+      const aspect = imgW > 0 && imgH > 0 ? imgW / imgH : 6;
+      const maxHeightMm = orientation === 'landscape' ? 32 : 30;
+      const minHeightMm = 14;
+      const computedHeightMm = Math.min(
+        maxHeightMm,
+        Math.max(minHeightMm, contentWidthMm / aspect)
+      );
+      const imgTopY = 10;
+
+      try {
+        const format = letterhead.imageDataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+        doc.addImage(
+          letterhead.imageDataUrl,
+          format,
+          marginX,
+          imgTopY,
+          contentWidthMm,
+          computedHeightMm,
+          undefined,
+          'FAST'
+        );
+      } catch {
+        // Fallback if image format cannot be decoded
+      }
+
+      const lineY = imgTopY + computedHeightMm + 2;
+      doc.setDrawColor(15, 23, 42);
+      doc.setLineWidth(0.75);
+      doc.line(marginX, lineY, pageWidth - marginX, lineY);
+      doc.setLineWidth(0.25);
+      doc.line(marginX, lineY + 1.1, pageWidth - marginX, lineY + 1.1);
+
+      bannerTopY = lineY + 4.5;
+    } else {
+      let kopY = 13;
+      const orgName = letterhead.organizationName.trim();
+      const orgSub = letterhead.subtitle.trim();
+      const orgAddr = letterhead.addressLine.trim();
+
+      if (orgName) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(13.5);
+        doc.setTextColor(15, 23, 42);
+        doc.text(orgName.toUpperCase(), centerX, kopY, { align: 'center' });
+        kopY += 5.2;
+      }
+
+      if (orgSub) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9.8);
+        doc.setTextColor(5, 150, 105);
+        doc.text(orgSub, centerX, kopY, { align: 'center' });
+        kopY += 4.6;
+      }
+
+      if (orgAddr) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.5);
+        doc.setTextColor(71, 85, 105);
+        doc.text(orgAddr, centerX, kopY, { align: 'center' });
+        kopY += 3.8;
+      }
+
+      // Formal double horizontal line (Garis Kop Surat)
+      doc.setDrawColor(15, 23, 42);
+      doc.setLineWidth(0.75);
+      doc.line(marginX, kopY, pageWidth - marginX, kopY);
+      doc.setLineWidth(0.25);
+      doc.line(marginX, kopY + 1.1, pageWidth - marginX, kopY + 1.1);
+
+      bannerTopY = kopY + 5;
+    }
+  }
 
   // =========================================================================
   // 1. Official Report Header Banner (For Kas Umum & Realisasi Anggaran)
   // =========================================================================
-  let currentY = 42;
+  let currentY = bannerTopY + 30;
   if (reportType !== 'rekonsiliasi_kas') {
     doc.setFillColor(5, 150, 105); // Emerald 600
-    doc.roundedRect(marginX, 12, pageWidth - marginX * 2, 24, 3, 3, 'F');
+    doc.roundedRect(marginX, bannerTopY, pageWidth - marginX * 2, 24, 3, 3, 'F');
 
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(14);
-    doc.text(preview.reportTitle.toUpperCase(), marginX + 5, 21);
+    doc.setFontSize(13.5);
+    doc.text(preview.reportTitle.toUpperCase(), marginX + 5, bannerTopY + 9);
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
-    doc.text(
-      `Sisa Uang — Your Finance Assistant · Periode Aktif: ${periodRangeLabel} (${rangeModeLabel})`,
-      marginX + 5,
-      27
-    );
+    const subBannerLine =
+      hasActiveLetterhead && letterhead?.organizationName.trim()
+        ? `${letterhead.organizationName.trim()} · Periode Aktif: ${periodRangeLabel} (${rangeModeLabel})`
+        : `Sisa Uang — Your Finance Assistant · Periode Aktif: ${periodRangeLabel} (${rangeModeLabel})`;
+    doc.text(subBannerLine, marginX + 5, bannerTopY + 15);
     doc.text(
       `Cakupan Sumber Dana: ${preview.scopeWalletLabel}   |   Cakupan Kepemilikan: ${preview.scopeOwnerLabel}`,
       marginX + 5,
-      32.5
+      bannerTopY + 20.5
     );
 
-    const printedAtStr = new Date().toLocaleString('id-ID', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
     doc.setFontSize(8);
-    doc.text(`Dicetak: ${printedAtStr}`, pageWidth - marginX - 5, 21, { align: 'right' });
+    doc.text(`Tgl Cetak: ${formattedPrintDateShort}`, pageWidth - marginX - 5, bannerTopY + 9, {
+      align: 'right',
+    });
     doc.text(
       `Akun: ${userDisplayName} (${userEmail})`,
       pageWidth - marginX - 5,
-      27,
+      bannerTopY + 15,
       { align: 'right' }
     );
   }
@@ -708,32 +848,39 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
       startYear === endYear ? `TAHUN ANGGARAN ${startYear}` : `TAHUN ANGGARAN ${startYear} - ${endYear}`;
 
     // Centered Formal Document Title inside Rounded Emerald Banner (Fresh & Formal)
-    const centerX = pageWidth / 2;
     doc.setFillColor(5, 150, 105); // Emerald 600
-    doc.roundedRect(marginX, 12, pageWidth - marginX * 2, 26, 3.5, 3.5, 'F');
+    doc.roundedRect(marginX, bannerTopY, pageWidth - marginX * 2, 26, 3.5, 3.5, 'F');
+
+    const reconMainTitle =
+      customReportTitle && customReportTitle.trim().length > 0
+        ? customReportTitle.trim().toUpperCase()
+        : 'LAPORAN REKONSILIASI KAS';
 
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
-    doc.text('LAPORAN REKONSILIASI KAS', centerX, 19.5, { align: 'center' });
+    doc.text(reconMainTitle, centerX, bannerTopY + 7.5, { align: 'center' });
     doc.setFontSize(9.5);
-    doc.text(`SALDO DANA (${scopeTitleLine})`, centerX, 25, { align: 'center' });
+    doc.text(`SALDO DANA (${scopeTitleLine})`, centerX, bannerTopY + 13, { align: 'center' });
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8.8);
-    doc.text(`PERIODE ${startLongStr} s/d ${endLongStr}`, centerX, 30.2, { align: 'center' });
+    doc.text(`PERIODE ${startLongStr} s/d ${endLongStr}`, centerX, bannerTopY + 18.2, {
+      align: 'center',
+    });
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.8);
-    doc.text(tahunAnggaranLabel, centerX, 35, { align: 'center' });
+    doc.text(tahunAnggaranLabel, centerX, bannerTopY + 23, { align: 'center' });
 
     // Formal Opening Statement (Strictly Report style, not Berita Acara)
+    const introStartY = bannerTopY + 33;
     doc.setTextColor(0, 0, 0);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9.5);
     const introText = `Berikut adalah hasil rekonsiliasi atas saldo awal, mutasi penambahan, mutasi pengurangan, dan saldo akhir dana (${preview.scopeWalletLabel} · ${preview.scopeOwnerLabel}) untuk Periode ${startLongStr} s/d ${endLongStr}, dengan rincian sebagai berikut :`;
     const splitIntro = doc.splitTextToSize(introText, pageWidth - marginX * 2);
-    doc.text(splitIntro, marginX, 45);
+    doc.text(splitIntro, marginX, introStartY);
 
-    currentY = 45 + splitIntro.length * 4.5 + 2;
+    currentY = introStartY + splitIntro.length * 4.5 + 2;
 
     // Filter wallet_owners units matching the selected scope
     const targetUnits = walletOwners
@@ -1275,6 +1422,7 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
       'Demikian Laporan Rekonsiliasi Kas ini disusun dengan sebenarnya berdasarkan data transaksi tercatat dan dapat diperbarui apabila diperlukan.';
     const splitClosing = doc.splitTextToSize(closingText, pageWidth - marginX * 2);
     doc.text(splitClosing, marginX, currentY);
+    currentY += splitClosing.length * 4.5;
   }
 
   // =========================================================================
@@ -1528,17 +1676,91 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
   }
 
   // =========================================================================
+  // Formal Signature Block (1 to 3 Signers + Print Date)
+  // =========================================================================
+  if (reportType !== 'rekonsiliasi_kas' && (doc as any).lastAutoTable?.finalY) {
+    currentY = (doc as any).lastAutoTable.finalY + 6;
+  }
+
+  const cleanPlace = String(signPlace || '').trim();
+  const printDateLine = cleanPlace
+    ? `${cleanPlace}, ${formattedPrintDateLong}`
+    : `Tanggal Cetak: ${formattedPrintDateLong}`;
+
+  if (activeSigners.length > 0) {
+    const requiredBlockHeight = 42;
+    if (currentY + requiredBlockHeight > pageHeight - 16) {
+      doc.addPage();
+      currentY = 22;
+    } else {
+      currentY += 6;
+    }
+
+    const usableWidth = pageWidth - marginX * 2;
+    const colCount = activeSigners.length;
+    const colWidth = usableWidth / colCount;
+
+    // Print Date line aligned above the rightmost signature column
+    const rightmostCenterX = marginX + colWidth * (colCount - 1) + colWidth / 2;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.2);
+    doc.setTextColor(15, 23, 42);
+    doc.text(printDateLine, rightmostCenterX, currentY, { align: 'center' });
+
+    const roleStartY = currentY + 5.5;
+    const nameStartY = roleStartY + 23;
+
+    activeSigners.forEach((signer, idx) => {
+      const colCenterX = marginX + colWidth * idx + colWidth / 2;
+      const maxColTextWidth = colWidth - 6;
+
+      // Jabatan / Role
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.2);
+      doc.setTextColor(15, 23, 42);
+      const roleText = signer.role.trim() || 'Penandatangan';
+      const splitRole = doc.splitTextToSize(roleText, maxColTextWidth);
+      doc.text(splitRole, colCenterX, roleStartY, { align: 'center' });
+
+      // Nama Penandatangan (Bold + Underline)
+      const nameText = signer.name.trim() || '........................................';
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.5);
+      doc.setTextColor(0, 0, 0);
+      doc.text(nameText, colCenterX, nameStartY, { align: 'center' });
+
+      const textW = Math.min(maxColTextWidth, Math.max(32, doc.getTextWidth(nameText) + 2));
+      doc.setDrawColor(15, 23, 42);
+      doc.setLineWidth(0.3);
+      doc.line(
+        colCenterX - textW / 2,
+        nameStartY + 1.2,
+        colCenterX + textW / 2,
+        nameStartY + 1.2
+      );
+    });
+  } else if (reportType === 'rekonsiliasi_kas') {
+    // Even if no signers are selected on Rekonsiliasi Kas, show the selected Tanggal Cetak cleanly on the right
+    if (currentY + 14 > pageHeight - 16) {
+      doc.addPage();
+      currentY = 22;
+    } else {
+      currentY += 7;
+    }
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.2);
+    doc.setTextColor(15, 23, 42);
+    doc.text(printDateLine, pageWidth - marginX, currentY, { align: 'right' });
+  }
+
+  // =========================================================================
   // Page Numbers & Footer Stamp on Every Page
   // =========================================================================
   const totalPages = doc.getNumberOfPages();
-  const generatedTimestamp = new Date().toLocaleString('en-US', {
-    month: 'long',
-    day: '2-digit',
-    year: 'numeric',
+  const nowTimeStr = new Date().toLocaleTimeString('id-ID', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    hour12: false,
   });
   for (let p = 1; p <= totalPages; p++) {
     doc.setPage(p);
@@ -1546,7 +1768,7 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
     doc.setFontSize(7.5);
     doc.setTextColor(120, 120, 120);
     doc.text(
-      `Dokumen dibuat melalui Sisa Uang - Your Finance Assistant Pada ${generatedTimestamp}`,
+      `Dokumen dibuat melalui Sisa Uang - Your Finance Assistant · Tanggal Cetak: ${formattedPrintDateLong} (${nowTimeStr})`,
       marginX,
       pageHeight - 8
     );
