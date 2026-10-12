@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, NavigationGuardNext, RouteLocationNormalized } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
+import { useNotificationStore } from '../stores/notification';
 import DashboardView from '../views/DashboardView.vue';
 import TransactionsView from '../views/TransactionsView.vue';
 import WalletsView from '../views/WalletsView.vue';
@@ -179,6 +180,30 @@ router.beforeEach((to, _from, next) => {
   ];
   if (authStore.isAuthenticated && authStore.isSuperAdmin && financePaths.includes(to.path)) {
     next({ path: '/control-panel' });
+    return;
+  }
+
+  // Restrict /report-settings exclusively to SisaUang Pro subscribers
+  if (
+    authStore.isAuthenticated &&
+    !authStore.isSuperAdmin &&
+    !authStore.isProUser &&
+    to.path === '/report-settings'
+  ) {
+    const notificationStore = useNotificationStore();
+    notificationStore.showPopup({
+      type: 'warning',
+      title: 'Khusus Pelanggan SisaUang Pro',
+      message: 'Pengaturan Laporan hanya tersedia untuk pelanggan SisaUang Pro.',
+      detail: 'Upgrade ke SisaUang Pro untuk mengatur kop institusi, judul laporan, dan daftar penandatangan PDF.',
+    });
+    notificationStore.openProModal({
+      featureTitle: 'Pengaturan Laporan PDF (Kop, Judul & Tanda Tangan)',
+      featureDescription:
+        'Pengaturan laporan (kustomisasi kop masjid/musholla/organisasi, judul masing-masing laporan, serta daftar penandatangan PDF) hanya tersedia untuk pelanggan SisaUang Pro.',
+      limitSummary: 'Khusus Pelanggan Pro',
+    });
+    next({ path: _from.matched.length > 0 && _from.path !== '/report-settings' ? _from.fullPath : '/settings' });
     return;
   }
 

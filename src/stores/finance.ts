@@ -1714,24 +1714,25 @@ export const useFinanceStore = defineStore('finance', () => {
 
     try {
       // Also check lightweight local server user status & subscription (0 Firestore reads)
+      let serverReportedProOrPending = false;
       try {
         const res = await fetch(`/api/users/${encodeURIComponent(uid)}/status`);
         if (res.ok) {
           const statusData = await res.json();
           if (statusData.subscriptionStatus === 'pro' || statusData.isPro === true) {
+            serverReportedProOrPending = true;
             authStore.setExternalSubscriptionStatus(
               'pro',
               statusData.subscriptionPlan || 'monthly',
               statusData.subscriptionExpiresAt || null
             );
           } else if (statusData.subscriptionStatus === 'pending') {
+            serverReportedProOrPending = true;
             authStore.setExternalSubscriptionStatus(
               'pending',
               statusData.subscriptionPlan || 'monthly',
               null
             );
-          } else if (statusData.subscriptionStatus === 'free' && statusData.isPro === false) {
-            authStore.setExternalSubscriptionStatus('free', null, null);
           }
         }
       } catch {
@@ -1748,6 +1749,20 @@ export const useFinanceStore = defineStore('finance', () => {
 
       const uData = userSnap.data();
       const remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
+
+      // Sync subscription directly from the already-read `/users/{uid}` document (0 extra Firestore reads!)
+      if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
+        authStore.setExternalSubscriptionStatus(
+          'pro',
+          uData?.subscriptionPlan === 'yearly'
+            ? 'yearly'
+            : authStore.user?.subscriptionPlan || 'monthly',
+          uData?.subscriptionExpiresAt || authStore.user?.subscriptionExpiresAt || null
+        );
+      } else if (!serverReportedProOrPending) {
+        // Check `/budgets/su_sub_pro_{uid}` if `/users/{uid}` doesn't have subscriptionStatus field yet
+        void authStore.syncSubscriptionFromFirestoreForUser(uid, authStore.user?.email);
+      }
 
       // If remote document has a newer timestamp (> 2s tolerance), invalidate page caches and pull fresh data from server
       if (remoteSyncToken > 0 && remoteSyncToken > localSyncToken + 2000) {
@@ -1873,25 +1888,26 @@ export const useFinanceStore = defineStore('finance', () => {
     }
 
     // Sync latest subscription status from Express registry (0 Firestore reads)
+    let localServerHasProOrPending = false;
     try {
       const res = await fetch(`/api/users/${encodeURIComponent(uid)}/status`);
       if (res.ok) {
         const statusData = await res.json();
         const authStore = useAuthStore();
         if (statusData.subscriptionStatus === 'pro' || statusData.isPro === true) {
+          localServerHasProOrPending = true;
           authStore.setExternalSubscriptionStatus(
             'pro',
             statusData.subscriptionPlan || 'monthly',
             statusData.subscriptionExpiresAt || null
           );
         } else if (statusData.subscriptionStatus === 'pending') {
+          localServerHasProOrPending = true;
           authStore.setExternalSubscriptionStatus(
             'pending',
             statusData.subscriptionPlan || 'monthly',
             null
           );
-        } else if (statusData.subscriptionStatus === 'free' && statusData.isPro === false) {
-          authStore.setExternalSubscriptionStatus('free', null, null);
         }
       }
     } catch {
@@ -1904,6 +1920,7 @@ export const useFinanceStore = defineStore('finance', () => {
       try {
         let remoteSyncToken = 0;
         lastTokenCheckAt = Date.now();
+        const authStore = useAuthStore();
 
         // 1-Read Sync Token Check:
         // Read ONLY 1 document (`/users/{uid}`) to verify if any other device modified financial data.
@@ -1913,6 +1930,19 @@ export const useFinanceStore = defineStore('finance', () => {
           if (userSnap.exists()) {
             const uData = userSnap.data();
             remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
+            if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
+              authStore.setExternalSubscriptionStatus(
+                'pro',
+                uData?.subscriptionPlan === 'yearly'
+                  ? 'yearly'
+                  : authStore.user?.subscriptionPlan || 'monthly',
+                uData?.subscriptionExpiresAt || authStore.user?.subscriptionExpiresAt || null
+              );
+            } else if (!localServerHasProOrPending) {
+              void authStore.syncSubscriptionFromFirestoreForUser(uid, authStore.user?.email);
+            }
+          } else if (!localServerHasProOrPending) {
+            void authStore.syncSubscriptionFromFirestoreForUser(uid, authStore.user?.email);
           }
         } catch (tokenErr) {
           if (isFirestoreQuotaError(tokenErr)) {
