@@ -208,22 +208,6 @@ function checkAndScrollToSection() {
 }
 
 function handleOpenReportSettings() {
-  if (!authStore.isSuperAdmin && !authStore.isProUser) {
-    notificationStore.showPopup({
-      type: 'warning',
-      title: 'Khusus Pelanggan SisaUang Pro',
-      message: 'Pengaturan laporan hanya tersedia untuk pelanggan SisaUang Pro.',
-      detail:
-        'Berlangganan SisaUang Pro untuk mengatur kop institusi/masjid/organisasi, judul laporan, serta daftar penandatangan PDF.',
-    });
-    notificationStore.openProModal({
-      featureTitle: 'Pengaturan Laporan PDF (Kop, Judul & Tanda Tangan)',
-      featureDescription:
-        'Pengaturan laporan hanya tersedia untuk pelanggan SisaUang Pro. Dengan SisaUang Pro, Anda dapat menyesuaikan kop surat institusi/masjid/musholla, mengubah judul masing-masing laporan, serta menambahkan hingga 3 penandatangan PDF.',
-      limitSummary: 'Khusus Pelanggan Pro',
-    });
-    return;
-  }
   router.push('/report-settings');
 }
 
@@ -644,14 +628,13 @@ function handleGoToAddAccount() {
         </div>
       </div>
 
-      <button
-        type="button"
-        class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 shrink-0 transition-colors cursor-pointer"
-        @click="handleOpenReportSettings"
+      <RouterLink
+        to="/report-settings"
+        class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 shrink-0 transition-colors"
       >
         <FileCheck2 class="w-4 h-4 shrink-0" />
         <span>Buka Pengaturan Laporan</span>
-      </button>
+      </RouterLink>
     </section>
 
     <!-- Account Profile Summary + DisplayName & Username Editor -->

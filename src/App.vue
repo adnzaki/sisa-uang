@@ -536,23 +536,6 @@ watch(
 );
 
 function handleNavigateReportSettings() {
-  if (!authStore.isSuperAdmin && !authStore.isProUser) {
-    mobileDrawerOpen.value = false;
-    notificationStore.showPopup({
-      type: 'warning',
-      title: 'Khusus Pelanggan SisaUang Pro',
-      message: 'Pengaturan laporan hanya tersedia untuk pelanggan SisaUang Pro.',
-      detail:
-        'Berlangganan SisaUang Pro untuk mengatur kop institusi/masjid/organisasi, judul laporan, serta daftar penandatangan PDF.',
-    });
-    notificationStore.openProModal({
-      featureTitle: 'Pengaturan Laporan PDF (Kop, Judul & Tanda Tangan)',
-      featureDescription:
-        'Pengaturan laporan hanya tersedia untuk pelanggan SisaUang Pro. Dengan SisaUang Pro, Anda dapat menyesuaikan kop surat institusi/masjid/musholla, mengubah judul masing-masing laporan, serta menambahkan hingga 3 penandatangan PDF.',
-      limitSummary: 'Khusus Pelanggan Pro',
-    });
-    return;
-  }
   mobileDrawerOpen.value = false;
   router.push('/report-settings');
 }
@@ -1096,15 +1079,14 @@ async function handleSubmitProPayment() {
                   </span>
                 </RouterLink>
 
-                <button
-                  type="button"
-                  class="w-full min-h-[38px] flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors cursor-pointer text-left"
+                <RouterLink
+                  to="/report-settings"
+                  class="min-h-[38px] flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors"
                   :class="
                     route.path === '/report-settings'
                       ? 'bg-emerald-600 text-white shadow-2xs'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
                   "
-                  @click="handleNavigateReportSettings"
                 >
                   <span class="flex items-center gap-2.5 truncate">
                     <FileSpreadsheet class="w-3.5 h-3.5 shrink-0" />
@@ -1117,7 +1099,7 @@ async function handleSubmitProPayment() {
                     <Crown class="w-2.5 h-2.5 shrink-0" />
                     <span>PRO</span>
                   </span>
-                </button>
+                </RouterLink>
               </div>
             </div>
           </nav>
@@ -1903,15 +1885,15 @@ async function handleSubmitProPayment() {
                     </span>
                   </RouterLink>
 
-                  <button
-                    type="button"
-                    class="w-full min-h-[40px] flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer text-left"
+                  <RouterLink
+                    to="/report-settings"
+                    class="min-h-[40px] flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-colors"
                     :class="
                       route.path === '/report-settings'
                         ? 'bg-emerald-600 text-white shadow-2xs'
                         : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                     "
-                    @click="handleNavigateReportSettings"
+                    @click="mobileDrawerOpen = false"
                   >
                     <span class="flex items-center gap-2.5 truncate">
                       <FileSpreadsheet class="w-4 h-4 shrink-0" />
@@ -1924,7 +1906,7 @@ async function handleSubmitProPayment() {
                       <Crown class="w-3 h-3 shrink-0" />
                       <span>PRO</span>
                     </span>
-                  </button>
+                  </RouterLink>
                 </div>
               </div>
             </nav>
