@@ -369,6 +369,7 @@ function handleAccountMenuClickOutside(e: MouseEvent) {
 const drawerHistoryKey = 'su_mobile_drawer';
 let hasPushedDrawerHistory = false;
 let isClosedByBack = false;
+let openedDrawerAtFullPath = '';
 
 function handleDrawerPopState() {
   if (!mobileDrawerOpen.value) return;
@@ -379,10 +380,29 @@ function handleDrawerPopState() {
   }
 }
 
+function navigateFromMobileDrawer(targetPath: string) {
+  if (route.fullPath === targetPath || route.path === targetPath) {
+    mobileDrawerOpen.value = false;
+    return;
+  }
+
+  if (hasPushedDrawerHistory) {
+    hasPushedDrawerHistory = false;
+    isClosedByBack = true;
+    mobileDrawerOpen.value = false;
+    void router.replace(targetPath);
+  } else {
+    isClosedByBack = true;
+    mobileDrawerOpen.value = false;
+    void router.push(targetPath);
+  }
+}
+
 watch(mobileDrawerOpen, (isOpen) => {
   if (typeof window === 'undefined') return;
   if (isOpen) {
     isClosedByBack = false;
+    openedDrawerAtFullPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     try {
       const currentState = window.history.state || {};
       window.history.pushState(
@@ -397,13 +417,22 @@ watch(mobileDrawerOpen, (isOpen) => {
   } else {
     if (hasPushedDrawerHistory && !isClosedByBack) {
       hasPushedDrawerHistory = false;
-      try {
-        if (window.history.state?.__sisaUangDrawerKey === drawerHistoryKey) {
-          window.history.back();
+      const snapshotPath = openedDrawerAtFullPath;
+      // Defer history.back() to next microtask so if the drawer was closed as part of a router.push(),
+      // we detect that route changed and do NOT pop the new route back to the previous page!
+      setTimeout(() => {
+        try {
+          const currentFullPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+          if (
+            currentFullPath === snapshotPath &&
+            window.history.state?.__sisaUangDrawerKey === drawerHistoryKey
+          ) {
+            window.history.back();
+          }
+        } catch {
+          // Ignore
         }
-      } catch {
-        // Ignore
-      }
+      }, 0);
     }
     isClosedByBack = false;
   }
@@ -522,7 +551,7 @@ const isSettingsRouteActive = computed(
   () => route.path === '/settings' || route.path === '/report-settings'
 );
 
-const settingsDropdownOpen = ref<boolean>(
+const settingsAccordionOpen = ref<boolean>(
   route.path === '/settings' || route.path === '/report-settings'
 );
 
@@ -530,29 +559,31 @@ watch(
   () => route.path,
   (newPath) => {
     if (newPath === '/settings' || newPath === '/report-settings') {
-      settingsDropdownOpen.value = true;
+      settingsAccordionOpen.value = true;
     }
-  }
+  },
+  { immediate: true }
 );
 
-function handleNavigateReportSettings() {
-  mobileDrawerOpen.value = false;
-  router.push('/report-settings');
+function toggleSettingsAccordion() {
+  settingsAccordionOpen.value = !settingsAccordionOpen.value;
 }
 
-// Super Admin navigation items (Strictly User Management, Activity Logs, Alerts, and Settings)
+// Super Admin navigation items (User Management, Activity Logs, Alerts, Database)
 const adminNavItems = computed(() => [
   {
     name: t('admin.userManagement'),
     path: '/control-panel?tab=users',
     tab: 'users',
     icon: Users,
+    badge: null,
   },
   {
     name: t('admin.activityLogs'),
     path: '/control-panel?tab=logs',
     tab: 'logs',
     icon: Activity,
+    badge: null,
   },
   {
     name: t('admin.securityAlerts'),
@@ -566,12 +597,7 @@ const adminNavItems = computed(() => [
     path: '/database',
     tab: null,
     icon: Database,
-  },
-  {
-    name: t('nav.settings'),
-    path: '/settings',
-    tab: null,
-    icon: Settings,
+    badge: null,
   },
 ]);
 
@@ -1025,80 +1051,93 @@ async function handleSubmitProPayment() {
               v-for="item in userNavItems"
               :key="item.path"
               :to="item.path"
-              class="min-h-[42px] flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-medium transition-colors"
+              class="min-h-[42px] flex items-center justify-between px-3.5 py-2 rounded-xl text-xs sm:text-sm font-medium transition-colors"
               :class="
                 route.path === item.path
-                  ? 'bg-emerald-600 text-white'
+                  ? 'bg-emerald-600 text-white shadow-2xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
               "
             >
-              <component :is="item.icon" class="w-4 h-4 shrink-0" />
-              <span class="truncate">{{ item.name }}</span>
+              <div class="flex items-center gap-3 truncate min-w-0">
+                <component :is="item.icon" class="w-4 h-4 shrink-0" />
+                <span class="truncate">{{ item.name }}</span>
+              </div>
+              <span
+                v-if="item.badge"
+                class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider shrink-0"
+                :class="
+                  route.path === item.path
+                    ? 'bg-white/20 text-white'
+                    : 'bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300'
+                "
+              >
+                <Crown class="w-2.5 h-2.5 shrink-0" />
+                <span>{{ item.badge }}</span>
+              </span>
             </RouterLink>
 
-            <!-- Unified Parent Dropdown: Pengaturan -> Umum | Laporan -->
-            <div class="space-y-1 pt-0.5">
+            <!-- Pengaturan Accordion: Menu Utama dengan Sub-menu Umum & Laporan -->
+            <div class="pt-1">
               <button
                 type="button"
-                class="w-full min-h-[42px] flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-medium transition-colors cursor-pointer"
+                class="w-full min-h-[42px] flex items-center justify-between px-3.5 py-2 rounded-xl text-xs sm:text-sm font-medium transition-colors select-none text-left cursor-pointer"
                 :class="
                   isSettingsRouteActive
-                    ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-semibold'
+                    ? 'bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
                 "
-                :aria-expanded="settingsDropdownOpen"
-                @click="settingsDropdownOpen = !settingsDropdownOpen"
+                :aria-expanded="settingsAccordionOpen"
+                @click="toggleSettingsAccordion"
               >
-                <span class="flex items-center gap-3 min-w-0">
+                <div class="flex items-center gap-3 truncate min-w-0">
                   <Settings class="w-4 h-4 shrink-0" />
                   <span class="truncate">{{ t('nav.settings') }}</span>
-                </span>
-                <ChevronDown
-                  class="w-4 h-4 shrink-0 transition-transform duration-200"
-                  :class="settingsDropdownOpen ? 'rotate-180' : ''"
-                />
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <span
+                    v-if="isSettingsRouteActive"
+                    class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
+                  />
+                  <ChevronDown
+                    class="w-4 h-4 transition-transform duration-200"
+                    :class="{ 'rotate-180': settingsAccordionOpen }"
+                  />
+                </div>
               </button>
 
-              <!-- Child Submenu Items: Umum | Laporan -->
+              <!-- Accordion Submenu: Umum & Laporan -->
               <div
-                v-if="settingsDropdownOpen"
-                class="ml-4 pl-3 border-l-2 border-slate-200/80 dark:border-slate-800 space-y-1"
+                v-show="settingsAccordionOpen"
+                class="mt-1 pl-3 py-1 space-y-1 border-l-2 border-emerald-200/80 dark:border-emerald-900/60 ml-4 transition-all"
               >
                 <RouterLink
                   to="/settings"
-                  class="min-h-[38px] flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors"
+                  class="min-h-[38px] flex items-center justify-between px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors"
                   :class="
                     route.path === '/settings'
-                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
                   "
                 >
-                  <span class="flex items-center gap-2.5 truncate">
+                  <div class="flex items-center gap-2.5 truncate min-w-0">
                     <SlidersHorizontal class="w-3.5 h-3.5 shrink-0" />
                     <span class="truncate">{{ t('nav.settingsGeneral') }}</span>
-                  </span>
+                  </div>
                 </RouterLink>
 
                 <RouterLink
                   to="/report-settings"
-                  class="min-h-[38px] flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors"
+                  class="min-h-[38px] flex items-center justify-between px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors"
                   :class="
                     route.path === '/report-settings'
-                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
                   "
                 >
-                  <span class="flex items-center gap-2.5 truncate">
+                  <div class="flex items-center gap-2.5 truncate min-w-0">
                     <FileSpreadsheet class="w-3.5 h-3.5 shrink-0" />
                     <span class="truncate">{{ t('nav.settingsReport') }}</span>
-                  </span>
-                  <span
-                    v-if="!authStore.isProUser"
-                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 text-[9px] font-bold uppercase tracking-wider shrink-0"
-                  >
-                    <Crown class="w-2.5 h-2.5 shrink-0" />
-                    <span>PRO</span>
-                  </span>
+                  </div>
                 </RouterLink>
               </div>
             </div>
@@ -1128,6 +1167,71 @@ async function handleSubmitProPayment() {
                 {{ item.badge }}
               </span>
             </RouterLink>
+
+            <!-- Pengaturan Accordion for Admin: Menu Utama dengan Sub-menu Umum & Laporan -->
+            <div class="pt-1">
+              <button
+                type="button"
+                class="w-full min-h-[42px] flex items-center justify-between px-3.5 py-2 rounded-xl text-xs sm:text-sm font-medium transition-colors select-none text-left cursor-pointer"
+                :class="
+                  isSettingsRouteActive
+                    ? 'bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                "
+                :aria-expanded="settingsAccordionOpen"
+                @click="toggleSettingsAccordion"
+              >
+                <div class="flex items-center gap-3 truncate min-w-0">
+                  <Settings class="w-4 h-4 shrink-0" />
+                  <span class="truncate">{{ t('nav.settings') }}</span>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <span
+                    v-if="isSettingsRouteActive"
+                    class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
+                  />
+                  <ChevronDown
+                    class="w-4 h-4 transition-transform duration-200"
+                    :class="{ 'rotate-180': settingsAccordionOpen }"
+                  />
+                </div>
+              </button>
+
+              <div
+                v-show="settingsAccordionOpen"
+                class="mt-1 pl-3 py-1 space-y-1 border-l-2 border-emerald-200/80 dark:border-emerald-900/60 ml-4 transition-all"
+              >
+                <RouterLink
+                  to="/settings"
+                  class="min-h-[38px] flex items-center justify-between px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors"
+                  :class="
+                    route.path === '/settings'
+                      ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                  "
+                >
+                  <div class="flex items-center gap-2.5 truncate min-w-0">
+                    <SlidersHorizontal class="w-3.5 h-3.5 shrink-0" />
+                    <span class="truncate">{{ t('nav.settingsGeneral') }}</span>
+                  </div>
+                </RouterLink>
+
+                <RouterLink
+                  to="/report-settings"
+                  class="min-h-[38px] flex items-center justify-between px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors"
+                  :class="
+                    route.path === '/report-settings'
+                      ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                  "
+                >
+                  <div class="flex items-center gap-2.5 truncate min-w-0">
+                    <FileSpreadsheet class="w-3.5 h-3.5 shrink-0" />
+                    <span class="truncate">{{ t('nav.settingsReport') }}</span>
+                  </div>
+                </RouterLink>
+              </div>
+            </div>
           </nav>
         </div>
 
@@ -1828,101 +1932,120 @@ async function handleSubmitProPayment() {
 
             <!-- Mobile & Tablet Drawer Navigation: Regular User -->
             <nav v-if="!authStore.isSuperAdmin" class="space-y-1">
-              <RouterLink
+              <a
                 v-for="item in userNavItems"
                 :key="item.path"
-                :to="item.path"
-                class="min-h-[44px] flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors"
+                :href="item.path"
+                class="min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
                 :class="
                   route.path === item.path
-                    ? 'bg-emerald-600 text-white'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
                     : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                 "
+                @click.prevent="navigateFromMobileDrawer(item.path)"
               >
-                <component :is="item.icon" class="w-4 h-4 shrink-0" />
-                <span>{{ item.name }}</span>
-              </RouterLink>
+                <div class="flex items-center gap-3 truncate min-w-0">
+                  <component :is="item.icon" class="w-4 h-4 shrink-0" />
+                  <span class="truncate">{{ item.name }}</span>
+                </div>
+                <span
+                  v-if="item.badge"
+                  class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider shrink-0"
+                  :class="
+                    route.path === item.path
+                      ? 'bg-white/20 text-white'
+                      : 'bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300'
+                  "
+                >
+                  <Crown class="w-2.5 h-2.5 shrink-0" />
+                  <span>{{ item.badge }}</span>
+                </span>
+              </a>
 
-              <!-- Unified Parent Dropdown: Pengaturan -> Umum | Laporan (Mobile & Tablet Drawer) -->
-              <div class="space-y-1 pt-0.5">
+              <!-- Mobile Drawer Pengaturan Accordion: Menu Utama dengan Sub-menu Umum & Laporan -->
+              <div class="pt-1">
                 <button
                   type="button"
-                  class="w-full min-h-[44px] flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                  class="w-full min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors select-none text-left cursor-pointer"
                   :class="
                     isSettingsRouteActive
-                      ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-semibold'
+                      ? 'bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold'
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                   "
-                  :aria-expanded="settingsDropdownOpen"
-                  @click="settingsDropdownOpen = !settingsDropdownOpen"
+                  :aria-expanded="settingsAccordionOpen"
+                  @click="toggleSettingsAccordion"
                 >
-                  <span class="flex items-center gap-3 min-w-0">
+                  <div class="flex items-center gap-3 truncate min-w-0">
                     <Settings class="w-4 h-4 shrink-0" />
                     <span class="truncate">{{ t('nav.settings') }}</span>
-                  </span>
-                  <ChevronDown
-                    class="w-4 h-4 shrink-0 transition-transform duration-200"
-                    :class="settingsDropdownOpen ? 'rotate-180' : ''"
-                  />
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <span
+                      v-if="isSettingsRouteActive"
+                      class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
+                    />
+                    <ChevronDown
+                      class="w-4 h-4 transition-transform duration-200"
+                      :class="{ 'rotate-180': settingsAccordionOpen }"
+                    />
+                  </div>
                 </button>
 
+                <!-- Accordion Submenu: Umum & Laporan -->
                 <div
-                  v-if="settingsDropdownOpen"
-                  class="ml-4 pl-3 border-l-2 border-slate-200 dark:border-slate-800 space-y-1"
+                  v-show="settingsAccordionOpen"
+                  class="mt-1 pl-3 py-1 space-y-1 border-l-2 border-emerald-200/80 dark:border-emerald-900/60 ml-4 transition-all"
                 >
-                  <RouterLink
-                    to="/settings"
-                    class="min-h-[40px] flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-colors"
+                  <!-- Sub-menu 1: Pengaturan Umum -->
+                  <a
+                    href="/settings"
+                    class="min-h-[40px] flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer"
                     :class="
                       route.path === '/settings'
-                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
                         : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                     "
+                    @click.prevent="navigateFromMobileDrawer('/settings')"
                   >
-                    <span class="flex items-center gap-2.5 truncate">
+                    <div class="flex items-center gap-2.5 truncate min-w-0">
                       <SlidersHorizontal class="w-4 h-4 shrink-0" />
                       <span class="truncate">{{ t('nav.settingsGeneral') }}</span>
-                    </span>
-                  </RouterLink>
+                    </div>
+                  </a>
 
-                  <RouterLink
-                    to="/report-settings"
-                    class="min-h-[40px] flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-colors"
+                  <!-- Sub-menu 2: Pengaturan Laporan -->
+                  <a
+                    href="/report-settings"
+                    class="min-h-[40px] flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer"
                     :class="
                       route.path === '/report-settings'
-                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
                         : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                     "
-                    @click="mobileDrawerOpen = false"
+                    @click.prevent="navigateFromMobileDrawer('/report-settings')"
                   >
-                    <span class="flex items-center gap-2.5 truncate">
+                    <div class="flex items-center gap-2.5 truncate min-w-0">
                       <FileSpreadsheet class="w-4 h-4 shrink-0" />
                       <span class="truncate">{{ t('nav.settingsReport') }}</span>
-                    </span>
-                    <span
-                      v-if="!authStore.isProUser"
-                      class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 text-[10px] font-bold uppercase tracking-wider shrink-0"
-                    >
-                      <Crown class="w-3 h-3 shrink-0" />
-                      <span>PRO</span>
-                    </span>
-                  </RouterLink>
+                    </div>
+                  </a>
                 </div>
               </div>
             </nav>
 
             <!-- Mobile & Tablet Drawer Navigation: Super Admin (No Finance Menus) -->
             <nav v-else class="space-y-1">
-              <RouterLink
+              <a
                 v-for="item in adminNavItems"
                 :key="item.path"
-                :to="item.path"
-                class="min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors"
+                :href="item.path"
+                class="min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
                 :class="
                   isAdminNavActive(item)
                     ? 'bg-emerald-600 text-white'
                     : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                 "
+                @click.prevent="navigateFromMobileDrawer(item.path)"
               >
                 <div class="flex items-center gap-3">
                   <component :is="item.icon" class="w-4 h-4 shrink-0" />
@@ -1934,7 +2057,75 @@ async function handleSubmitProPayment() {
                 >
                   {{ item.badge }}
                 </span>
-              </RouterLink>
+              </a>
+
+              <!-- Mobile Drawer Pengaturan Accordion for Admin: Menu Utama dengan Sub-menu Umum & Laporan -->
+              <div class="pt-1">
+                <button
+                  type="button"
+                  class="w-full min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors select-none text-left cursor-pointer"
+                  :class="
+                    isSettingsRouteActive
+                      ? 'bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  "
+                  :aria-expanded="settingsAccordionOpen"
+                  @click="toggleSettingsAccordion"
+                >
+                  <div class="flex items-center gap-3 truncate min-w-0">
+                    <Settings class="w-4 h-4 shrink-0" />
+                    <span class="truncate">{{ t('nav.settings') }}</span>
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <span
+                      v-if="isSettingsRouteActive"
+                      class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
+                    />
+                    <ChevronDown
+                      class="w-4 h-4 transition-transform duration-200"
+                      :class="{ 'rotate-180': settingsAccordionOpen }"
+                    />
+                  </div>
+                </button>
+
+                <!-- Accordion Submenu: Umum & Laporan -->
+                <div
+                  v-show="settingsAccordionOpen"
+                  class="mt-1 pl-3 py-1 space-y-1 border-l-2 border-emerald-200/80 dark:border-emerald-900/60 ml-4 transition-all"
+                >
+                  <a
+                    href="/settings"
+                    class="min-h-[40px] flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                    :class="
+                      route.path === '/settings'
+                        ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    "
+                    @click.prevent="navigateFromMobileDrawer('/settings')"
+                  >
+                    <div class="flex items-center gap-2.5 truncate min-w-0">
+                      <SlidersHorizontal class="w-4 h-4 shrink-0" />
+                      <span class="truncate">{{ t('nav.settingsGeneral') }}</span>
+                    </div>
+                  </a>
+
+                  <a
+                    href="/report-settings"
+                    class="min-h-[40px] flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                    :class="
+                      route.path === '/report-settings'
+                        ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    "
+                    @click.prevent="navigateFromMobileDrawer('/report-settings')"
+                  >
+                    <div class="flex items-center gap-2.5 truncate min-w-0">
+                      <FileSpreadsheet class="w-4 h-4 shrink-0" />
+                      <span class="truncate">{{ t('nav.settingsReport') }}</span>
+                    </div>
+                  </a>
+                </div>
+              </div>
             </nav>
           </div>
 

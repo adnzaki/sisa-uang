@@ -573,6 +573,56 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "ReportSettings": {
+      "title": "ReportSettings",
+      "description": "Configuration for financial report letterhead (kop surat), custom titles, and signers.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "User UID, username, or default owner key",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "signers": {
+          "type": "array",
+          "description": "List of report signers (up to 3 signers)",
+          "maxItems": 3
+        },
+        "activeSignerIds": {
+          "type": "object",
+          "description": "Map of enabled signers per report type (kas_umum, rekonsiliasi_kas, realisasi_anggaran)"
+        },
+        "signPlace": {
+          "type": "string",
+          "description": "Location of report signing",
+          "maxLength": 100
+        },
+        "letterhead": {
+          "type": "object",
+          "description": "Kop surat configuration (organizationName, subtitle, addressLine, mode, imageDataUrl, enabledReports)"
+        },
+        "customTitles": {
+          "type": "object",
+          "description": "Custom titles for reports (kas_umum, rekonsiliasi_kas, realisasi_anggaran)"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "signers",
+        "activeSignerIds",
+        "signPlace",
+        "letterhead",
+        "customTitles",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -611,6 +661,10 @@
     "/security_alerts/{alertId}": {
       "schema": { "$ref": "#/entities/SecurityAlert" },
       "description": "Real-time suspicious activity alerts for administrators."
+    },
+    "/report_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/ReportSettings" },
+      "description": "Per-user and default configuration for report kop surat, titles, and signers."
     }
   }
 }

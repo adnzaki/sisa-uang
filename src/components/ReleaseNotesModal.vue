@@ -8,6 +8,7 @@ import {
   FileSpreadsheet,
   PieChart,
   Crown,
+  Smartphone,
 } from 'lucide-vue-next';
 import { useNotificationStore } from '../stores/notification';
 import { useAuthStore } from '../stores/auth';
@@ -20,11 +21,11 @@ const RELEASE_DATE = 'Oktober 2026';
 const notificationStore = useNotificationStore();
 const authStore = useAuthStore();
 
-const activeFilter = ref<'all' | 'report' | 'budget'>('all');
+const activeFilter = ref<'all' | 'report' | 'budget' | 'mobile'>('all');
 
 export interface ChangelogItem {
   id: string;
-  category: 'report' | 'budget';
+  category: 'report' | 'budget' | 'mobile';
   badge: string;
   badgeColor: 'emerald' | 'indigo' | 'amber' | 'rose' | 'sky';
   isProExclusive?: boolean;
@@ -35,6 +36,21 @@ export interface ChangelogItem {
 }
 
 const changelogItems: ChangelogItem[] = [
+  {
+    id: 'mobile-swipe-gestures',
+    category: 'mobile',
+    badge: 'GESTURE SMARTPHONE',
+    badgeColor: 'sky',
+    title: 'Menambahkan Gesture Swipe Khusus Pengguna Smartphone',
+    summary:
+      'Pengalaman navigasi natural ala aplikasi native Android & iOS untuk kenyamanan dan efisiensi pengoperasian satu tangan:',
+    details: [
+      'Swipe Horizontal Antar Menu Bottom Navbar: Geser layar ke kiri atau kanan untuk berpindah halaman bottom navbar secara mulus dilengkapi efek transisi halus.',
+      'Swipe Menutup Banner Notifikasi: Geser kartu notifikasi/peringatan ke kanan atau kiri untuk menyembunyikannya dengan cepat.',
+      'Swipe Menutup Sidebar Drawer: Geser panel menu sidebar drawer ke kiri untuk menutup menu secara intuitif pada layar sentuh.',
+    ],
+    icon: Smartphone,
+  },
   {
     id: 'pro-report-settings',
     category: 'report',
@@ -73,6 +89,11 @@ const changelogItems: ChangelogItem[] = [
 
 const filterTabs = [
   { id: 'all' as const, label: 'Semua Pembaruan', count: changelogItems.length },
+  {
+    id: 'mobile' as const,
+    label: 'Gesture Smartphone',
+    count: changelogItems.filter((i) => i.category === 'mobile').length,
+  },
   {
     id: 'report' as const,
     label: 'Pengaturan Laporan (PRO)',
