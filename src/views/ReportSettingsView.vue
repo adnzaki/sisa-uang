@@ -20,6 +20,7 @@ import {
   Upload,
   Info,
   Type,
+  Crown,
 } from 'lucide-vue-next';
 import {
   useThemeStore,
@@ -344,6 +345,33 @@ function isSignerEnabledForReport(reportType: string, signerId: string): boolean
         <FileCheck2 class="w-4 h-4 shrink-0" />
         <span>Buka Analitik &amp; Cetak PDF</span>
       </RouterLink>
+    </div>
+
+    <!-- Pro Banner if Free User -->
+    <div
+      v-if="!authStore.isProUser"
+      class="rounded-2xl border border-amber-200/90 dark:border-amber-900/60 bg-amber-50/70 dark:bg-amber-950/30 p-4 sm:p-4.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-900 dark:text-amber-200"
+    >
+      <div class="flex items-start gap-3">
+        <div class="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 mt-0.5">
+          <Crown class="w-5 h-5" />
+        </div>
+        <div class="space-y-0.5 text-xs sm:text-sm">
+          <div class="font-bold">
+            Fitur Eksklusif SisaUang Pro
+          </div>
+          <div class="text-xs text-amber-800/80 dark:text-amber-300/80">
+            Kustomisasi kop laporan, judul dokumen, dan penandatangan akan otomatis tercetak pada PDF laporan saat berlangganan paket SisaUang Pro.
+          </div>
+        </div>
+      </div>
+      <button
+        type="button"
+        class="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shrink-0 transition-colors cursor-pointer"
+        @click="notificationStore.openProModal()"
+      >
+        Lihat Paket Pro
+      </button>
     </div>
 
     <!-- =================================================================== -->
