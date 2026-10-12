@@ -1,0 +1,6 @@
+{
+  "summary":  "Rancangan arsitektur dan alur pengalaman pengguna untuk sistem langganan Sisa Uang Pro (Bulanan & Tahunan), pembatasan 4 fitur utama pada akun Free dengan perlindungan data lama (grandfathering), fitur Generate Laporan Analitik, serta integrasi Payment Gateway otomatis (Midtrans Snap & Xendit Invoice) beserta webhook dan kontrol Super Admin.",
+  "updatedAt":  "2026-10-09T18:11:15.884271211Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
