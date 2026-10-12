@@ -80,6 +80,8 @@ service cloud.firestore {
           'authProvider',
           'currency',
           'subscriptionStatus',
+          'subscriptionPlan',
+          'subscriptionExpiresAt',
           'isPro',
           'deleted',
           'deletedAt',
@@ -95,7 +97,9 @@ service cloud.firestore {
         data.status is string && (data.status == 'active' || data.status == 'blocked') &&
         data.authProvider is string && (data.authProvider == 'password' || data.authProvider == 'google') &&
         data.currency is string && (data.currency == 'IDR' || data.currency == 'USD') &&
-        (!('subscriptionStatus' in data) || (data.subscriptionStatus is string && (data.subscriptionStatus == 'free' || data.subscriptionStatus == 'pro'))) &&
+        (!('subscriptionStatus' in data) || (data.subscriptionStatus is string && (data.subscriptionStatus == 'free' || data.subscriptionStatus == 'pending' || data.subscriptionStatus == 'pro'))) &&
+        (!('subscriptionPlan' in data) || data.subscriptionPlan == null || (data.subscriptionPlan is string && (data.subscriptionPlan == 'monthly' || data.subscriptionPlan == 'yearly'))) &&
+        (!('subscriptionExpiresAt' in data) || data.subscriptionExpiresAt == null || (data.subscriptionExpiresAt is string && data.subscriptionExpiresAt.size() <= 40)) &&
         (!('isPro' in data) || data.isPro is bool) &&
         isValidSoftDelete(data) &&
         data.createdAt is timestamp &&
@@ -190,7 +194,7 @@ service cloud.firestore {
         data.category is string && data.category.size() >= 1 && data.category.size() <= 50 &&
         (data.limitAmount is int || data.limitAmount is float) && data.limitAmount > 0 &&
         (data.spentAmount is int || data.spentAmount is float) && data.spentAmount >= 0 &&
-        data.period is string && data.period.size() >= 6 && data.period.size() <= 20 &&
+        data.period is string && data.period.size() >= 6 && data.period.size() <= 40 &&
         isValidSoftDelete(data) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -294,6 +298,8 @@ service cloud.firestore {
               'authProvider',
               'currency',
               'subscriptionStatus',
+              'subscriptionPlan',
+              'subscriptionExpiresAt',
               'isPro',
               'deleted',
               'deletedAt',
@@ -533,12 +539,12 @@ service cloud.firestore {
         isValidId(budgetId) &&
         isValidBudget(incoming()) &&
         (incoming().ownerId == existing().ownerId || isAdmin()) &&
-        (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         (
           (
             existing().ownerId == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['category', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['category', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
             isNotBlocked()
           ) ||
           (

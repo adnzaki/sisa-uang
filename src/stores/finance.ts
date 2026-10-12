@@ -367,7 +367,9 @@ export const useFinanceStore = defineStore('finance', () => {
    * Piggybacks `updatedAt: serverTimestamp()` onto `/users/{uid}` inside the same atomic WriteBatch
    * whenever any financial mutation happens, so other devices can detect changes with just 1 document read.
    */
+  const CACHE_SCHEMA_VERSION = 'v4_annual_sync_2026';
   const confirmedUserDocsInFirestore = new Set<string>();
+  const knownFirestoreBudgetDocIds = new Set<string>();
 
   async function ensureUserDocExistsForSyncToken(uid: string) {
     if (!uid || uid === 'guest' || confirmedUserDocsInFirestore.has(uid)) return;
@@ -412,6 +414,49 @@ export const useFinanceStore = defineStore('finance', () => {
     });
   }
 
+  function upsertBudgetDocInBatch(
+    batch: WriteBatch,
+    docId: string,
+    uid: string,
+    payload: {
+      category: string;
+      limitAmount: number;
+      spentAmount: number;
+      period: string;
+      deleted?: boolean;
+      deletedAt?: any;
+    }
+  ) {
+    const refDoc = doc(db, 'budgets', docId);
+    const existsOnServer =
+      knownFirestoreBudgetDocIds.has(docId) || budgets.value.some((b) => b.id === docId);
+
+    if (existsOnServer) {
+      batch.update(refDoc, {
+        category: payload.category,
+        limitAmount: payload.limitAmount,
+        spentAmount: payload.spentAmount,
+        period: payload.period,
+        deleted: payload.deleted ?? false,
+        deletedAt: payload.deletedAt ?? null,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      batch.set(refDoc, {
+        ownerId: uid,
+        category: payload.category,
+        limitAmount: payload.limitAmount,
+        spentAmount: payload.spentAmount,
+        period: payload.period,
+        deleted: payload.deleted ?? false,
+        deletedAt: payload.deletedAt ?? null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      knownFirestoreBudgetDocIds.add(docId);
+    }
+  }
+
   function storageKey(prefix: string, uid: string) {
     return `sisa_uang_real_${prefix}_${uid}`;
   }
@@ -427,6 +472,7 @@ export const useFinanceStore = defineStore('finance', () => {
   function saveLocalSnapshot(uid: string, markSyncedNow = false, remoteSyncTokenMs?: number) {
     if (!uid) return;
     try {
+      localStorage.setItem(storageKey('cache_version', uid), CACHE_SCHEMA_VERSION);
       localStorage.setItem(storageKey('wallets', uid), JSON.stringify(wallets.value));
       localStorage.setItem(storageKey('wallet_owners', uid), JSON.stringify(rawWalletOwners.value));
       localStorage.setItem(storageKey('user_categories', uid), JSON.stringify(rawUserCategories.value));
@@ -446,6 +492,7 @@ export const useFinanceStore = defineStore('finance', () => {
       );
       if (markSyncedNow) {
         const tokenMs = remoteSyncTokenMs && remoteSyncTokenMs > 0 ? remoteSyncTokenMs : Date.now();
+        localStorage.setItem(storageKey('sync_token_v4', uid), String(tokenMs));
         localStorage.setItem(storageKey('sync_token', uid), String(tokenMs));
         localStorage.setItem(storageKey('last_sync_at', uid), String(Date.now()));
       }
@@ -477,11 +524,15 @@ export const useFinanceStore = defineStore('finance', () => {
 
     if (current && !current.isAnonymous) {
       if (!isMigratedId && current.uid === uid) {
-        await ensureUserDocExistsForSyncToken(uid);
+        if (isSyncedWithFirestore.value) {
+          await ensureUserDocExistsForSyncToken(uid);
+        }
         return true;
       }
       if (current.email?.toLowerCase() === 'vuedevo@gmail.com') {
-        await ensureUserDocExistsForSyncToken(uid);
+        if (isSyncedWithFirestore.value) {
+          await ensureUserDocExistsForSyncToken(uid);
+        }
         return true;
       }
     }
@@ -489,11 +540,15 @@ export const useFinanceStore = defineStore('finance', () => {
     // Authenticate bridge session for migrated users or when currentUser is null
     try {
       await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-      await ensureUserDocExistsForSyncToken(uid);
+      if (isSyncedWithFirestore.value) {
+        await ensureUserDocExistsForSyncToken(uid);
+      }
       return true;
     } catch {
       if (auth.currentUser) {
-        await ensureUserDocExistsForSyncToken(uid);
+        if (isSyncedWithFirestore.value) {
+          await ensureUserDocExistsForSyncToken(uid);
+        }
         return true;
       }
       try {
@@ -780,9 +835,10 @@ export const useFinanceStore = defineStore('finance', () => {
 
   function getSavedUserSyncToken(uid: string): number {
     if (!uid) return 0;
-    const raw =
-      localStorage.getItem(storageKey('sync_token', uid)) ||
-      localStorage.getItem(storageKey('last_sync_at', uid));
+    if (localStorage.getItem(storageKey('cache_version', uid)) !== CACHE_SCHEMA_VERSION) {
+      return 0;
+    }
+    const raw = localStorage.getItem(storageKey('sync_token_v4', uid));
     return Number(raw) || 0;
   }
 
@@ -1613,10 +1669,13 @@ export const useFinanceStore = defineStore('finance', () => {
     });
     rawTransactions.value = txList;
 
-    const allBudgetDocsRaw = budgetSnap.docs.map((d: any) => ({
-      id: d.id,
-      ...(d.data() as Omit<BudgetItem, 'id'>),
-    }));
+    const allBudgetDocsRaw = budgetSnap.docs.map((d: any) => {
+      knownFirestoreBudgetDocIds.add(d.id);
+      return {
+        id: d.id,
+        ...(d.data() as Omit<BudgetItem, 'id'>),
+      };
+    });
 
     // Check if Firestore has an explicit SisaUang Pro marker document for this user
     const proMarkerDoc = allBudgetDocsRaw.find(
@@ -1660,24 +1719,25 @@ export const useFinanceStore = defineStore('finance', () => {
     const parsedMetaMap: Record<string, AnnualBudgetMetaItem> = {};
     for (const b of allActiveBudgetDocs) {
       if (b.category === ANNUAL_BUDGET_META_CATEGORY) {
-        const rawPeriod = String(b.period || '');
-        const match = rawPeriod.match(
-          /^YEAR:(\d{4}):(strict|flexible)(?::(draft|final)(?::(init|rev))?)?$/i
-        );
-        if (match) {
-          const yearStr = match[1];
-          const modeVal: AnnualBudgetMode =
-            match[2].toLowerCase() === 'strict' ? 'strict' : 'flexible';
-          const statusVal: AnnualBudgetStatus =
-            match[3] && match[3].toLowerCase() === 'final' ? 'final' : 'draft';
-          const isRevVal = match[4] ? match[4].toLowerCase() === 'rev' : false;
-          parsedMetaMap[yearStr] = {
-            id: b.id,
-            year: yearStr,
-            mode: modeVal,
-            status: statusVal,
-            isRevisionSession: statusVal === 'draft' ? isRevVal : false,
-            revisionCount: Math.max(0, Math.floor(Number(b.spentAmount || 0))),
+        const parsedMeta = parseAnnualBudgetMetaDoc(b);
+        if (parsedMeta) {
+          parsedMetaMap[parsedMeta.year] = parsedMeta;
+        }
+      }
+    }
+    // Also synthesize fallback meta if Y:YYYY annual category docs exist in Firestore without a meta doc
+    for (const b of allActiveBudgetDocs) {
+      const p = String(b.period || '');
+      if (p.startsWith(ANNUAL_BUDGET_TOTAL_PREFIX)) {
+        const yr = p.slice(ANNUAL_BUDGET_TOTAL_PREFIX.length);
+        if (/^\d{4}$/.test(yr) && !parsedMetaMap[yr]) {
+          parsedMetaMap[yr] = {
+            id: sanitizeId(`su_bgy_meta_${uid}_${yr}`),
+            year: yr,
+            mode: 'strict',
+            status: 'final',
+            isRevisionSession: false,
+            revisionCount: 0,
             maxRevisions: MAX_STRICT_ANNUAL_REVISIONS,
             updatedAt: b.updatedAt,
           };
@@ -1814,6 +1874,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
       const userSnap = await getDoc(doc(db, 'users', uid));
       if (!userSnap.exists()) return false;
+      confirmedUserDocsInFirestore.add(uid);
 
       const uData = userSnap.data();
       const remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
@@ -1832,8 +1893,11 @@ export const useFinanceStore = defineStore('finance', () => {
         void authStore.syncSubscriptionFromFirestoreForUser(uid, authStore.user?.email);
       }
 
-      // If remote document has a newer timestamp (> 2s tolerance), invalidate page caches and pull fresh data from server
-      if (remoteSyncToken > 0 && remoteSyncToken > localSyncToken + 2000) {
+      // If remote document has a different timestamp (> 2s tolerance) or local token is missing, invalidate page caches and pull fresh data from server
+      if (
+        remoteSyncToken > 0 &&
+        (localSyncToken <= 0 || Math.abs(remoteSyncToken - localSyncToken) > 2000)
+      ) {
         invalidateServerPaginationCaches(uid);
         await fetchAllCollectionsFromFirestore(uid, remoteSyncToken);
         await fetchTransactionsServerPage(undefined, true, true);
@@ -1868,6 +1932,7 @@ export const useFinanceStore = defineStore('finance', () => {
     activeOwnerUid.value = uid;
     isLoading.value = true;
     hasAutoSelectedPeriod.value = false;
+    knownFirestoreBudgetDocIds.clear();
 
     cleanupLegacyDummyStorage(uid);
 
@@ -1885,6 +1950,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
     // Restore last known real Firestore snapshot from localStorage immediately
     try {
+      const savedCacheVersion = localStorage.getItem(storageKey('cache_version', uid));
       const savedWallets = localStorage.getItem(storageKey('wallets', uid));
       const savedHolders = localStorage.getItem(storageKey('wallet_owners', uid));
       const savedUserCats = localStorage.getItem(storageKey('user_categories', uid));
@@ -1893,11 +1959,9 @@ export const useFinanceStore = defineStore('finance', () => {
       const savedBudgets = localStorage.getItem(storageKey('budgets', uid));
       const savedBudgetPeriods = localStorage.getItem(storageKey('budget_periods', uid));
       const savedAnnualMeta = localStorage.getItem(storageKey('annual_budget_meta', uid));
-      const savedSyncToken =
-        localStorage.getItem(storageKey('sync_token', uid)) ||
-        localStorage.getItem(storageKey('last_sync_at', uid));
+      const savedSyncToken = localStorage.getItem(storageKey('sync_token_v4', uid));
 
-      if (savedSyncToken) {
+      if (savedSyncToken && savedCacheVersion === CACHE_SCHEMA_VERSION) {
         localSyncToken = Number(savedSyncToken) || 0;
       }
       if (savedWallets) {
@@ -1923,6 +1987,24 @@ export const useFinanceStore = defineStore('finance', () => {
             b.category !== ANNUAL_BUDGET_META_CATEGORY &&
             b.category !== '__SISAUANG_PRO__'
         );
+      }
+      // Synthesize fallback annualBudgetMetaMap entries if Y:YYYY docs exist in cached budgets
+      for (const b of budgets.value) {
+        const p = String(b.period || '');
+        if (p.startsWith(ANNUAL_BUDGET_TOTAL_PREFIX)) {
+          const yr = p.slice(ANNUAL_BUDGET_TOTAL_PREFIX.length);
+          if (/^\d{4}$/.test(yr) && !annualBudgetMetaMap.value[yr]) {
+            annualBudgetMetaMap.value[yr] = {
+              id: sanitizeId(`su_bgy_meta_${uid}_${yr}`),
+              year: yr,
+              mode: 'strict',
+              status: 'final',
+              isRevisionSession: false,
+              revisionCount: 0,
+              maxRevisions: MAX_STRICT_ANNUAL_REVISIONS,
+            };
+          }
+        }
       }
       const periodSet = new Set<string>();
       if (savedBudgetPeriods) {
@@ -1954,9 +2036,11 @@ export const useFinanceStore = defineStore('finance', () => {
       }
 
       hasRestoredLocalCache =
-        wallets.value.length > 0 ||
-        rawWalletOwners.value.length > 0 ||
-        rawTransactions.value.length > 0;
+        savedCacheVersion === CACHE_SCHEMA_VERSION &&
+        savedAnnualMeta !== null &&
+        (wallets.value.length > 0 ||
+          rawWalletOwners.value.length > 0 ||
+          rawTransactions.value.length > 0);
     } catch {
       // Ignore corrupt cache
     }
@@ -1998,10 +2082,11 @@ export const useFinanceStore = defineStore('finance', () => {
 
         // 1-Read Sync Token Check:
         // Read ONLY 1 document (`/users/{uid}`) to verify if any other device modified financial data.
-        // If `remoteSyncToken <= localSyncToken + 2000` (2s clock-skew tolerance), serve directly from localStorage cache (only 1 read total!).
+        // If `Math.abs(remoteSyncToken - localSyncToken) <= 2000` (2s clock-skew tolerance), serve directly from localStorage cache (only 1 read total!).
         try {
           const userSnap = await getDoc(doc(db, 'users', uid));
           if (userSnap.exists()) {
+            confirmedUserDocsInFirestore.add(uid);
             const uData = userSnap.data();
             remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
             if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
@@ -2030,7 +2115,8 @@ export const useFinanceStore = defineStore('finance', () => {
           !forceRefresh &&
           hasRestoredLocalCache &&
           localSyncToken > 0 &&
-          (remoteSyncToken === 0 || remoteSyncToken <= localSyncToken + 2000)
+          remoteSyncToken > 0 &&
+          Math.abs(remoteSyncToken - localSyncToken) <= 2000
         ) {
           restorePersistedTxPageCache(uid, localSyncToken);
           isSyncedWithFirestore.value = true;
@@ -3866,19 +3952,17 @@ export const useFinanceStore = defineStore('finance', () => {
 
     const markerDocId = sanitizeId(`su_bgp_${uid}_${cleanPeriod.replace('-', '_')}`);
     await ensureFirestoreSessionForUser(uid);
+    await ensureUserDocExistsForSyncToken(uid);
 
     try {
       const batch = writeBatch(db);
-      batch.set(doc(db, 'budgets', markerDocId), {
-        ownerId: uid,
+      upsertBudgetDocInBatch(batch, markerDocId, uid, {
         category: BUDGET_PERIOD_MARKER_CATEGORY,
         limitAmount: 1,
         spentAmount: 0,
         period: cleanPeriod,
         deleted: false,
         deletedAt: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
       });
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -3935,24 +4019,18 @@ export const useFinanceStore = defineStore('finance', () => {
 
     const markerDocId = sanitizeId(`su_bgp_${uid}_${cleanPeriod.replace('-', '_')}`);
     await ensureFirestoreSessionForUser(uid);
+    await ensureUserDocExistsForSyncToken(uid);
 
     try {
       const batch = writeBatch(db);
-      batch.set(
-        doc(db, 'budgets', markerDocId),
-        {
-          ownerId: uid,
-          category: BUDGET_PERIOD_MARKER_CATEGORY,
-          limitAmount: 1,
-          spentAmount: 0,
-          period: cleanPeriod,
-          deleted: true,
-          deletedAt: serverTimestamp(),
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
+      upsertBudgetDocInBatch(batch, markerDocId, uid, {
+        category: BUDGET_PERIOD_MARKER_CATEGORY,
+        limitAmount: 1,
+        spentAmount: 0,
+        period: cleanPeriod,
+        deleted: true,
+        deletedAt: serverTimestamp(),
+      });
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
     } catch {
@@ -4249,7 +4327,55 @@ export const useFinanceStore = defineStore('finance', () => {
     status: AnnualBudgetStatus,
     isRevisionSession: boolean
   ): string {
-    return `YEAR:${year}:${mode}:${status}:${status === 'draft' && isRevisionSession ? 'rev' : 'init'}`;
+    // Keep strictly <= 20 chars so it always satisfies Firestore rules `data.period.size() >= 6 && data.period.size() <= 20`
+    // Examples: "YEAR:2026:strict:D" (18 chars), "YEAR:2026:flexible:F" (20 chars)
+    const statusCode = status === 'final' ? 'F' : isRevisionSession ? 'R' : 'D';
+    return `YEAR:${year}:${mode}:${statusCode}`;
+  }
+
+  function parseAnnualBudgetMetaDoc(b: BudgetItem): AnnualBudgetMetaItem | null {
+    const rawPeriod = String(b.period || '');
+    const match = rawPeriod.match(
+      /^YEAR:(\d{4}):(strict|flexible|flex)(?::(draft|final|D|R|F)(?::(init|rev))?)?$/i
+    );
+    if (!match) return null;
+
+    const yearStr = match[1];
+    const modeVal: AnnualBudgetMode =
+      match[2].toLowerCase() === 'strict' ? 'strict' : 'flexible';
+    const rawTag = match[3] ? match[3].toUpperCase() : '';
+
+    let statusVal: AnnualBudgetStatus = 'final';
+    let isRevVal = false;
+
+    if (rawTag === 'D') {
+      statusVal = 'draft';
+      isRevVal = false;
+    } else if (rawTag === 'R') {
+      statusVal = 'draft';
+      isRevVal = true;
+    } else if (rawTag === 'F' || rawTag === 'FINAL') {
+      statusVal = 'final';
+      isRevVal = false;
+    } else if (rawTag === 'DRAFT') {
+      statusVal = 'draft';
+      isRevVal = match[4] ? match[4].toLowerCase() === 'rev' : false;
+    } else {
+      // Legacy "YEAR:2026:strict" without status tag
+      statusVal = 'final';
+      isRevVal = false;
+    }
+
+    return {
+      id: b.id,
+      year: yearStr,
+      mode: modeVal,
+      status: statusVal,
+      isRevisionSession: statusVal === 'draft' ? isRevVal : false,
+      revisionCount: Math.max(0, Math.floor(Number(b.spentAmount || 0))),
+      maxRevisions: MAX_STRICT_ANNUAL_REVISIONS,
+      updatedAt: b.updatedAt,
+    };
   }
 
   async function setupAnnualBudgetForYear(
@@ -4275,7 +4401,35 @@ export const useFinanceStore = defineStore('finance', () => {
     }
 
     const safeMode: AnnualBudgetMode = mode === 'strict' ? 'strict' : 'flexible';
-    const existingMeta = annualBudgetMetaMap.value[yStr];
+    await ensureFirestoreSessionForUser(uid);
+
+    let existingMeta = annualBudgetMetaMap.value[yStr];
+    const metaDocId = existingMeta?.id || sanitizeId(`su_bgy_meta_${uid}_${yStr}`);
+
+    // If local memory did not have existingMeta for this year yet, check Firestore first
+    // so we never accidentally overwrite an annual budget that was already created on another device/preview!
+    if (!existingMeta) {
+      try {
+        const remoteMetaSnap = await getDoc(doc(db, 'budgets', metaDocId));
+        if (remoteMetaSnap.exists()) {
+          knownFirestoreBudgetDocIds.add(metaDocId);
+          const remoteData = remoteMetaSnap.data();
+          if (remoteData && !remoteData.deleted) {
+            await fetchAllCollectionsFromFirestore(uid);
+            existingMeta = annualBudgetMetaMap.value[yStr];
+            if (existingMeta) {
+              useNotificationStore().notifySuccess(
+                'Anggaran Tahunan Tersinkronisasi',
+                `Data Anggaran Setahun Penuh Tahun ${yStr} yang sudah Anda buat sebelumnya berhasil dimuat dari Cloud Firestore.`
+              );
+              return true;
+            }
+          }
+        }
+      } catch {
+        // Proceed with normal setup
+      }
+    }
 
     if (
       existingMeta &&
@@ -4289,7 +4443,6 @@ export const useFinanceStore = defineStore('finance', () => {
       return false;
     }
 
-    const metaDocId = existingMeta?.id || sanitizeId(`su_bgy_meta_${uid}_${yStr}`);
     const nextRevisionCount = existingMeta ? existingMeta.revisionCount : 0;
     const nextStatus: AnnualBudgetStatus = existingMeta ? existingMeta.status : 'draft';
     const nextIsRevSession = existingMeta ? existingMeta.isRevisionSession : false;
@@ -4300,32 +4453,19 @@ export const useFinanceStore = defineStore('finance', () => {
       nextIsRevSession
     );
 
-    await ensureFirestoreSessionForUser(uid);
     try {
       const batch = writeBatch(db);
       if (existingMeta) {
-        batch.update(doc(db, 'budgets', metaDocId), {
-          category: ANNUAL_BUDGET_META_CATEGORY,
-          limitAmount: MAX_STRICT_ANNUAL_REVISIONS,
-          spentAmount: nextRevisionCount,
-          period: encodedPeriod,
-          deleted: false,
-          deletedAt: null,
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        batch.set(doc(db, 'budgets', metaDocId), {
-          ownerId: uid,
-          category: ANNUAL_BUDGET_META_CATEGORY,
-          limitAmount: MAX_STRICT_ANNUAL_REVISIONS,
-          spentAmount: 0,
-          period: encodedPeriod,
-          deleted: false,
-          deletedAt: null,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+        knownFirestoreBudgetDocIds.add(metaDocId);
       }
+      upsertBudgetDocInBatch(batch, metaDocId, uid, {
+        category: ANNUAL_BUDGET_META_CATEGORY,
+        limitAmount: MAX_STRICT_ANNUAL_REVISIONS,
+        spentAmount: nextRevisionCount,
+        period: encodedPeriod,
+        deleted: false,
+        deletedAt: null,
+      });
 
       // If existing monthly budgets exist in this year without an annual Y:YYYY total record yet,
       // automatically synthesize their annual Y:YYYY total records so they immediately appear in the annual mapping!
@@ -4360,16 +4500,13 @@ export const useFinanceStore = defineStore('finance', () => {
           const annualDocId = sanitizeId(
             `su_bgy_cat_${uid}_${yStr}_${hashCategoryKey(info.displayCat)}`
           );
-          batch.set(doc(db, 'budgets', annualDocId), {
-            ownerId: uid,
+          upsertBudgetDocInBatch(batch, annualDocId, uid, {
             category: info.displayCat,
             limitAmount: info.sum,
             spentAmount: 0,
             period: annualPeriodKey,
             deleted: false,
             deletedAt: null,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
           });
           newAnnualItems.push({
             id: annualDocId,
@@ -4481,14 +4618,14 @@ export const useFinanceStore = defineStore('finance', () => {
     await ensureFirestoreSessionForUser(uid);
     try {
       const batch = writeBatch(db);
-      batch.update(doc(db, 'budgets', meta.id), {
+      knownFirestoreBudgetDocIds.add(meta.id);
+      upsertBudgetDocInBatch(batch, meta.id, uid, {
         category: ANNUAL_BUDGET_META_CATEGORY,
         limitAmount: MAX_STRICT_ANNUAL_REVISIONS,
         spentAmount: meta.revisionCount,
         period: encodedPeriod,
         deleted: false,
         deletedAt: null,
-        updatedAt: serverTimestamp(),
       });
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -4597,14 +4734,14 @@ export const useFinanceStore = defineStore('finance', () => {
     await ensureFirestoreSessionForUser(uid);
     try {
       const batch = writeBatch(db);
-      batch.update(doc(db, 'budgets', meta.id), {
+      knownFirestoreBudgetDocIds.add(meta.id);
+      upsertBudgetDocInBatch(batch, meta.id, uid, {
         category: ANNUAL_BUDGET_META_CATEGORY,
         limitAmount: MAX_STRICT_ANNUAL_REVISIONS,
         spentAmount: nextRevisionCount,
         period: encodedPeriod,
         deleted: false,
         deletedAt: null,
-        updatedAt: serverTimestamp(),
       });
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -4737,28 +4874,16 @@ export const useFinanceStore = defineStore('finance', () => {
 
       // 1. Upsert annual category total document (`period: "Y:YYYY"`)
       if (existingAnnualDoc) {
-        batch.update(doc(db, 'budgets', annualDocId), {
-          category: safeCategory,
-          limitAmount: annualTotal,
-          spentAmount: existingAnnualDoc.spentAmount || 0,
-          period: annualPeriodKey,
-          deleted: false,
-          deletedAt: null,
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        batch.set(doc(db, 'budgets', annualDocId), {
-          ownerId: uid,
-          category: safeCategory,
-          limitAmount: annualTotal,
-          spentAmount: 0,
-          period: annualPeriodKey,
-          deleted: false,
-          deletedAt: null,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+        knownFirestoreBudgetDocIds.add(annualDocId);
       }
+      upsertBudgetDocInBatch(batch, annualDocId, uid, {
+        category: safeCategory,
+        limitAmount: annualTotal,
+        spentAmount: existingAnnualDoc?.spentAmount || 0,
+        period: annualPeriodKey,
+        deleted: false,
+        deletedAt: null,
+      });
 
       // 2. Sync each of the 12 months (`YYYY-01` .. `YYYY-12`)
       for (const mm of monthKeys) {
@@ -4775,30 +4900,19 @@ export const useFinanceStore = defineStore('finance', () => {
           const mDocId =
             existingMonthDoc?.id || sanitizeId(`su_bgy_m_${uid}_${yStr}_${mm}_${catSlug}`);
           if (existingMonthDoc) {
-            batch.update(doc(db, 'budgets', mDocId), {
-              category: safeCategory,
-              limitAmount: monthVal,
-              spentAmount: existingMonthDoc.spentAmount || 0,
-              period: periodKey,
-              deleted: false,
-              deletedAt: null,
-              updatedAt: serverTimestamp(),
-            });
-          } else {
-            batch.set(doc(db, 'budgets', mDocId), {
-              ownerId: uid,
-              category: safeCategory,
-              limitAmount: monthVal,
-              spentAmount: 0,
-              period: periodKey,
-              deleted: false,
-              deletedAt: null,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
+            knownFirestoreBudgetDocIds.add(mDocId);
           }
+          upsertBudgetDocInBatch(batch, mDocId, uid, {
+            category: safeCategory,
+            limitAmount: monthVal,
+            spentAmount: existingMonthDoc?.spentAmount || 0,
+            period: periodKey,
+            deleted: false,
+            deletedAt: null,
+          });
         } else if (existingMonthDoc) {
           // Month was unallocated (0) -> soft-delete the monthly budget doc
+          knownFirestoreBudgetDocIds.add(existingMonthDoc.id);
           batch.update(doc(db, 'budgets', existingMonthDoc.id), {
             deleted: true,
             deletedAt: serverTimestamp(),
