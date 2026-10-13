@@ -395,28 +395,59 @@ export function computePdfReportPreview(
   const saldoAwal = saldoAkhir - netInPeriod;
 
   // Budget summary for active months
+  // Budget summary: Group budget limits and actual realizations strictly by Category across active period
   const activeMonths = getMonthsBetween(startIso, endIso);
   const activeMonthsSet = new Set(activeMonths);
-  const matchingBudgets = budgets.filter(
-    (b) =>
-      !b.deleted &&
-      b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
-      activeMonthsSet.has(b.period)
-  );
+  const startYear = startIso.slice(0, 4);
+  const endYear = endIso.slice(0, 4);
+
+  const categoryBudgetMap = new Map<string, { displayName: string; limit: number }>();
+
+  // 1. Monthly budgets matching active months
+  for (const b of budgets) {
+    if (
+      b.deleted ||
+      b.category === BUDGET_PERIOD_MARKER_CATEGORY ||
+      b.category === '__ANNUAL_META__' ||
+      b.category === '__SISAUANG_PRO__'
+    ) {
+      continue;
+    }
+    if (activeMonthsSet.has(b.period)) {
+      const key = b.category.trim().toLowerCase();
+      const existing = categoryBudgetMap.get(key) || { displayName: b.category.trim(), limit: 0 };
+      existing.limit += Number(b.limitAmount || 0);
+      categoryBudgetMap.set(key, existing);
+    }
+  }
+
+  // 2. Annual budgets (Y:YYYY) for any categories that don't have monthly budget docs
+  for (const b of budgets) {
+    if (b.deleted || !String(b.period || '').startsWith('Y:')) continue;
+    const yr = String(b.period).slice(2);
+    if (yr >= startYear && yr <= endYear) {
+      const key = b.category.trim().toLowerCase();
+      if (!categoryBudgetMap.has(key)) {
+        categoryBudgetMap.set(key, {
+          displayName: b.category.trim(),
+          limit: Number(b.limitAmount || 0),
+        });
+      }
+    }
+  }
 
   let totalBudgetLimit = 0;
   let totalBudgetRealized = 0;
-  for (const b of matchingBudgets) {
-    totalBudgetLimit += Number(b.limitAmount || 0);
+
+  for (const [catKey, info] of categoryBudgetMap.entries()) {
+    totalBudgetLimit += info.limit;
     const spent = allTransactions
       .filter((tx) => {
         if (tx.deleted || tx.type !== 'expense') return false;
         const d = String(tx.date || '').slice(0, 10);
-        const ym = d.slice(0, 7);
-        if (ym !== b.period) return false;
         if (d < startIso || d > endIso) return false;
         if (!doesTxTouchScopeAsSource(tx, selectedWalletId, selectedOwnerName)) return false;
-        return tx.category.trim().toLowerCase() === b.category.trim().toLowerCase();
+        return tx.category.trim().toLowerCase() === catKey;
       })
       .reduce((s, tx) => s + Number(tx.amount || 0), 0);
     totalBudgetRealized += spent;
@@ -437,7 +468,7 @@ export function computePdfReportPreview(
     netCashflow: totalIncome - totalExpense,
     matchingTxCount,
     budgetPeriodCount: activeMonths.length,
-    budgetItemCount: matchingBudgets.length,
+    budgetItemCount: categoryBudgetMap.size,
     totalBudgetLimit,
     totalBudgetRealized,
     budgetAbsorptionRate,
@@ -1433,19 +1464,87 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
   if (reportType === 'realisasi_anggaran') {
     const activeMonths = getMonthsBetween(startIso, endIso);
     const activeMonthsSet = new Set(activeMonths);
+    const startYear = startIso.slice(0, 4);
+    const endYear = endIso.slice(0, 4);
 
-    const activeBudgetDocs = budgets
-      .filter(
-        (b) =>
-          !b.deleted &&
-          b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
-          activeMonthsSet.has(b.period)
-      )
-      .sort((a, b) => {
-        const cmp = a.period.localeCompare(b.period);
-        if (cmp !== 0) return cmp;
-        return a.category.localeCompare(b.category);
-      });
+    // Group budget limits by Category across active period
+    const categoryAggMap = new Map<
+      string,
+      {
+        displayName: string;
+        totalLimit: number;
+      }
+    >();
+
+    // 1. Monthly budgets matching active months in range
+    for (const b of budgets) {
+      if (
+        b.deleted ||
+        b.category === BUDGET_PERIOD_MARKER_CATEGORY ||
+        b.category === '__ANNUAL_META__' ||
+        b.category === '__SISAUANG_PRO__'
+      ) {
+        continue;
+      }
+      if (activeMonthsSet.has(b.period)) {
+        const key = b.category.trim().toLowerCase();
+        const existing = categoryAggMap.get(key) || {
+          displayName: b.category.trim(),
+          totalLimit: 0,
+        };
+        existing.totalLimit += Number(b.limitAmount || 0);
+        categoryAggMap.set(key, existing);
+      }
+    }
+
+    // 2. Annual budgets (Y:YYYY) for any categories that don't have monthly budget docs
+    for (const b of budgets) {
+      if (b.deleted || !String(b.period || '').startsWith('Y:')) continue;
+      const yr = String(b.period).slice(2);
+      if (yr >= startYear && yr <= endYear) {
+        const key = b.category.trim().toLowerCase();
+        if (!categoryAggMap.has(key)) {
+          categoryAggMap.set(key, {
+            displayName: b.category.trim(),
+            totalLimit: Number(b.limitAmount || 0),
+          });
+        }
+      }
+    }
+
+    // Calculate actual realization for each budgeted category in [startIso, endIso]
+    const groupedBudgetList = Array.from(categoryAggMap.entries())
+      .map(([catKey, item]) => {
+        const realized = allTransactions
+          .filter((tx) => {
+            if (tx.deleted || tx.type !== 'expense') return false;
+            const d = String(tx.date || '').slice(0, 10);
+            if (d < startIso || d > endIso) return false;
+            if (!doesTxTouchScopeAsSource(tx, selectedWalletId, selectedOwnerName)) return false;
+            return tx.category.trim().toLowerCase() === catKey;
+          })
+          .reduce((s, tx) => s + Number(tx.amount || 0), 0);
+
+        const limit = item.totalLimit;
+        const diff = limit - realized;
+        const pct = limit > 0 ? Math.round((realized / limit) * 100) : 0;
+
+        let statusLabel = 'Aman';
+        if (realized > limit || pct > 100) statusLabel = 'Melebihi Pagu (Over)';
+        else if (pct === 100) statusLabel = 'Tepat Pagu (100%)';
+        else if (pct >= 80) statusLabel = 'Waspada (>=80%)';
+
+        return {
+          catKey,
+          displayName: item.displayName,
+          limit,
+          realized,
+          diff,
+          pct,
+          statusLabel,
+        };
+      })
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
 
     // Summary Table
     const netVariance = preview.totalBudgetLimit - preview.totalBudgetRealized;
@@ -1487,50 +1586,23 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
     currentY = (doc as any).lastAutoTable.finalY + 6;
 
     const budgetRows: any[][] = [];
-    const budgetedKeys = new Set<string>();
 
-    activeBudgetDocs.forEach((b, idx) => {
-      const key = `${b.period}__${b.category.trim().toLowerCase()}`;
-      budgetedKeys.add(key);
-
-      const realized = allTransactions
-        .filter((tx) => {
-          if (tx.deleted || tx.type !== 'expense') return false;
-          const d = String(tx.date || '').slice(0, 10);
-          const ym = d.slice(0, 7);
-          if (ym !== b.period) return false;
-          if (d < startIso || d > endIso) return false;
-          if (!doesTxTouchScopeAsSource(tx, selectedWalletId, selectedOwnerName)) return false;
-          return tx.category.trim().toLowerCase() === b.category.trim().toLowerCase();
-        })
-        .reduce((s, tx) => s + Number(tx.amount || 0), 0);
-
-      const limit = Number(b.limitAmount || 0);
-      const diff = limit - realized;
-      const pct = limit > 0 ? Math.round((realized / limit) * 100) : 0;
-
-      let statusLabel = 'Aman';
-      if (realized > limit || pct > 100) statusLabel = 'Melebihi Pagu (Over)';
-      else if (pct === 100) statusLabel = 'Tepat Pagu (100%)';
-      else if (pct >= 80) statusLabel = 'Waspada (>=80%)';
-
+    groupedBudgetList.forEach((item, idx) => {
       budgetRows.push([
         String(idx + 1),
-        formatPeriodLabel(b.period, 'id-ID'),
-        b.category,
-        formatMoney(limit),
-        formatMoney(realized),
-        diff >= 0
-          ? `Sisa ${formatMoney(diff)}`
-          : `Lebih ${formatMoney(Math.abs(diff))}`,
-        `${pct}%`,
-        statusLabel,
+        item.displayName,
+        formatMoney(item.limit),
+        formatMoney(item.realized),
+        item.diff >= 0
+          ? `Sisa ${formatMoney(item.diff)}`
+          : `Lebih ${formatMoney(Math.abs(item.diff))}`,
+        `${item.pct}%`,
+        item.statusLabel,
       ]);
     });
 
     if (budgetRows.length === 0) {
       budgetRows.push([
-        '-',
         '-',
         'Belum ada anggaran yang ditetapkan pada periode ini',
         formatMoney(0),
@@ -1543,7 +1615,6 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
       budgetRows.push([
         '',
         'TOTAL ANGGARAN',
-        `${activeBudgetDocs.length} Kategori Anggaran`,
         formatMoney(preview.totalBudgetLimit),
         formatMoney(preview.totalBudgetRealized),
         netVariance >= 0
@@ -1562,7 +1633,6 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
       head: [
         [
           'No',
-          'Periode Bulan',
           'Kategori Anggaran',
           'Pagu Anggaran',
           'Realisasi (Terpakai)',
@@ -1576,27 +1646,26 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
       headStyles: {
         fillColor: [5, 150, 105],
         textColor: [255, 255, 255],
-        fontSize: 8,
+        fontSize: 8.5,
         fontStyle: 'bold',
       },
       bodyStyles: {
-        fontSize: 7.8,
+        fontSize: 8,
         textColor: [30, 41, 59],
       },
       columnStyles: {
-        0: { cellWidth: 9, halign: 'center' },
-        1: { cellWidth: 26 },
-        2: { cellWidth: 32, fontStyle: 'bold' },
-        3: { halign: 'right' },
-        4: { halign: 'right' },
-        5: { halign: 'right' },
+        0: { cellWidth: 10, halign: 'center' },
+        1: { cellWidth: 46, fontStyle: 'bold' },
+        2: { cellWidth: 30, halign: 'right' },
+        3: { cellWidth: 30, halign: 'right' },
+        4: { cellWidth: 32, halign: 'right' },
+        5: { cellWidth: 16, halign: 'center', fontStyle: 'bold' },
         6: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
-        7: { cellWidth: 28, halign: 'center', fontStyle: 'bold' },
       },
       didParseCell(data) {
         if (
           data.section === 'body' &&
-          activeBudgetDocs.length > 0 &&
+          groupedBudgetList.length > 0 &&
           data.row.index === budgetRows.length - 1
         ) {
           data.cell.styles.fontStyle = 'bold';
@@ -1606,24 +1675,22 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
       },
     });
 
-    // Also include unbudgeted expenses in the active period & scope so user has full visibility
-    const unbudgetedMap = new Map<string, { period: string; category: string; amount: number }>();
+    // Also include unbudgeted expenses grouped by Category in the active period & scope
+    const unbudgetedMap = new Map<string, { category: string; amount: number }>();
     for (const tx of allTransactions) {
       if (tx.deleted || tx.type !== 'expense') continue;
       const d = String(tx.date || '').slice(0, 10);
       if (d < startIso || d > endIso) continue;
       if (!doesTxTouchScopeAsSource(tx, selectedWalletId, selectedOwnerName)) continue;
 
-      const ym = d.slice(0, 7);
-      const key = `${ym}__${tx.category.trim().toLowerCase()}`;
-      if (!budgetedKeys.has(key)) {
-        const existing = unbudgetedMap.get(key) || {
-          period: ym,
-          category: tx.category,
+      const catKey = tx.category.trim().toLowerCase();
+      if (!categoryAggMap.has(catKey)) {
+        const existing = unbudgetedMap.get(catKey) || {
+          category: tx.category.trim(),
           amount: 0,
         };
         existing.amount += Number(tx.amount || 0);
-        unbudgetedMap.set(key, existing);
+        unbudgetedMap.set(catKey, existing);
       }
     }
 
@@ -1633,7 +1700,6 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
       const totalUnbudgeted = unbudgetedList.reduce((s, u) => s + u.amount, 0);
       const unbudgetedRows = unbudgetedList.map((u, idx) => [
         String(idx + 1),
-        formatPeriodLabel(u.period, 'id-ID'),
         u.category,
         formatMoney(u.amount),
         'Pengeluaran di Luar Pagu Anggaran',
@@ -1641,9 +1707,8 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
       unbudgetedRows.push([
         '',
         'TOTAL NON-ANGGARAN',
-        `${unbudgetedList.length} Kategori`,
         formatMoney(totalUnbudgeted),
-        'Belum Dianggarkan',
+        `${unbudgetedList.length} Kategori Belum Dianggarkan`,
       ]);
 
       autoTable(doc, {
@@ -1652,7 +1717,6 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
         head: [
           [
             'No',
-            'Periode Bulan',
             'Kategori Pengeluaran Non-Anggaran',
             'Total Nominal Pengeluaran',
             'Keterangan',
@@ -1663,15 +1727,24 @@ export function generateAnalyticsPdfDocument(payload: GeneratePdfReportPayload):
         headStyles: {
           fillColor: [71, 85, 105],
           textColor: [255, 255, 255],
-          fontSize: 7.8,
+          fontSize: 8,
           fontStyle: 'bold',
         },
         bodyStyles: {
-          fontSize: 7.5,
+          fontSize: 7.8,
         },
         columnStyles: {
           0: { cellWidth: 10, halign: 'center' },
-          3: { halign: 'right', fontStyle: 'bold' },
+          1: { cellWidth: 70, fontStyle: 'bold' },
+          2: { cellWidth: 46, halign: 'right', fontStyle: 'bold' },
+          3: { cellWidth: 56, halign: 'center' },
+        },
+        didParseCell(data) {
+          if (data.section === 'body' && data.row.index === unbudgetedRows.length - 1) {
+            data.cell.styles.fontStyle = 'bold';
+            data.cell.styles.fillColor = [241, 245, 249];
+            data.cell.styles.textColor = [30, 41, 59];
+          }
         },
       });
     }
