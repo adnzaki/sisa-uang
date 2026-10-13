@@ -132,6 +132,9 @@ function openPdfGeneratorModal() {
   if (!pdfPrintDate.value) {
     pdfPrintDate.value = toIsoDate(new Date());
   }
+  const today = toIsoDate(new Date());
+  const maxEnd = activeBounds.value.endIso < today ? today : activeBounds.value.endIso;
+  void financeStore.ensureTransactionsForDateRange(activeBounds.value.startIso, maxEnd);
   pdfModalOpen.value = true;
 }
 
@@ -286,7 +289,9 @@ watch(
   activeBounds,
   (bounds) => {
     if (bounds.startIso && bounds.endIso) {
-      void financeStore.ensureTransactionsForDateRange(bounds.startIso, bounds.endIso);
+      const today = toIsoDate(new Date());
+      const maxEnd = bounds.endIso < today ? today : bounds.endIso;
+      void financeStore.ensureTransactionsForDateRange(bounds.startIso, maxEnd);
     }
   },
   { immediate: true }
@@ -665,7 +670,7 @@ const pdfPreviewSummary = computed(() =>
   })
 );
 
-function handleDownloadPdfReport() {
+async function handleDownloadPdfReport() {
   if (!authStore.isProUser) {
     pdfModalOpen.value = false;
     notificationStore.openProModal({
@@ -678,6 +683,10 @@ function handleDownloadPdfReport() {
   }
   isGeneratingPdf.value = true;
   try {
+    const today = toIsoDate(new Date());
+    const maxEnd = activeBounds.value.endIso < today ? today : activeBounds.value.endIso;
+    await financeStore.ensureTransactionsForDateRange(activeBounds.value.startIso, maxEnd);
+
     const fileName = generateAnalyticsPdfDocument({
       reportType: pdfReportType.value,
       startIso: activeBounds.value.startIso,
