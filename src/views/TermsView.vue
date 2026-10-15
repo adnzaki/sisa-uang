@@ -1,7 +1,13 @@
 <script setup lang="ts">
+import { onMounted } from 'vue';
 import PublicNavbar from '../components/PublicNavbar.vue';
 import PublicFooter from '../components/PublicFooter.vue';
 import { ShieldCheck, FileText, CheckCircle2 } from 'lucide-vue-next';
+import { scrollToPageTopMultiFrame } from '../utils/scroll';
+
+onMounted(() => {
+  scrollToPageTopMultiFrame();
+});
 </script>
 
 <template>

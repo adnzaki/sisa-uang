@@ -13,6 +13,7 @@ import {
 } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useThemeStore } from '../stores/theme';
+import { scrollToPageTop } from '../utils/scroll';
 
 const emit = defineEmits<{
   (e: 'open-checkout', plan?: 'monthly' | 'yearly'): void;
@@ -27,6 +28,14 @@ const mobileMenuOpen = ref(false);
 function triggerCheckout() {
   emit('open-checkout', 'yearly');
   mobileMenuOpen.value = false;
+}
+
+function handleNavClick() {
+  mobileMenuOpen.value = false;
+  scrollToPageTop('instant');
+  requestAnimationFrame(() => {
+    scrollToPageTop('instant');
+  });
 }
 </script>
 
@@ -57,30 +66,35 @@ function triggerCheckout() {
         <nav class="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-300">
           <RouterLink
             to="/landing#features"
+            @click="handleNavClick"
             class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
           >
             Fitur
           </RouterLink>
           <RouterLink
             to="/landing#pricing"
+            @click="handleNavClick"
             class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
           >
             Paket Harga (IDR)
           </RouterLink>
           <RouterLink
             to="/terms"
+            @click="handleNavClick"
             class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
           >
             Syarat & Ketentuan
           </RouterLink>
           <RouterLink
             to="/refund-policy"
+            @click="handleNavClick"
             class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
           >
             Kebijakan Refund
           </RouterLink>
           <RouterLink
             to="/contact"
+            @click="handleNavClick"
             class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
           >
             Hubungi Kami
@@ -151,42 +165,42 @@ function triggerCheckout() {
         <RouterLink
           to="/landing#features"
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-          @click="mobileMenuOpen = false"
+          @click="handleNavClick"
         >
           Fitur Utama
         </RouterLink>
         <RouterLink
           to="/landing#pricing"
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-          @click="mobileMenuOpen = false"
+          @click="handleNavClick"
         >
           Paket Harga Resmi (IDR)
         </RouterLink>
         <RouterLink
           to="/terms"
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-          @click="mobileMenuOpen = false"
+          @click="handleNavClick"
         >
           Syarat & Ketentuan Lisensi
         </RouterLink>
         <RouterLink
           to="/refund-policy"
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-          @click="mobileMenuOpen = false"
+          @click="handleNavClick"
         >
           Kebijakan Pengembalian Dana
         </RouterLink>
         <RouterLink
           to="/privacy"
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-          @click="mobileMenuOpen = false"
+          @click="handleNavClick"
         >
           Kebijakan Privasi
         </RouterLink>
         <RouterLink
           to="/contact"
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-          @click="mobileMenuOpen = false"
+          @click="handleNavClick"
         >
           Hubungi Kami & WhatsApp
         </RouterLink>

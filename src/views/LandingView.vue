@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { RouterLink } from 'vue-router';
+import { ref, onMounted } from 'vue';
+import { RouterLink, useRoute } from 'vue-router';
 import {
   Wallet,
   ArrowRight,
@@ -26,8 +26,16 @@ import PublicNavbar from '../components/PublicNavbar.vue';
 import PublicFooter from '../components/PublicFooter.vue';
 import InSiteCheckoutModal from '../components/InSiteCheckoutModal.vue';
 import { useAuthStore } from '../stores/auth';
+import { scrollToPageTop } from '../utils/scroll';
 
+const route = useRoute();
 const authStore = useAuthStore();
+
+onMounted(() => {
+  if (!route.hash) {
+    scrollToPageTop('instant');
+  }
+});
 
 const checkoutModalOpen = ref(false);
 const activePlanForCheckout = ref<'monthly' | 'yearly'>('yearly');
@@ -424,28 +432,25 @@ const faqs = [
                     per tahun (~Rp 17.916 / bulan)
                   </div>
                 </div>
-                <ul class="space-y-3 text-xs text-slate-700 dark:text-slate-300 pt-4 border-t border-emerald-200/60 dark:border-emerald-900/60">
-                  <li class="flex items-start gap-2 text-emerald-700 dark:text-emerald-300 font-bold bg-emerald-100/70 dark:bg-emerald-950/60 p-2 rounded-xl">
-                    <Sparkles class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <span>Diskon Spesial 2 Bulan (Hemat Rp 43.000 dibanding bayar bulanan).</span>
-                  </li>
-                  <li class="flex items-start gap-2">
+                <div class="space-y-3.5 pt-4 border-t border-emerald-200/60 dark:border-emerald-900/60 text-xs">
+                  <!-- Highlight Box: Hemat & Lebih Murah -->
+                  <div class="p-3.5 rounded-xl bg-emerald-100/80 dark:bg-emerald-950/60 border border-emerald-300/60 dark:border-emerald-800/60 text-emerald-900 dark:text-emerald-200 space-y-1.5">
+                    <div class="flex items-center gap-1.5 font-bold text-emerald-800 dark:text-emerald-300">
+                      <Sparkles class="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Jauh Lebih Murah · Hemat 2 Bulan</span>
+                    </div>
+                    <p class="text-xs leading-relaxed text-emerald-800 dark:text-emerald-300">
+                      Mencakup seluruh fitur <strong>SisaUang Pro</strong> tanpa batasan, namun dengan harga yang jauh lebih murah (cukup bayar setara 10 bulan untuk akses 12 bulan penuh, hemat Rp 43.000).
+                    </p>
+                  </div>
+
+                  <div class="p-3 rounded-xl bg-white/70 dark:bg-slate-900/60 border border-emerald-200/60 dark:border-emerald-900/40 text-slate-700 dark:text-slate-300 flex items-start gap-2.5">
                     <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <span><strong>Anggaran Setahun Penuh &amp; Mapping Bulanan:</strong> Rencanakan anggaran satu tahun penuh sekaligus dengan pemetaan bulanan per kategori, alur Draft &amp; Finalisasi Anggaran, serta pilihan Mode Ketat atau Fleksibel.</span>
-                  </li>
-                  <li class="flex items-start gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <span><strong>Laporan PDF Resmi &amp; Pengaturan Laporan:</strong> Unduh Laporan Kas Umum, Rekonsiliasi Kas, dan Realisasi Anggaran, serta kustomisasi Kop Institusi, Judul Laporan, dan Penandatangan PDF.</span>
-                  </li>
-                  <li class="flex items-start gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <span><strong>Lebih dari 5 Sumber Dana (Wallet):</strong> Tambahkan rekening bank, e-wallet, kas tunai, dan investasi tanpa batas.</span>
-                  </li>
-                  <li class="flex items-start gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <span><strong>Lebih dari 2 Kepemilikan Dana:</strong> Pisahkan alokasi kepemilikan dana keluarga atau bisnis di setiap dompet tanpa batas.</span>
-                  </li>
-                </ul>
+                    <span class="text-xs leading-relaxed">
+                      Satu kali pembayaran aktif untuk 1 tahun penuh tanpa perlu repot perpanjangan tiap bulan.
+                    </span>
+                  </div>
+                </div>
               </div>
 
               <button
