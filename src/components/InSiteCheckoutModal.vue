@@ -713,7 +713,7 @@ function handleClose() {
             Transaksi Berhasil Dikonfirmasi!
           </h3>
           <p class="text-xs text-slate-600 dark:text-slate-400 max-w-sm mx-auto">
-            Terima kasih telah berlangganan <strong>{{ invoiceData.planName }}</strong>. Lisensi software Anda telah aktif dan bukti transaksi telah dikirimkan ke <strong>{{ invoiceData.customerEmail }}</strong>.
+            Terima kasih telah berlangganan <strong>{{ invoiceData.planName }}</strong>. Lisensi platform Anda telah aktif dan bukti transaksi telah dikirimkan ke <strong>{{ invoiceData.customerEmail }}</strong>.
           </p>
         </div>
 

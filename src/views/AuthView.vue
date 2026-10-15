@@ -8,6 +8,8 @@ import {
   Lock,
   User as UserIcon,
   ArrowRight,
+  ArrowLeft,
+  Home,
   RefreshCw,
   Sun,
   Moon,
@@ -200,24 +202,43 @@ async function cancelOtpAndLogout() {
   <div class="min-h-screen flex flex-col justify-between bg-slate-50 dark:bg-slate-950 px-2 sm:px-6 py-4 sm:py-8">
     <!-- Top Minimal Bar -->
     <header class="w-full max-w-5xl mx-auto flex items-center justify-between gap-2 px-1 sm:px-0 py-2">
-      <div class="flex items-center shrink-0">
-        <div
-          v-if="themeStore.appLogoUrl"
-          class="h-10 w-10 rounded-xl overflow-hidden flex items-center justify-center shrink-0"
+      <div class="flex items-center gap-2 sm:gap-3 shrink-0">
+        <RouterLink
+          to="/landing"
+          class="flex items-center gap-2 group hover:opacity-90 transition-opacity"
+          title="Ke Landing Page Sisa Uang"
         >
-          <img
-            :src="themeStore.appLogoUrl"
-            alt="Logo Sisa Uang"
-            class="h-9 w-9 object-contain"
-          />
-        </div>
-        <div
-          v-else
-          class="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs"
-          aria-label="Logo Sisa Uang"
+          <div
+            v-if="themeStore.appLogoUrl"
+            class="h-10 w-10 rounded-xl overflow-hidden flex items-center justify-center shrink-0"
+          >
+            <img
+              :src="themeStore.appLogoUrl"
+              alt="Logo Sisa Uang"
+              class="h-9 w-9 object-contain"
+            />
+          </div>
+          <div
+            v-else
+            class="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:bg-emerald-500 transition-colors"
+            aria-label="Logo Sisa Uang"
+          >
+            <Wallet class="w-5 h-5" />
+          </div>
+          <span class="hidden sm:inline font-bold text-sm tracking-tight text-slate-900 dark:text-slate-100">
+            Sisa Uang
+          </span>
+        </RouterLink>
+
+        <!-- Dedicated Landing Page Link in Header -->
+        <RouterLink
+          to="/landing"
+          class="min-h-[40px] px-2.5 sm:px-3 rounded-xl border border-emerald-500/30 dark:border-emerald-500/20 bg-emerald-50/70 dark:bg-emerald-950/40 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+          title="Lihat Halaman Utama / Landing Page"
         >
-          <Wallet class="w-5 h-5" />
-        </div>
+          <ArrowLeft class="w-3.5 h-3.5 shrink-0" />
+          <span>Landing Page</span>
+        </RouterLink>
       </div>
       <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
         <PWAInstallButton variant="topbar" />
@@ -337,6 +358,17 @@ async function cancelOtpAndLogout() {
           >
             Kembali ke {{ authStore.user.displayName }}
           </button>
+        </div>
+
+        <!-- Back to Landing Page link inside card -->
+        <div class="flex items-center justify-between pb-1">
+          <RouterLink
+            to="/landing"
+            class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors group"
+          >
+            <ArrowLeft class="w-3.5 h-3.5 transition-transform group-hover:-translate-x-1 shrink-0" />
+            <span>Ke Halaman Utama (Landing Page)</span>
+          </RouterLink>
         </div>
 
         <div class="space-y-1.5">
@@ -632,11 +664,31 @@ async function cancelOtpAndLogout() {
       </div>
     </div>
 
-    <!-- Minimal Footer -->
-    <footer class="w-full max-w-5xl mx-auto text-center py-3 text-xs text-slate-400 dark:text-slate-500">
-      <span>Sisa Uang</span>
-      <span class="mx-1.5" aria-hidden="true">·</span>
-      <span>Your Finance Assistant</span>
+    <!-- Minimal Footer with Landing Page & Legal Links -->
+    <footer class="w-full max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2.5 py-4 text-xs text-slate-500 dark:text-slate-400 text-center sm:text-left">
+      <div>
+        <span class="font-medium text-slate-700 dark:text-slate-300">Sisa Uang</span>
+        <span class="mx-1.5" aria-hidden="true">·</span>
+        <span>Your Finance Assistant</span>
+      </div>
+      <div class="flex items-center justify-center flex-wrap gap-x-3 gap-y-1">
+        <RouterLink to="/landing" class="text-emerald-600 dark:text-emerald-400 hover:underline font-semibold flex items-center gap-1">
+          <Home class="w-3.5 h-3.5 shrink-0" />
+          <span>Landing Page</span>
+        </RouterLink>
+        <span aria-hidden="true">·</span>
+        <RouterLink to="/pricing" class="hover:underline">
+          Paket Harga
+        </RouterLink>
+        <span aria-hidden="true">·</span>
+        <RouterLink to="/terms" class="hover:underline">
+          Syarat &amp; Ketentuan
+        </RouterLink>
+        <span aria-hidden="true">·</span>
+        <RouterLink to="/privacy" class="hover:underline">
+          Kebijakan Privasi
+        </RouterLink>
+      </div>
     </footer>
   </div>
 </template>

@@ -62,7 +62,7 @@ const faqs = [
   },
   {
     q: 'Apakah laporan keuangan yang dihasilkan dapat langsung dicetak atau diserahkan ke pihak manajemen?',
-    a: 'Tentu. Laporan Buku Kas Umum (BKU), Realisasi Anggaran, dan Rekonsiliasi Kas dirancang berstandar akuntansi resmi, lengkap dengan Kop Surat Lembaga, stempel, dan tanda tangan penanggung jawab berformat PDF resolusi tinggi.',
+    a: 'Tentu. Laporan Buku Kas Umum (BKU), Realisasi Anggaran, dan Rekonsiliasi Kas dirancang berstandar akuntansi resmi, lengkap dengan opsi untuk menambahkan Kop Surat Lembaga, stempel, dan tanda tangan penanggung jawab berformat PDF resolusi tinggi.',
   },
 ];
 </script>
@@ -88,7 +88,7 @@ const faqs = [
             <div class="flex items-center justify-center gap-2 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
               <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/60">
                 <ShieldCheck class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span>Software Manajemen Kas & Keuangan Terverifikasi</span>
+                <span>Your Finance Assistant</span>
               </span>
             </div>
 
@@ -97,7 +97,7 @@ const faqs = [
             </h1>
 
             <p class="text-base sm:text-lg text-slate-600 dark:text-slate-300 leading-relaxed">
-              Software pembukuan modern untuk perorangan, pemilik usaha, bendahara sekolah, dan pengelola lembaga. Pantau saldo riil antar-sumber dana, kontrol pagu anggaran, serta generate laporan akuntansi PDF siap audit.
+              Platform pembukuan modern untuk perorangan, pemilik usaha, bendahara sekolah, dan pengelola lembaga. Pantau saldo riil antar-sumber dana, kontrol pagu anggaran, serta generate laporan akuntansi PDF siap audit.
             </p>
 
             <!-- CTA Buttons -->
@@ -145,7 +145,7 @@ const faqs = [
             </div>
           </div>
 
-          <!-- Visual Software Showcase -->
+          <!-- Visual Platform Showcase -->
           <div class="mt-12 sm:mt-16 max-w-5xl mx-auto rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl overflow-hidden">
             <!-- Mock App Header -->
             <div class="px-4 py-3 bg-slate-100 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700/60 flex items-center justify-between">
@@ -337,19 +337,19 @@ const faqs = [
                 <ul class="space-y-2.5 text-xs text-slate-600 dark:text-slate-400 pt-4 border-t border-slate-100 dark:border-slate-800">
                   <li class="flex items-center gap-2">
                     <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Maksimal 3 sumber dana (dompet)</span>
+                    <span>5 Sumber Dana (Wallet)</span>
                   </li>
                   <li class="flex items-center gap-2">
                     <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>1 kepemilikan dana (Pribadi)</span>
+                    <span>2 Kepemilikan Dana</span>
                   </li>
                   <li class="flex items-center gap-2">
                     <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Pencatatan transaksi kas harian</span>
+                    <span>Anggaran Bulan Berjalan</span>
                   </li>
-                  <li class="flex items-center gap-2 text-slate-400">
-                    <span class="w-4 h-4 flex items-center justify-center">&times;</span>
-                    <span>Tanpa ekspor PDF ber-Kop Surat</span>
+                  <li class="flex items-center gap-2">
+                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Analitik Keuangan</span>
                   </li>
                 </ul>
               </div>
@@ -375,26 +375,22 @@ const faqs = [
                   </div>
                   <div class="text-xs text-slate-500">per bulan (Termasuk PPN)</div>
                 </div>
-                <ul class="space-y-2.5 text-xs text-slate-600 dark:text-slate-400 pt-4 border-t border-slate-100 dark:border-slate-800">
-                  <li class="flex items-center gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span><strong>Multi Dompet & Bank Tanpa Batas</strong></span>
+                <ul class="space-y-3 text-xs text-slate-600 dark:text-slate-400 pt-4 border-t border-slate-100 dark:border-slate-800">
+                  <li class="flex items-start gap-2">
+                    <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span><strong>Anggaran Setahun Penuh &amp; Mapping Bulanan:</strong> Rencanakan anggaran satu tahun penuh sekaligus dengan pemetaan bulanan per kategori, alur Draft &amp; Finalisasi Anggaran, serta pilihan Mode Ketat atau Fleksibel.</span>
                   </li>
-                  <li class="flex items-center gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span><strong>Multi Kepemilikan Dana Tanpa Batas</strong></span>
+                  <li class="flex items-start gap-2">
+                    <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span><strong>Laporan PDF Resmi &amp; Pengaturan Laporan:</strong> Unduh Laporan Kas Umum, Rekonsiliasi Kas, dan Realisasi Anggaran, serta kustomisasi Kop Institusi, Judul Laporan, dan Penandatangan PDF.</span>
                   </li>
-                  <li class="flex items-center gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Ekspor PDF BKU & Realisasi Anggaran</span>
+                  <li class="flex items-start gap-2">
+                    <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span><strong>Lebih dari 5 Sumber Dana (Wallet):</strong> Tambahkan rekening bank, e-wallet, kas tunai, dan investasi tanpa batas.</span>
                   </li>
-                  <li class="flex items-center gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Kop Surat & Tanda Tangan Digital Resmi</span>
-                  </li>
-                  <li class="flex items-center gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Dukungan prioritas WhatsApp</span>
+                  <li class="flex items-start gap-2">
+                    <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span><strong>Lebih dari 2 Kepemilikan Dana:</strong> Pisahkan alokasi kepemilikan dana keluarga atau bisnis di setiap dompet tanpa batas.</span>
                   </li>
                 </ul>
               </div>
@@ -428,26 +424,26 @@ const faqs = [
                     per tahun (~Rp 17.916 / bulan)
                   </div>
                 </div>
-                <ul class="space-y-2.5 text-xs text-slate-700 dark:text-slate-300 pt-4 border-t border-emerald-200/60 dark:border-emerald-900/60">
-                  <li class="flex items-center gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span><strong>Seluruh Fitur Pro 1 Tahun Penuh</strong></span>
+                <ul class="space-y-3 text-xs text-slate-700 dark:text-slate-300 pt-4 border-t border-emerald-200/60 dark:border-emerald-900/60">
+                  <li class="flex items-start gap-2 text-emerald-700 dark:text-emerald-300 font-bold bg-emerald-100/70 dark:bg-emerald-950/60 p-2 rounded-xl">
+                    <Sparkles class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span>Diskon Spesial 2 Bulan (Hemat Rp 43.000 dibanding bayar bulanan).</span>
                   </li>
-                  <li class="flex items-center gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Hemat biaya 2 bulan dibandingkan bulanan</span>
+                  <li class="flex items-start gap-2">
+                    <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span><strong>Anggaran Setahun Penuh &amp; Mapping Bulanan:</strong> Rencanakan anggaran satu tahun penuh sekaligus dengan pemetaan bulanan per kategori, alur Draft &amp; Finalisasi Anggaran, serta pilihan Mode Ketat atau Fleksibel.</span>
                   </li>
-                  <li class="flex items-center gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Backup otomatis cloud prioritas</span>
+                  <li class="flex items-start gap-2">
+                    <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span><strong>Laporan PDF Resmi &amp; Pengaturan Laporan:</strong> Unduh Laporan Kas Umum, Rekonsiliasi Kas, dan Realisasi Anggaran, serta kustomisasi Kop Institusi, Judul Laporan, dan Penandatangan PDF.</span>
                   </li>
-                  <li class="flex items-center gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Kustomisasi format Kop Surat instansi</span>
+                  <li class="flex items-start gap-2">
+                    <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span><strong>Lebih dari 5 Sumber Dana (Wallet):</strong> Tambahkan rekening bank, e-wallet, kas tunai, dan investasi tanpa batas.</span>
                   </li>
-                  <li class="flex items-center gap-2">
-                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Garansi 100% uang kembali 7 hari</span>
+                  <li class="flex items-start gap-2">
+                    <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span><strong>Lebih dari 2 Kepemilikan Dana:</strong> Pisahkan alokasi kepemilikan dana keluarga atau bisnis di setiap dompet tanpa batas.</span>
                   </li>
                 </ul>
               </div>
