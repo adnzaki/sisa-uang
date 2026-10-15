@@ -16,4 +16,7 @@ app.use(pinia);
 app.use(router);
 app.use(i18n);
 
-app.mount('#app');
+// Mount Vue app once router has completed initial navigation resolution
+router.isReady().then(() => {
+  app.mount('#app');
+});

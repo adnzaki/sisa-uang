@@ -40,17 +40,24 @@ export function injectPrerenderedHtml(rawTemplate: string, pageData: PreRenderPa
     );
   }
 
-  // Inject canonical link if not present
-  if (pageData.canonicalUrl && !result.includes('rel="canonical"')) {
-    result = result.replace(
-      /<\/head>/i,
-      `  <link rel="canonical" href="${pageData.canonicalUrl}" />\n  </head>`
-    );
+  // Inject or update canonical link
+  if (pageData.canonicalUrl) {
+    if (result.includes('rel="canonical"')) {
+      result = result.replace(
+        /<link rel="canonical"[^>]*>/i,
+        `<link rel="canonical" href="${pageData.canonicalUrl}" />`
+      );
+    } else {
+      result = result.replace(
+        /<\/head>/i,
+        `    <link rel="canonical" href="${pageData.canonicalUrl}" />\n  </head>`
+      );
+    }
   }
 
   // Inject prerendered HTML inside <div id="app"></div>
   result = result.replace(
-    /<div id="app"><\/div>/i,
+    /<div id="app">\s*<\/div>/i,
     `<div id="app">${pageData.htmlContent}</div>`
   );
 
