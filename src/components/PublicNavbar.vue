@@ -48,7 +48,7 @@ function triggerCheckout() {
               SisaUang
             </span>
             <span class="hidden sm:inline-block text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold ml-2">
-              Software Kas & Anggaran
+              Platform Kas & Anggaran
             </span>
           </div>
         </RouterLink>
@@ -153,7 +153,7 @@ function triggerCheckout() {
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
           @click="mobileMenuOpen = false"
         >
-          Fitur Software
+          Fitur Utama
         </RouterLink>
         <RouterLink
           to="/landing#pricing"

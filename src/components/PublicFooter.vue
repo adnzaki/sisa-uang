@@ -29,7 +29,7 @@ import {
             </span>
           </RouterLink>
           <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed max-w-sm">
-            Software manajemen kas, arus dana, dan perencanaan anggaran modern untuk individu, wirausaha, serta lembaga. Dilengkapi laporan pembukuan berstandar akuntansi siap cetak PDF.
+            Platform manajemen kas, arus dana, dan perencanaan anggaran modern untuk individu, wirausaha, serta lembaga. Dilengkapi laporan pembukuan berstandar akuntansi siap cetak PDF.
           </p>
 
           <!-- Endorsement & Sub-domain Info Card (Bit & Bait and Actudent) -->
@@ -74,10 +74,10 @@ import {
           </div>
         </div>
 
-        <!-- Software Features / Product -->
+        <!-- Features / Product -->
         <div class="space-y-3">
           <h4 class="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">
-            Fitur Software
+            Fitur Utama
           </h4>
           <ul class="space-y-2 text-xs text-slate-600 dark:text-slate-400">
             <li>
@@ -98,11 +98,6 @@ import {
             <li>
               <RouterLink to="/landing#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Laporan Kas Berstandar (PDF)
-              </RouterLink>
-            </li>
-            <li>
-              <RouterLink to="/landing#pricing" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
-                Paket SisaUang Pro (IDR)
               </RouterLink>
             </li>
           </ul>
@@ -163,10 +158,6 @@ import {
             <li class="flex items-start gap-2">
               <Clock class="w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0" />
               <span>Senin – Jumat (08.00 – 17.00 WIB)</span>
-            </li>
-            <li class="flex items-start gap-2">
-              <MapPin class="w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0" />
-              <span>Jl. Terusan Ryacudu, Way Hui, Kec. Jati Agung, Kab. Lampung Selatan, Lampung 35365, Indonesia</span>
             </li>
           </ul>
         </div>

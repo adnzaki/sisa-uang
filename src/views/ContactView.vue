@@ -134,19 +134,6 @@ async function submitContact() {
                     <div class="text-xs text-slate-500 mt-0.5">Sabtu & Minggu: Libur / Respon Terbatas</div>
                   </div>
                 </div>
-
-                <!-- Address -->
-                <div class="flex items-start gap-3">
-                  <div class="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 flex items-center justify-center shrink-0">
-                    <MapPin class="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div class="text-xs text-slate-500">Alamat Operasional Bisnis</div>
-                    <div class="font-medium text-slate-800 dark:text-slate-200 leading-snug">
-                      Jl. Terusan Ryacudu, Way Hui, Kec. Jati Agung, Kabupaten Lampung Selatan, Lampung 35365, Indonesia
-                    </div>
-                  </div>
-                </div>
               </div>
             </div>
 

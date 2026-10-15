@@ -32,10 +32,10 @@ import { ShieldCheck, FileText, CheckCircle2 } from 'lucide-vue-next';
               1. Ketentuan Umum & Definisi (Conditions of Use)
             </h2>
             <p>
-              Selamat datang di <strong>SisaUang</strong> (<a href="https://sisauang.bitdanbait.web.id" class="text-emerald-600 underline">https://sisauang.bitdanbait.web.id</a>), software berbasis cloud (*Software as a Service*) untuk manajemen kas, pemisahan pos kepemilikan dana, pagu anggaran, dan pelaporan keuangan. Dengan mendaftar, mengakses, atau membeli paket berlangganan SisaUang, Anda menyatakan telah membaca, memahami, dan menyetujui seluruh isi Syarat dan Ketentuan ini.
+              Selamat datang di <strong>SisaUang</strong> (<a href="https://sisauang.bitdanbait.web.id" class="text-emerald-600 underline">https://sisauang.bitdanbait.web.id</a>), platform berbasis cloud untuk manajemen kas, pemisahan pos kepemilikan dana, pagu anggaran, dan pelaporan keuangan. Dengan mendaftar, mengakses, atau membeli paket berlangganan SisaUang, Anda menyatakan telah membaca, memahami, dan menyetujui seluruh isi Syarat dan Ketentuan ini.
             </p>
             <p>
-              Apabila Anda tidak menyetujui salah satu butir ketentuan ini, Anda dipersilakan untuk tidak melanjutkan penggunaan layanan software kami.
+              Apabila Anda tidak menyetujui salah satu butir ketentuan ini, Anda dipersilakan untuk tidak melanjutkan penggunaan layanan platform kami.
             </p>
           </section>
 
@@ -45,15 +45,15 @@ import { ShieldCheck, FileText, CheckCircle2 } from 'lucide-vue-next';
               2. Pemberian Lisensi Perangkat Lunak (Grant of License)
             </h2>
             <p>
-              Pengelola memberikan kepada Anda lisensi non-eksklusif, tidak dapat dipindahtangankan, dan dapat dibatalkan untuk mengakses serta menggunakan fitur software SisaUang sesuai dengan paket lisensi yang aktif:
+              Pengelola memberikan kepada Anda lisensi non-eksklusif, tidak dapat dipindahtangankan, dan dapat dibatalkan untuk mengakses serta menggunakan fitur platform SisaUang sesuai dengan paket lisensi yang aktif:
             </p>
             <ul class="list-disc pl-5 space-y-1.5">
-              <li><strong>Paket Starter (Gratis / Rp 0)</strong>: Lisensi penggunaan dasar terbatas untuk maksimal 3 sumber dana dan 1 kepemilikan dana.</li>
-              <li><strong>Paket SisaUang Pro Bulanan (Rp 21.500 / bulan)</strong>: Akses penuh fitur multi-dompet tanpa batas, multi-kepemilikan, ekspor laporan akuntansi PDF ber-Kop Surat resmi, serta kontrol anggaran bulanan & tahunan.</li>
-              <li><strong>Paket SisaUang Pro Tahunan (Rp 215.000 / tahun)</strong>: Akses penuh seluruh kapabilitas Pro selama 12 bulan kalender penuh dengan tarif hemat setara 10 bulan langganan.</li>
+              <li><strong>Paket Starter (Gratis / Rp 0)</strong>: Lisensi penggunaan dasar untuk maksimal 5 sumber dana (wallet), 2 kepemilikan dana, anggaran bulan berjalan, dan analitik keuangan.</li>
+              <li><strong>Paket SisaUang Pro Bulanan (Rp 21.500 / bulan)</strong>: Akses penuh Anggaran Setahun Penuh & Mapping Bulanan, Laporan PDF Resmi & Pengaturan Laporan (Kop Institusi, Judul, Penandatangan), serta lebih dari 5 sumber dana dan lebih dari 2 kepemilikan dana tanpa batas.</li>
+              <li><strong>Paket SisaUang Pro Tahunan (Rp 215.000 / tahun)</strong>: Akses penuh seluruh fitur Pro selama 12 bulan kalender dengan diskon 2 bulan (hemat Rp 43.000 dibanding bulanan).</li>
             </ul>
             <p>
-              Pengguna dilarang keras merekayasa balik (*reverse engineer*), mendekompilasi, menyalin kode sumber, atau menjual kembali lisensi software kepada pihak ketiga tanpa izin tertulis dari pengelola SisaUang.
+              Pengguna dilarang keras merekayasa balik (*reverse engineer*), mendekompilasi, menyalin kode sumber, atau menjual kembali lisensi platform kepada pihak ketiga tanpa izin tertulis dari pengelola SisaUang.
             </p>
           </section>
 
