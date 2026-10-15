@@ -3051,11 +3051,21 @@ async function startServer() {
       const prerenderData = getPrerenderDataForPath(req.path);
       if (prerenderData) {
         const cleanPath = req.path.split('?')[0].split('#')[0].replace(/\/$/, '') || '/';
+        // Special case: root "/" and "/landing" serve dist/landing/index.html
+        if (cleanPath === '/' || cleanPath === '/landing') {
+          const landingHtml = path.join(distPath, 'landing', 'index.html');
+          if (fs.existsSync(landingHtml)) {
+            res.sendFile(landingHtml);
+            return;
+          }
+        }
+
         const specificHtml = path.join(distPath, cleanPath.replace(/^\//, ''), 'index.html');
-        if (fs.existsSync(specificHtml)) {
+        if (cleanPath !== '/' && fs.existsSync(specificHtml)) {
           res.sendFile(specificHtml);
           return;
         }
+
         const indexHtml = path.join(distPath, 'index.html');
         if (fs.existsSync(indexHtml)) {
           const raw = fs.readFileSync(indexHtml, 'utf8');
