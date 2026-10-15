@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory, NavigationGuardNext, RouteLocationNormalized } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
+import RootDispatcher from '../views/RootDispatcher.vue';
 import DashboardView from '../views/DashboardView.vue';
 import TransactionsView from '../views/TransactionsView.vue';
 import WalletsView from '../views/WalletsView.vue';
@@ -68,9 +69,45 @@ export const router = createRouter({
     },
     {
       path: '/',
-      name: 'dashboard',
-      component: DashboardView,
-      meta: { requiresAuth: true },
+      name: 'root',
+      component: RootDispatcher,
+      meta: { isRoot: true },
+    },
+    {
+      path: '/landing',
+      name: 'landing',
+      component: () => import('../views/LandingView.vue'),
+      meta: { isPublic: true },
+    },
+    {
+      path: '/pricing',
+      name: 'pricing',
+      component: () => import('../views/LandingView.vue'),
+      meta: { isPublic: true },
+    },
+    {
+      path: '/terms',
+      name: 'terms',
+      component: () => import('../views/TermsView.vue'),
+      meta: { isPublic: true },
+    },
+    {
+      path: '/refund-policy',
+      name: 'refund-policy',
+      component: () => import('../views/RefundPolicyView.vue'),
+      meta: { isPublic: true },
+    },
+    {
+      path: '/privacy',
+      name: 'privacy',
+      component: () => import('../views/PrivacyView.vue'),
+      meta: { isPublic: true },
+    },
+    {
+      path: '/contact',
+      name: 'contact',
+      component: () => import('../views/ContactView.vue'),
+      meta: { isPublic: true },
     },
     {
       path: '/transactions',
@@ -152,6 +189,12 @@ router.beforeEach((to, _from, next) => {
     return;
   }
 
+  // Allow public routes without authentication
+  if (to.meta.isPublic || to.meta.isRoot) {
+    next();
+    return;
+  }
+
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     next({ path: '/auth', query: { redirect: to.fullPath } });
     return;
@@ -169,7 +212,6 @@ router.beforeEach((to, _from, next) => {
 
   // Super Admin only manages users, logs/alerts, and settings — block finance transaction routes for Super Admin
   const financePaths = [
-    '/',
     '/transactions',
     '/wallets',
     '/ownership',

@@ -121,6 +121,7 @@ const DEVICE_ID_STORAGE_KEY = 'sisa_uang_device_id_v1';
 const CUSTOM_DEVICE_NAME_KEY = 'sisa_uang_custom_device_name_v1';
 const OTP_VERIFIED_KEY = 'sisa_uang_otp_verified';
 const DEFAULT_ADMIN_SESSION_TOKEN = 'sisa_uang_admin_session_token_v1';
+const EXPLICIT_LOGOUT_KEY = 'sisa_uang_explicit_logout';
 
 function getOrCreateDeviceId(): string {
   try {
@@ -566,6 +567,7 @@ export const useAuthStore = defineStore('auth', () => {
     };
 
     user.value = nextUser;
+    localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextUser));
 
     const isTargetSuperAdmin =
@@ -1174,37 +1176,60 @@ export const useAuthStore = defineStore('auth', () => {
 
   function initAuth() {
     loadSavedAccountsFromStorage();
-    const savedRaw = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (savedRaw) {
-      try {
-        const parsed = JSON.parse(savedRaw) as AppUser;
-        if (!parsed.username) {
-          parsed.username = parsed.email?.split('@')[0] || 'user';
+    const isExplicitlyLoggedOut = localStorage.getItem(EXPLICIT_LOGOUT_KEY) === 'true';
+
+    if (isExplicitlyLoggedOut) {
+      user.value = null;
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      localStorage.removeItem(OTP_VERIFIED_KEY);
+      setApiAdminContext(null, null);
+    } else {
+      const savedRaw = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (savedRaw) {
+        try {
+          const parsed = JSON.parse(savedRaw) as AppUser;
+          if (!parsed.username) {
+            parsed.username = parsed.email?.split('@')[0] || 'user';
+          }
+          user.value = parsed;
+          const isAdminAccount =
+            parsed.role === 'admin' ||
+            parsed.email?.toLowerCase() === SUPER_ADMIN_EMAIL ||
+            parsed.username?.toLowerCase() === SUPER_ADMIN_USERNAME ||
+            parsed.username?.toLowerCase() === 'dark.notes';
+          const storedToken =
+            localStorage.getItem('sisa_uang_admin_token') ||
+            (isAdminAccount ? DEFAULT_ADMIN_SESSION_TOKEN : null);
+          if (isAdminAccount && !requiresOtp.value) {
+            otpVerified.value = true;
+            localStorage.setItem(OTP_VERIFIED_KEY, 'true');
+          }
+          setApiAdminContext(parsed.email, storedToken);
+          upsertSavedAccount(parsed, storedToken);
+          void syncSubscriptionFromFirestoreForUser(parsed.uid, parsed.email);
+          void registerCurrentDeviceSession(parsed, false);
+          startUserStatusMonitor(parsed);
+        } catch {
+          localStorage.removeItem(SESSION_STORAGE_KEY);
         }
-        user.value = parsed;
-        const isAdminAccount =
-          parsed.role === 'admin' ||
-          parsed.email?.toLowerCase() === SUPER_ADMIN_EMAIL ||
-          parsed.username?.toLowerCase() === SUPER_ADMIN_USERNAME ||
-          parsed.username?.toLowerCase() === 'dark.notes';
-        const storedToken =
-          localStorage.getItem('sisa_uang_admin_token') ||
-          (isAdminAccount ? DEFAULT_ADMIN_SESSION_TOKEN : null);
-        if (isAdminAccount && !requiresOtp.value) {
-          otpVerified.value = true;
-          localStorage.setItem(OTP_VERIFIED_KEY, 'true');
-        }
-        setApiAdminContext(parsed.email, storedToken);
-        upsertSavedAccount(parsed, storedToken);
-        void syncSubscriptionFromFirestoreForUser(parsed.uid, parsed.email);
-        void registerCurrentDeviceSession(parsed, false);
-        startUserStatusMonitor(parsed);
-      } catch {
-        localStorage.removeItem(SESSION_STORAGE_KEY);
       }
     }
 
     onAuthStateChanged(auth, async (fbUser) => {
+      // If user explicitly logged out, DO NOT auto-restore session from Firebase Auth cache!
+      if (localStorage.getItem(EXPLICIT_LOGOUT_KEY) === 'true') {
+        if (fbUser) {
+          try {
+            await firebaseSignOut(auth);
+          } catch {
+            // Ignore
+          }
+        }
+        user.value = null;
+        isReady.value = true;
+        return;
+      }
+
       if (fbUser && !fbUser.isAnonymous) {
         // If user is already restored from localStorage session or currently registering, still verify subscription from Firestore once
         if (user.value || isRegisteringInProgress) {
@@ -2219,20 +2244,25 @@ export const useAuthStore = defineStore('auth', () => {
       clearInterval(statusPollTimer);
       statusPollTimer = null;
     }
-    try {
-      await firebaseSignOut(auth);
-    } catch {
-      // Ignore
-    }
+    localStorage.setItem(EXPLICIT_LOGOUT_KEY, 'true');
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+    localStorage.removeItem(OTP_VERIFIED_KEY);
+    localStorage.removeItem('sisa_uang_admin_token');
+    localStorage.removeItem('sisa_uang_actor_email');
+    setApiAdminContext(null, null);
+
     user.value = null;
     deviceSessions.value = [];
     primaryDeviceOtpPending.value = null;
     requiresOtp.value = false;
     otpVerified.value = false;
     otpDispatchInfo.value = null;
-    localStorage.removeItem(SESSION_STORAGE_KEY);
-    localStorage.removeItem(OTP_VERIFIED_KEY);
-    setApiAdminContext(null, null);
+
+    try {
+      await firebaseSignOut(auth);
+    } catch {
+      // Ignore
+    }
   }
 
   async function submitProSubscriptionPayment(payload: {

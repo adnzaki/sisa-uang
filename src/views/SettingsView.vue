@@ -1314,6 +1314,59 @@ function handleGoToAddAccount() {
       </div>
     </section>
 
+    <!-- Legal & Support Section for Midtrans Compliance -->
+    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-4 sm:p-6 space-y-4 shadow-2xs">
+      <div class="border-b border-slate-100 dark:border-slate-800 pb-3 flex items-center justify-between">
+        <div>
+          <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            Legalitas, Kebijakan &amp; Bantuan Pelanggan
+          </h2>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            Informasi lisensi software, kebijakan transaksi pembayaran, serta saluran bantuan resmi SisaUang.
+          </p>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <RouterLink
+          to="/terms"
+          class="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-500/60 bg-slate-50/50 dark:bg-slate-800/40 text-xs space-y-1 transition-colors block"
+        >
+          <div class="font-semibold text-slate-900 dark:text-slate-100">Syarat &amp; Ketentuan</div>
+          <div class="text-[11px] text-slate-500">Perjanjian lisensi digital goods</div>
+        </RouterLink>
+
+        <RouterLink
+          to="/refund-policy"
+          class="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-500/60 bg-slate-50/50 dark:bg-slate-800/40 text-xs space-y-1 transition-colors block"
+        >
+          <div class="font-semibold text-slate-900 dark:text-slate-100">Kebijakan Refund</div>
+          <div class="text-[11px] text-slate-500">Garansi kepuasan 7 hari kalender</div>
+        </RouterLink>
+
+        <RouterLink
+          to="/privacy"
+          class="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-500/60 bg-slate-50/50 dark:bg-slate-800/40 text-xs space-y-1 transition-colors block"
+        >
+          <div class="font-semibold text-slate-900 dark:text-slate-100">Kebijakan Privasi</div>
+          <div class="text-[11px] text-slate-500">Keamanan data &amp; PCI-DSS</div>
+        </RouterLink>
+
+        <RouterLink
+          to="/contact"
+          class="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-500/60 bg-slate-50/50 dark:bg-slate-800/40 text-xs space-y-1 transition-colors block"
+        >
+          <div class="font-semibold text-slate-900 dark:text-slate-100">Hubungi Kami</div>
+          <div class="text-[11px] text-slate-500">vuedevo@gmail.com &amp; WhatsApp</div>
+        </RouterLink>
+      </div>
+
+      <!-- Endorsement Note -->
+      <div class="text-[11px] text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-1.5">
+        <span>Didukung oleh <a href="https://bitdanbait.web.id" target="_blank" class="text-emerald-600 underline font-semibold">Bit &amp; Bait</a> (<a href="https://sisauang.bitdanbait.web.id" target="_blank" class="text-emerald-600 underline">sisauang.bitdanbait.web.id</a>) dan <a href="https://actudent.com" target="_blank" class="text-emerald-600 underline font-semibold">Actudent</a>.</span>
+      </div>
+    </section>
+
     <!-- Application Version Footer at the very bottom of Settings Page -->
     <div class="pt-2 pb-4 text-center space-y-1">
       <button

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "log_1792049331950_b9b883",
+    "actorUid": "contact_form",
+    "actorEmail": "vuedevo@gmail.com",
+    "action": "contact_message_received",
+    "detail": "Pesan kontak baru dari Tester Midtrans (vuedevo@gmail.com): \"Uji Coba Formulir Kontak\".",
+    "severity": "info",
+    "createdAt": "2026-10-15T07:28:51.950Z"
+  },
+  {
+    "id": "log_1792049326130_870c21",
+    "actorUid": "admin_vuedevo_01",
+    "actorEmail": "vuedevo@gmail.com",
+    "action": "payment_settled_midtrans",
+    "detail": "Pembayaran SisaUang Pro Bulanan senilai Rp 21.500 berhasil diverifikasi (INV-SU-320961). Status: Lunas.",
+    "severity": "info",
+    "createdAt": "2026-10-15T07:28:46.130Z"
+  },
+  {
+    "id": "log_1792049320961_b4747c",
+    "actorUid": "checkout_guest",
+    "actorEmail": "vuedevo@gmail.com",
+    "action": "checkout_order_created",
+    "detail": "Pesanan SisaUang Pro Bulanan (Rp 21.500) dibuat untuk Reviewer Midtrans (vuedevo@gmail.com). No Invoice: INV-SU-320961.",
+    "severity": "info",
+    "createdAt": "2026-10-15T07:28:40.961Z"
+  }
+]
