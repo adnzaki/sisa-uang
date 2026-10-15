@@ -541,6 +541,12 @@ watch(
 );
 
 const isAuthRoute = computed(() => route.path === '/auth');
+const isPublicPage = computed(() => {
+  const publicPaths = ['/landing', '/terms', '/privacy', '/refund-policy', '/contact', '/pricing'];
+  if (publicPaths.includes(route.path)) return true;
+  if (route.path === '/' && !authStore.isAuthenticated) return true;
+  return false;
+});
 
 // Regular user navigation items (Personal Finance Management - Desktop Sidebar & Mobile Sidebar Drawer)
 const userNavItems = computed(() => [
@@ -965,9 +971,9 @@ async function handleSubmitProPayment() {
       </div>
     </div>
 
-    <!-- Auth View (Login / Register / Super Admin OTP) -->
+    <!-- Auth View & Public Pages (Landing, Terms, Privacy, Refund, Contact, etc.) -->
     <div
-      v-else-if="isAuthRoute || !authStore.isAuthenticated"
+      v-else-if="isAuthRoute || !authStore.isAuthenticated || isPublicPage"
       class="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden"
     >
       <RouterView />

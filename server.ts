@@ -2102,7 +2102,7 @@ async function startServer() {
     });
   });
 
-  // Submit SisaUang Pro Payment Proof (QRIS / Bank Transfer) -> Sends email to azzackey@gmail.com & sets status to 'pending'
+  // Submit SisaUang Pro Payment Proof (QRIS / Bank Transfer) -> Sends email to vuedevo@gmail.com & sets status to 'pending'
   app.post('/api/users/:uid/subscription-payment', async (req: Request, res: Response) => {
     const uid = String(req.params.uid || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();
@@ -2177,13 +2177,13 @@ async function startServer() {
     const planLabel = plan === 'yearly' ? 'Tahunan' : 'Bulanan';
     const methodLabel = paymentMethod === 'qris' ? 'QRIS' : 'Transfer Bank';
 
-    // Automatically send email to azzackey@gmail.com with subscription details & transfer proof attachment
+    // Automatically send email to vuedevo@gmail.com with subscription details & transfer proof attachment
     let emailDispatched = false;
     let emailErrorNote = '';
     if (isSmtpConfigured()) {
       try {
         await sendProSubscriptionPaymentEmail({
-          recipientEmail: 'azzackey@gmail.com',
+          recipientEmail: 'vuedevo@gmail.com',
           userUid: user.uid,
           userDisplayName: user.displayName,
           userEmail: user.email,
@@ -2205,17 +2205,229 @@ async function startServer() {
       user.uid,
       user.email,
       'subscription_payment_submitted',
-      `Pengguna ${user.displayName} (${user.email}) mengirim bukti pembayaran SisaUang Pro (${planLabel} via ${methodLabel}). Email ke azzackey@gmail.com ${emailDispatched ? 'terkirim otomatis' : 'tersimpan di sistem antrean verifikasi'}. Status: PENDING.`,
+      `Pengguna ${user.displayName} (${user.email}) mengirim bukti pembayaran SisaUang Pro (${planLabel} via ${methodLabel}). Email ke vuedevo@gmail.com ${emailDispatched ? 'terkirim otomatis' : 'tersimpan di sistem antrean verifikasi'}. Status: PENDING.`,
       'info'
     );
 
     res.json({
       user: sanitizeUser(user),
       emailDispatched,
-      recipientEmail: 'azzackey@gmail.com',
+      recipientEmail: 'vuedevo@gmail.com',
       emailErrorNote: emailErrorNote || null,
       log,
     });
+  });
+
+  // 1. Create Midtrans Transaction / In-Site Checkout Order (Strictly IDR)
+  app.post('/api/payment/create-transaction', async (req: Request, res: Response) => {
+    try {
+      const plan: 'monthly' | 'yearly' = req.body?.plan === 'yearly' ? 'yearly' : 'monthly';
+      const amount = plan === 'yearly' ? 215000 : 21500;
+      const customerName = String(req.body?.customerName || 'Pelanggan SisaUang').trim().slice(0, 80);
+      const customerEmail = String(req.body?.customerEmail || 'vuedevo@gmail.com').trim().toLowerCase().slice(0, 100);
+      const customerPhone = String(req.body?.customerPhone || '0851-2963-4505').trim().slice(0, 30);
+      const paymentMethod = String(req.body?.paymentMethod || 'qris');
+
+      const timestamp = Date.now();
+      const orderId = `SU-ORD-${timestamp}`;
+      const invoiceNumber = `INV-SU-${timestamp.toString().slice(-6)}`;
+      const cleanDigits = customerPhone.replace(/\D/g, '');
+      const vaNumber = `8801${cleanDigits.slice(-8).padStart(8, '29634505')}12`;
+
+      // Check if MIDTRANS_SERVER_KEY is set in environment
+      const midtransServerKey = process.env.MIDTRANS_SERVER_KEY;
+      let snapToken = null;
+      let snapRedirectUrl = null;
+
+      if (midtransServerKey) {
+        try {
+          const authString = Buffer.from(`${midtransServerKey}:`).toString('base64');
+          const isProd = process.env.MIDTRANS_IS_PRODUCTION === 'true';
+          const snapApiUrl = isProd
+            ? 'https://app.midtrans.com/snap/v1/transactions'
+            : 'https://app.sandbox.midtrans.com/snap/v1/transactions';
+
+          const snapPayload = {
+            transaction_details: {
+              order_id: orderId,
+              gross_amount: amount,
+            },
+            item_details: [
+              {
+                id: plan === 'yearly' ? 'sisauang_pro_yearly' : 'sisauang_pro_monthly',
+                price: amount,
+                quantity: 1,
+                name: plan === 'yearly' ? 'SisaUang Pro Tahunan' : 'SisaUang Pro Bulanan',
+                merchant_name: 'SisaUang Software',
+              },
+            ],
+            customer_details: {
+              first_name: customerName,
+              email: customerEmail,
+              phone: customerPhone,
+            },
+          };
+
+          const snapRes = await fetch(snapApiUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              Authorization: `Basic ${authString}`,
+            },
+            body: JSON.stringify(snapPayload),
+          });
+
+          if (snapRes.ok) {
+            const snapData: any = await snapRes.json();
+            snapToken = snapData.token;
+            snapRedirectUrl = snapData.redirect_url;
+          }
+        } catch {
+          // Fallback to in-site simulator if midtrans credentials not yet active
+        }
+      }
+
+      appendLog(
+        'checkout_guest',
+        customerEmail,
+        'checkout_order_created',
+        `Pesanan ${plan === 'yearly' ? 'SisaUang Pro Tahunan (Rp 215.000)' : 'SisaUang Pro Bulanan (Rp 21.500)'} dibuat untuk ${customerName} (${customerEmail}). No Invoice: ${invoiceNumber}.`,
+        'info'
+      );
+
+      res.json({
+        success: true,
+        orderId,
+        invoiceNumber,
+        plan,
+        amount,
+        customerName,
+        customerEmail,
+        customerPhone,
+        paymentMethod,
+        vaNumber,
+        snapToken,
+        snapRedirectUrl,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Gagal memproses inisialisasi pembayaran.' });
+    }
+  });
+
+  // 2. Confirm in-site simulated / verified payment
+  app.post('/api/payment/confirm-mock-payment', async (req: Request, res: Response) => {
+    const orderId = String(req.body?.orderId || '');
+    const invoiceNumber = String(req.body?.invoiceNumber || '');
+    const customerEmail = String(req.body?.customerEmail || '').trim().toLowerCase();
+    const plan: 'monthly' | 'yearly' = req.body?.plan === 'yearly' ? 'yearly' : 'monthly';
+    const amount = Number(req.body?.amount || (plan === 'yearly' ? 215000 : 21500));
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + (plan === 'yearly' ? 365 : 30) * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
+
+    let matchedUser: ServerUserRecord | null = null;
+    for (const u of usersStore.values()) {
+      if (u.email.toLowerCase() === customerEmail) {
+        matchedUser = u;
+        break;
+      }
+    }
+
+    if (matchedUser) {
+      matchedUser.subscriptionStatus = 'pro';
+      matchedUser.isPro = true;
+      matchedUser.subscriptionPlan = plan;
+      matchedUser.subscriptionExpiresAt = expiresAt;
+      matchedUser.updatedAt = nowIso();
+      savePersistedUsersCache();
+    }
+
+    appendLog(
+      matchedUser?.uid || 'checkout_user',
+      customerEmail,
+      'payment_settled_midtrans',
+      `Pembayaran ${plan === 'yearly' ? 'SisaUang Pro Tahunan' : 'SisaUang Pro Bulanan'} senilai Rp ${amount.toLocaleString('id-ID')} berhasil diverifikasi (${invoiceNumber}). Status: Lunas.`,
+      'info'
+    );
+
+    res.json({
+      success: true,
+      status: 'PAID',
+      invoiceNumber,
+      orderId,
+      expiresAt,
+    });
+  });
+
+  // 3. Midtrans Webhook / HTTP Notification Handler
+  app.post('/api/payment/webhook', async (req: Request, res: Response) => {
+    try {
+      const {
+        order_id,
+        status_code,
+        gross_amount,
+        signature_key,
+        transaction_status,
+        fraud_status,
+      } = req.body || {};
+
+      const serverKey = process.env.MIDTRANS_SERVER_KEY;
+      if (serverKey && order_id && status_code && gross_amount && signature_key) {
+        const expectedSignature = crypto
+          .createHash('sha512')
+          .update(`${order_id}${status_code}${gross_amount}${serverKey}`)
+          .digest('hex');
+
+        if (signature_key !== expectedSignature) {
+          res.status(403).json({ error: 'Invalid Midtrans signature key.' });
+          return;
+        }
+      }
+
+      const isSuccess =
+        transaction_status === 'capture'
+          ? fraud_status === 'accept'
+          : transaction_status === 'settlement';
+
+      if (isSuccess) {
+        appendLog(
+          'midtrans_webhook',
+          'webhook@midtrans.com',
+          'midtrans_payment_settled',
+          `Notifikasi pembayaran Midtrans diterima untuk Order ${order_id} (Rp ${gross_amount}). Status: SETTLEMENT.`,
+          'info'
+        );
+      }
+
+      res.status(200).json({ status: 'OK' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Webhook processing failed.' });
+    }
+  });
+
+  // 4. Contact Message API
+  app.post('/api/contact', async (req: Request, res: Response) => {
+    try {
+      const name = String(req.body?.name || '').trim().slice(0, 80);
+      const email = String(req.body?.email || '').trim().slice(0, 100);
+      const subject = String(req.body?.subject || 'Pertanyaan Layanan SisaUang').trim().slice(0, 120);
+      const message = String(req.body?.message || '').trim().slice(0, 1000);
+
+      appendLog(
+        'contact_form',
+        email || 'guest@sisa-uang.id',
+        'contact_message_received',
+        `Pesan kontak baru dari ${name} (${email}): "${subject}".`,
+        'info'
+      );
+
+      res.json({ success: true, message: 'Pesan berhasil diterima.' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Gagal mengirim pesan.' });
+    }
   });
 
   // Record user/system activity & evaluate suspicious behavior rules

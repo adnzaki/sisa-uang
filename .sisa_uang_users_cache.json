@@ -1,0 +1,19 @@
+[
+  {
+    "uid": "admin_vuedevo_01",
+    "username": "dark.notes",
+    "email": "vuedevo@gmail.com",
+    "displayName": "dark.notes",
+    "role": "admin",
+    "status": "active",
+    "authProvider": "password",
+    "currency": "IDR",
+    "passwordHash": "2759b5f6c9e3ae92ca8cd9129ab6d6336d569e8e4f84c0996839347b84c1b7e8",
+    "createdAt": "2026-10-01T07:28:38.324Z",
+    "updatedAt": "2026-10-15T07:28:46.123Z",
+    "subscriptionStatus": "pro",
+    "isPro": true,
+    "subscriptionPlan": "monthly",
+    "subscriptionExpiresAt": "2026-11-14"
+  }
+]
