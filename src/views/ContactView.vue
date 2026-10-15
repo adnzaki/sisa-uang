@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted } from 'vue';
 import PublicNavbar from '../components/PublicNavbar.vue';
 import PublicFooter from '../components/PublicFooter.vue';
+import { scrollToPageTopMultiFrame } from '../utils/scroll';
+
+onMounted(() => {
+  scrollToPageTopMultiFrame();
+});
 import {
   Mail,
   Phone,

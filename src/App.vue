@@ -53,6 +53,7 @@ import PWAInstallButton from './components/PWAInstallButton.vue';
 import OfflineIndicator from './components/OfflineIndicator.vue';
 import AppUpdateBanner from './components/AppUpdateBanner.vue';
 import ReleaseNotesModal from './components/ReleaseNotesModal.vue';
+import { scrollToPageTop, scrollToPageTopMultiFrame } from './utils/scroll';
 
 const { t, locale } = useI18n();
 const route = useRoute();
@@ -69,6 +70,7 @@ const desktopAccountMenuRef = ref<HTMLElement | null>(null);
 const mobileAccountMenuRef = ref<HTMLElement | null>(null);
 const deniedBannerVisible = ref(false);
 const mainScrollContainer = ref<HTMLElement | null>(null);
+const publicScrollContainer = ref<HTMLElement | null>(null);
 const pageTransitionName = ref<'page' | 'page-slide-left' | 'page-slide-right'>('page');
 
 // =========================================================================
@@ -519,8 +521,26 @@ watch(
     }
     mobileDrawerOpen.value = false;
     accountMenuOpen.value = false;
-    if (mainScrollContainer.value && !route.query.section && !route.hash) {
-      mainScrollContainer.value.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+    if (!route.query.section && !route.hash) {
+      if (publicScrollContainer.value) {
+        publicScrollContainer.value.scrollTop = 0;
+      }
+      scrollToPageTopMultiFrame();
+      requestAnimationFrame(() => {
+        if (publicScrollContainer.value) {
+          publicScrollContainer.value.scrollTop = 0;
+        }
+      });
+      setTimeout(() => {
+        if (publicScrollContainer.value) {
+          publicScrollContainer.value.scrollTop = 0;
+        }
+      }, 50);
+      setTimeout(() => {
+        if (publicScrollContainer.value) {
+          publicScrollContainer.value.scrollTop = 0;
+        }
+      }, 150);
     }
     if (route.query.denied === 'admin_only') {
       deniedBannerVisible.value = true;
@@ -974,6 +994,7 @@ async function handleSubmitProPayment() {
     <!-- Auth View & Public Pages (Landing, Terms, Privacy, Refund, Contact, etc.) -->
     <div
       v-else-if="isAuthRoute || !authStore.isAuthenticated || isPublicPage"
+      ref="publicScrollContainer"
       class="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden"
     >
       <RouterView />

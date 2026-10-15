@@ -10,6 +10,11 @@ import {
   ExternalLink,
   Heart,
 } from 'lucide-vue-next';
+import { scrollToPageTop, scrollToPageTopMultiFrame } from '../utils/scroll';
+
+function handleFooterLinkClick() {
+  scrollToPageTopMultiFrame();
+}
 </script>
 
 <template>
@@ -18,7 +23,7 @@ import {
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-8 lg:gap-12">
         <!-- Brand & Description -->
         <div class="lg:col-span-2 space-y-4">
-          <RouterLink to="/landing" class="flex items-center gap-2.5">
+          <RouterLink to="/landing" @click="handleFooterLinkClick" class="flex items-center gap-2.5">
             <div
               class="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs"
             >
@@ -81,22 +86,22 @@ import {
           </h4>
           <ul class="space-y-2 text-xs text-slate-600 dark:text-slate-400">
             <li>
-              <RouterLink to="/landing#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <RouterLink to="/landing#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Multi Sumber Dana & Bank
               </RouterLink>
             </li>
             <li>
-              <RouterLink to="/landing#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <RouterLink to="/landing#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Manajemen Kepemilikan Dana
               </RouterLink>
             </li>
             <li>
-              <RouterLink to="/landing#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <RouterLink to="/landing#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Pagu Anggaran Bulanan & Tahunan
               </RouterLink>
             </li>
             <li>
-              <RouterLink to="/landing#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <RouterLink to="/landing#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Laporan Kas Berstandar (PDF)
               </RouterLink>
             </li>
@@ -110,22 +115,22 @@ import {
           </h4>
           <ul class="space-y-2 text-xs text-slate-600 dark:text-slate-400">
             <li>
-              <RouterLink to="/terms" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <RouterLink to="/terms" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Syarat & Ketentuan Lisensi
               </RouterLink>
             </li>
             <li>
-              <RouterLink to="/refund-policy" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <RouterLink to="/refund-policy" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Kebijakan Pengembalian Dana (Refund)
               </RouterLink>
             </li>
             <li>
-              <RouterLink to="/privacy" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <RouterLink to="/privacy" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Kebijakan Privasi Data
               </RouterLink>
             </li>
             <li>
-              <RouterLink to="/contact" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <RouterLink to="/contact" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Kanal Bantuan & Layanan
               </RouterLink>
             </li>

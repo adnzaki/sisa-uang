@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, NavigationGuardNext, RouteLocationNormalized } from 'vue-router';
+import { scrollToPageTop, scrollToPageTopMultiFrame } from '../utils/scroll';
 import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
 import RootDispatcher from '../views/RootDispatcher.vue';
@@ -172,6 +173,21 @@ export const router = createRouter({
       beforeEnter: superAdminMiddleware,
     },
   ],
+  scrollBehavior(to, _from, savedPosition) {
+    if (to.hash) {
+      return { el: to.hash, behavior: 'smooth' };
+    }
+    if (savedPosition) {
+      return savedPosition;
+    }
+    return { top: 0, left: 0 };
+  },
+});
+
+router.afterEach((to) => {
+  if (!to.hash) {
+    scrollToPageTopMultiFrame();
+  }
 });
 
 router.beforeEach((to, _from, next) => {

@@ -9,6 +9,7 @@ import nodemailer from 'nodemailer';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { getPrerenderDataForPath, injectPrerenderedHtml } from './src/prerender/injector';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3016,11 +3017,53 @@ async function startServer() {
       next();
     });
 
+    // Pre-rendering middleware for public and legal pages in development
+    app.use(async (req: Request, res: Response, next: NextFunction) => {
+      if (req.method !== 'GET') return next();
+      const url = req.path;
+      // Do not intercept static assets, api endpoints, or vite internal files
+      if (url.startsWith('/api/') || url.startsWith('/@') || url.includes('.')) {
+        return next();
+      }
+
+      const prerenderData = getPrerenderDataForPath(url);
+      if (prerenderData) {
+        try {
+          const templatePath = path.join(__dirname, 'index.html');
+          const rawTemplate = fs.readFileSync(templatePath, 'utf8');
+          const transformedTemplate = await vite.transformIndexHtml(req.originalUrl, rawTemplate);
+          const fullHtml = injectPrerenderedHtml(transformedTemplate, prerenderData);
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.status(200).send(fullHtml);
+          return;
+        } catch {
+          // Fallback to default vite middleware
+        }
+      }
+      next();
+    });
+
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(__dirname, 'dist');
     app.use(express.static(distPath));
-    app.get('*', (_req: Request, res: Response) => {
+    app.get('*', (req: Request, res: Response) => {
+      const prerenderData = getPrerenderDataForPath(req.path);
+      if (prerenderData) {
+        const cleanPath = req.path.split('?')[0].split('#')[0].replace(/\/$/, '') || '/';
+        const specificHtml = path.join(distPath, cleanPath.replace(/^\//, ''), 'index.html');
+        if (fs.existsSync(specificHtml)) {
+          res.sendFile(specificHtml);
+          return;
+        }
+        const indexHtml = path.join(distPath, 'index.html');
+        if (fs.existsSync(indexHtml)) {
+          const raw = fs.readFileSync(indexHtml, 'utf8');
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.send(injectPrerenderedHtml(raw, prerenderData));
+          return;
+        }
+      }
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
