@@ -40,7 +40,7 @@ onMounted(() => {
                 Garansi Kepuasan Pelanggan 7 Hari Kalender (100% Refund)
               </div>
               <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                Kami memberikan garansi pengembalian dana 100% tanpa potongan biaya administrasi jika Anda mengalami kendala teknis atau software SisaUang Pro tidak berfungsi sesuai spesifikasi dalam jangka waktu 7 hari sejak pembelian pertama.
+                Kami memberikan garansi pengembalian dana 100% tanpa potongan biaya administrasi jika Anda mengalami kendala teknis atau platform SisaUang Pro tidak berfungsi sesuai spesifikasi dalam jangka waktu 7 hari sejak pembelian pertama.
               </p>
             </div>
           </div>

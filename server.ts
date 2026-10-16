@@ -2259,7 +2259,7 @@ async function startServer() {
                 price: amount,
                 quantity: 1,
                 name: plan === 'yearly' ? 'SisaUang Pro Tahunan' : 'SisaUang Pro Bulanan',
-                merchant_name: 'SisaUang Software',
+                merchant_name: 'SisaUang Platform',
               },
             ],
             customer_details: {

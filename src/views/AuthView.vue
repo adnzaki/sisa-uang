@@ -203,7 +203,11 @@ async function cancelOtpAndLogout() {
     <!-- Top Minimal Bar -->
     <header class="w-full max-w-5xl mx-auto flex items-center justify-between gap-2 px-1 sm:px-0 py-2">
       <div class="flex items-center gap-2 sm:gap-3 shrink-0">
-        <div class="flex items-center gap-2">
+        <RouterLink
+          to="/"
+          class="flex items-center gap-2 group hover:opacity-90 transition-opacity"
+          title="Ke Halaman Utama (Landing Page)"
+        >
           <div
             v-if="themeStore.appLogoUrl"
             class="h-10 w-10 rounded-xl overflow-hidden flex items-center justify-center shrink-0"
@@ -224,7 +228,7 @@ async function cancelOtpAndLogout() {
           <span class="hidden sm:inline font-bold text-sm tracking-tight text-slate-900 dark:text-slate-100">
             Sisa Uang
           </span>
-        </div>
+        </RouterLink>
       </div>
       <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
         <PWAInstallButton variant="topbar" />

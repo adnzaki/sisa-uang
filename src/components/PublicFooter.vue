@@ -4,7 +4,6 @@ import {
   Wallet,
   Mail,
   Phone,
-  MapPin,
   Clock,
   ShieldCheck,
   ExternalLink,
@@ -23,7 +22,7 @@ function handleFooterLinkClick() {
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-8 lg:gap-12">
         <!-- Brand & Description -->
         <div class="lg:col-span-2 space-y-4">
-          <RouterLink to="/landing" @click="handleFooterLinkClick" class="flex items-center gap-2.5">
+          <RouterLink to="/" @click="handleFooterLinkClick" class="flex items-center gap-2.5">
             <div
               class="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs"
             >
@@ -86,22 +85,22 @@ function handleFooterLinkClick() {
           </h4>
           <ul class="space-y-2 text-xs text-slate-600 dark:text-slate-400">
             <li>
-              <RouterLink to="/landing#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <RouterLink to="/#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Multi Sumber Dana & Bank
               </RouterLink>
             </li>
             <li>
-              <RouterLink to="/landing#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <RouterLink to="/#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Manajemen Kepemilikan Dana
               </RouterLink>
             </li>
             <li>
-              <RouterLink to="/landing#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <RouterLink to="/#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Pagu Anggaran Bulanan & Tahunan
               </RouterLink>
             </li>
             <li>
-              <RouterLink to="/landing#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <RouterLink to="/#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                 Laporan Kas Berstandar (PDF)
               </RouterLink>
             </li>

@@ -57,7 +57,7 @@ export default defineConfig(() => {
               name: 'Ringkasan Keuangan',
               short_name: 'Ringkasan',
               description: 'Buka ringkasan saldo dan anggaran bulan ini',
-              url: '/',
+              url: '/dashboard',
               icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
             },
             {
