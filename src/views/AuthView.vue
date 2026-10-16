@@ -65,7 +65,7 @@ function getAccountInitials(nameOrEmail: string): string {
 async function handleQuickSwitchFromAuth(targetUid: string) {
   const ok = await authStore.switchAccount(targetUid);
   if (ok) {
-    const defaultTarget = authStore.isSuperAdmin ? '/control-panel' : '/';
+    const defaultTarget = authStore.isSuperAdmin ? '/control-panel' : '/dashboard';
     router.push(defaultTarget);
   }
 }
@@ -98,7 +98,7 @@ async function handleEmailSubmit() {
         router.replace({ path: '/auth', query: { step: 'otp', redirect: '/control-panel' } });
         return;
       }
-      const defaultTarget = authStore.isSuperAdmin ? '/control-panel' : '/';
+      const defaultTarget = authStore.isSuperAdmin ? '/control-panel' : '/dashboard';
       const target = (route.query.redirect as string) || defaultTarget;
       router.push(target);
     } else if (activeTab.value === 'register') {
@@ -112,7 +112,7 @@ async function handleEmailSubmit() {
         router.replace({ path: '/auth', query: { step: 'otp', redirect: '/control-panel' } });
         return;
       }
-      router.push(authStore.isSuperAdmin ? '/control-panel' : '/');
+      router.push(authStore.isSuperAdmin ? '/control-panel' : '/dashboard');
     } else if (activeTab.value === 'reset') {
       if (password.value.length < 6) {
         notificationStore.notifyError(
@@ -147,7 +147,7 @@ async function handleGoogleLogin() {
       router.replace({ path: '/auth', query: { step: 'otp', redirect: '/control-panel' } });
       return;
     }
-    const defaultTarget = authStore.isSuperAdmin ? '/control-panel' : '/';
+    const defaultTarget = authStore.isSuperAdmin ? '/control-panel' : '/dashboard';
     const target = (route.query.redirect as string) || defaultTarget;
     router.push(target);
   } catch {
@@ -340,7 +340,7 @@ async function cancelOtpAndLogout() {
           <button
             type="button"
             class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shrink-0 transition-colors cursor-pointer"
-            @click="router.push(authStore.isSuperAdmin ? '/control-panel' : '/')"
+            @click="router.push(authStore.isSuperAdmin ? '/control-panel' : '/dashboard')"
           >
             Kembali ke {{ authStore.user.displayName }}
           </button>
@@ -349,7 +349,7 @@ async function cancelOtpAndLogout() {
         <!-- Back to Landing Page link inside card -->
         <div class="flex items-center justify-between pb-1">
           <RouterLink
-            to="/landing"
+            to="/"
             class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors group"
           >
             <ArrowLeft class="w-3.5 h-3.5 transition-transform group-hover:-translate-x-1 shrink-0" />
@@ -658,7 +658,7 @@ async function cancelOtpAndLogout() {
         <span>Your Finance Assistant</span>
       </div>
       <div class="flex items-center justify-center flex-wrap gap-x-3 gap-y-1">
-        <RouterLink to="/landing" class="text-emerald-600 dark:text-emerald-400 hover:underline font-semibold flex items-center gap-1">
+        <RouterLink to="/" class="text-emerald-600 dark:text-emerald-400 hover:underline font-semibold flex items-center gap-1">
           <Home class="w-3.5 h-3.5 shrink-0" />
           <span>Landing Page</span>
         </RouterLink>

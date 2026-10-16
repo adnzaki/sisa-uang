@@ -117,7 +117,7 @@ function handleNavClick() {
           <!-- If Authenticated -->
           <template v-if="authStore.isAuthenticated">
             <RouterLink
-              :to="authStore.isSuperAdmin ? '/control-panel' : '/'"
+              :to="authStore.isSuperAdmin ? '/control-panel' : '/dashboard'"
               class="hidden sm:inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold hover:opacity-90 transition-opacity"
             >
               <LayoutDashboard class="w-4 h-4" />
@@ -209,7 +209,7 @@ function handleNavClick() {
       <div class="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-col gap-2">
         <template v-if="authStore.isAuthenticated">
           <RouterLink
-            :to="authStore.isSuperAdmin ? '/control-panel' : '/'"
+            :to="authStore.isSuperAdmin ? '/control-panel' : '/dashboard'"
             class="w-full py-2.5 px-4 text-center rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold"
             @click="mobileMenuOpen = false"
           >

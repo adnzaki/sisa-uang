@@ -127,7 +127,7 @@ const faqs = [
               </RouterLink>
               <RouterLink
                 v-else
-                to="/"
+                to="/dashboard"
                 class="w-full sm:w-auto px-6 py-3.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 font-semibold text-sm transition-colors text-center"
               >
                 Buka Dashboard Saya

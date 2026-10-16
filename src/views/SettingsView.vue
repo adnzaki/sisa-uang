@@ -337,7 +337,7 @@ async function handleSwitchSavedAccount(targetUid: string) {
   if (targetUid === authStore.user?.uid) return;
   const ok = await authStore.switchAccount(targetUid);
   if (ok) {
-    router.push(authStore.isSuperAdmin ? '/control-panel' : '/');
+    router.push(authStore.isSuperAdmin ? '/control-panel' : '/dashboard');
   }
 }
 
