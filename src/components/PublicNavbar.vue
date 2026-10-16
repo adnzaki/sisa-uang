@@ -46,7 +46,7 @@ function handleNavClick() {
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="flex items-center justify-between h-16">
         <!-- Brand / Logo -->
-        <RouterLink to="/landing" class="flex items-center gap-2.5 group">
+        <RouterLink to="/" class="flex items-center gap-2.5 group">
           <div
             class="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform"
           >
@@ -65,14 +65,14 @@ function handleNavClick() {
         <!-- Desktop Navigation Links -->
         <nav class="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-300">
           <RouterLink
-            to="/landing#features"
+            to="/#features"
             @click="handleNavClick"
             class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
           >
             Fitur
           </RouterLink>
           <RouterLink
-            to="/landing#pricing"
+            to="/pricing"
             @click="handleNavClick"
             class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
           >
@@ -163,14 +163,14 @@ function handleNavClick() {
     >
       <nav class="flex flex-col space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200">
         <RouterLink
-          to="/landing#features"
+          to="/#features"
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
           @click="handleNavClick"
         >
           Fitur Utama
         </RouterLink>
         <RouterLink
-          to="/landing#pricing"
+          to="/pricing"
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
           @click="handleNavClick"
         >

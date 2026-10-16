@@ -15,7 +15,7 @@ const COMMON_NAVBAR_HTML = `
   <header class="sticky top-0 z-40 w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md transition-colors">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="flex items-center justify-between h-16">
-        <a href="/landing" class="flex items-center gap-2.5 group">
+        <a href="/" class="flex items-center gap-2.5 group">
           <div class="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path></svg>
           </div>
@@ -26,7 +26,7 @@ const COMMON_NAVBAR_HTML = `
         </a>
 
         <nav class="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-300">
-          <a href="/landing#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Fitur</a>
+          <a href="/#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Fitur</a>
           <a href="/pricing" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Paket Harga (IDR)</a>
           <a href="/terms" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Syarat &amp; Ketentuan</a>
           <a href="/refund-policy" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Kebijakan Refund</a>
@@ -48,7 +48,7 @@ const COMMON_FOOTER_HTML = `
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 lg:py-16">
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-8 lg:gap-12">
         <div class="lg:col-span-2 space-y-4">
-          <a href="/landing" class="flex items-center gap-2.5">
+          <a href="/" class="flex items-center gap-2.5">
             <div class="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path></svg>
             </div>
@@ -72,10 +72,10 @@ const COMMON_FOOTER_HTML = `
         <div class="space-y-3">
           <h4 class="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">Fitur Utama</h4>
           <ul class="space-y-2 text-xs text-slate-600 dark:text-slate-400">
-            <li><a href="/landing#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Multi Sumber Dana &amp; Bank</a></li>
-            <li><a href="/landing#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Manajemen Kepemilikan Dana</a></li>
-            <li><a href="/landing#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Pagu Anggaran Bulanan &amp; Tahunan</a></li>
-            <li><a href="/landing#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Laporan Kas Berstandar (PDF)</a></li>
+            <li><a href="/#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Multi Sumber Dana &amp; Bank</a></li>
+            <li><a href="/#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Manajemen Kepemilikan Dana</a></li>
+            <li><a href="/#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Pagu Anggaran Bulanan &amp; Tahunan</a></li>
+            <li><a href="/#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Laporan Kas Berstandar (PDF)</a></li>
           </ul>
         </div>
 
@@ -381,7 +381,7 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
   '/landing': {
     title: 'Sisa Uang – Platform Manajemen Kas & Anggaran',
     description: 'Platform manajemen kas modern untuk perorangan, bendahara, dan organisasi. Pisahkan kepemilikan dana, kontrol pagu anggaran tahunan, dan unduh laporan kas resmi PDF siap audit.',
-    canonicalUrl: 'https://sisauang.bitdanbait.web.id/landing',
+    canonicalUrl: 'https://sisauang.bitdanbait.web.id/',
     htmlContent: `
       <div class="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 selection:bg-emerald-500/20 selection:text-emerald-600">
         ${COMMON_NAVBAR_HTML}

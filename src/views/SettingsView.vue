@@ -1322,7 +1322,7 @@ function handleGoToAddAccount() {
             Legalitas, Kebijakan &amp; Bantuan Pelanggan
           </h2>
           <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Informasi lisensi software, kebijakan transaksi pembayaran, serta saluran bantuan resmi SisaUang.
+            Informasi lisensi platform, kebijakan transaksi pembayaran, serta saluran bantuan resmi SisaUang.
           </p>
         </div>
       </div>

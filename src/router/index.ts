@@ -2,7 +2,6 @@ import { createRouter, createWebHistory, NavigationGuardNext, RouteLocationNorma
 import { scrollToPageTop, scrollToPageTopMultiFrame } from '../utils/scroll';
 import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
-import RootDispatcher from '../views/RootDispatcher.vue';
 import DashboardView from '../views/DashboardView.vue';
 import TransactionsView from '../views/TransactionsView.vue';
 import WalletsView from '../views/WalletsView.vue';
@@ -42,7 +41,7 @@ async function superAdminMiddleware(
       `Pengguna non-admin (${authStore.user?.email}) mencoba mengakses endpoint terproteksi /control-panel.`,
       'critical'
     );
-    next({ path: '/', query: { denied: 'admin_only' } });
+    next({ path: '/dashboard', query: { denied: 'admin_only' } });
     return;
   }
 
