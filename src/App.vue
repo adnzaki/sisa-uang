@@ -163,7 +163,7 @@ function getBannerSwipeStyle(bannerId: string) {
 // =========================================================================
 // 2. Native Mobile Horizontal Swipe Navigation for Bottom Navbar Tabs
 // =========================================================================
-const regularBottomNavRoutes = ['/', '/transactions', '/wallets', '/settings'];
+const regularBottomNavRoutes = ['/dashboard', '/transactions', '/wallets', '/settings'];
 const adminBottomNavRoutes = [
   '/control-panel?tab=users',
   '/control-panel?tab=logs',
@@ -562,15 +562,13 @@ watch(
 
 const isAuthRoute = computed(() => route.path === '/auth');
 const isPublicPage = computed(() => {
-  const publicPaths = ['/landing', '/terms', '/privacy', '/refund-policy', '/contact', '/pricing'];
-  if (publicPaths.includes(route.path)) return true;
-  if (route.path === '/' && !authStore.isAuthenticated) return true;
-  return false;
+  const publicPaths = ['/', '/landing', '/terms', '/privacy', '/refund-policy', '/contact', '/pricing'];
+  return publicPaths.includes(route.path);
 });
 
 // Regular user navigation items (Personal Finance Management - Desktop Sidebar & Mobile Sidebar Drawer)
 const userNavItems = computed(() => [
-  { name: t('nav.dashboard'), path: '/', icon: LayoutDashboard },
+  { name: t('nav.dashboard'), path: '/dashboard', icon: LayoutDashboard },
   { name: t('nav.transactions'), path: '/transactions', icon: ArrowLeftRight },
   { name: t('nav.wallets'), path: '/wallets', icon: Wallet },
   { name: t('nav.ownership'), path: '/ownership', icon: Users },
@@ -671,7 +669,7 @@ async function handleSwitchAccount(targetUid: string) {
   mobileDrawerOpen.value = false;
   const ok = await authStore.switchAccount(targetUid);
   if (ok) {
-    router.push(authStore.isSuperAdmin ? '/control-panel' : '/');
+    router.push(authStore.isSuperAdmin ? '/control-panel' : '/dashboard');
   }
 }
 
@@ -1011,7 +1009,7 @@ async function handleSubmitProPayment() {
           <!-- Brand Logo Container (Replaces Sisa Uang text in Sidebar) -->
           <div class="flex items-center justify-between gap-2 px-1 pt-0.5">
             <RouterLink
-              :to="authStore.isSuperAdmin ? '/control-panel' : '/'"
+              :to="authStore.isSuperAdmin ? '/control-panel' : '/dashboard'"
               class="flex-1 min-w-0 flex items-center"
               aria-label="Logo Aplikasi"
             >
@@ -1293,7 +1291,7 @@ async function handleSubmitProPayment() {
           class="hidden lg:flex shrink-0 items-center justify-between px-8 py-3.5 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-30"
         >
           <RouterLink
-            :to="authStore.isSuperAdmin ? '/control-panel' : '/'"
+            :to="authStore.isSuperAdmin ? '/control-panel' : '/dashboard'"
             class="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap"
           >
             Sisa Uang
@@ -2187,10 +2185,10 @@ async function handleSubmitProPayment() {
         class="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800/80 grid grid-cols-5 items-center px-1 sm:px-6"
       >
         <RouterLink
-          to="/"
+          to="/dashboard"
           class="min-h-[48px] flex flex-col items-center justify-center gap-0.5 transition-colors"
           :class="
-            route.path === '/'
+            route.path === '/dashboard'
               ? 'text-emerald-600 dark:text-emerald-400'
               : 'text-slate-500 dark:text-slate-400'
           "

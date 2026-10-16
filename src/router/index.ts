@@ -70,15 +70,19 @@ export const router = createRouter({
     },
     {
       path: '/',
-      name: 'root',
-      component: RootDispatcher,
-      meta: { isRoot: true },
-    },
-    {
-      path: '/landing',
       name: 'landing',
       component: () => import('../views/LandingView.vue'),
       meta: { isPublic: true },
+    },
+    {
+      path: '/landing',
+      redirect: '/',
+    },
+    {
+      path: '/dashboard',
+      name: 'dashboard',
+      component: DashboardView,
+      meta: { requiresAuth: true },
     },
     {
       path: '/pricing',
@@ -222,12 +226,13 @@ router.beforeEach((to, _from, next) => {
     to.query.mode !== 'add-account' &&
     !(authStore.user?.email.toLowerCase() === 'vuedevo@gmail.com' && !authStore.otpVerified && authStore.requiresOtp)
   ) {
-    next({ path: authStore.isSuperAdmin ? '/control-panel' : '/' });
+    next({ path: authStore.isSuperAdmin ? '/control-panel' : '/dashboard' });
     return;
   }
 
   // Super Admin only manages users, logs/alerts, and settings — block finance transaction routes for Super Admin
   const financePaths = [
+    '/dashboard',
     '/transactions',
     '/wallets',
     '/ownership',
