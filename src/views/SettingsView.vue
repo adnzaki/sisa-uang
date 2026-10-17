@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, nextTick } from 'vue';
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink, useRouter, useRoute } from 'vue-router';
 import {
@@ -152,10 +152,26 @@ const customDeviceLabel = ref(
     : ''
 );
 
+let sessionsPollInterval: ReturnType<typeof setInterval> | null = null;
+
 onMounted(() => {
   themeStore.loadReportSignatureConfig(authStore.user?.uid);
   void authStore.fetchDeviceSessions();
   checkAndScrollToSection();
+
+  // Periodically keep sessions fresh while on settings page so other devices appear automatically
+  sessionsPollInterval = setInterval(() => {
+    if (authStore.user?.uid && typeof document !== 'undefined' && document.visibilityState === 'visible') {
+      void authStore.fetchDeviceSessions(true);
+    }
+  }, 10000);
+});
+
+onUnmounted(() => {
+  if (sessionsPollInterval) {
+    clearInterval(sessionsPollInterval);
+    sessionsPollInterval = null;
+  }
 });
 
 watch(
@@ -300,6 +316,13 @@ async function handleVerifyPrimaryOtp() {
   if (ok) {
     primaryOtpInput.value = '';
   }
+}
+
+async function handleManualRefreshSessions() {
+  if (authStore.user) {
+    await authStore.registerCurrentDeviceSession(authStore.user, false);
+  }
+  await authStore.fetchDeviceSessions();
 }
 
 async function handleRevokeSession(targetDeviceId: string, deviceName: string) {
@@ -1074,7 +1097,7 @@ function handleGoToAddAccount() {
             type="button"
             :disabled="authStore.isSessionsLoading"
             class="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-600 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
-            @click="authStore.fetchDeviceSessions()"
+            @click="handleManualRefreshSessions"
           >
             <RefreshCw class="w-3.5 h-3.5" :class="authStore.isSessionsLoading ? 'animate-spin' : ''" />
             <span>Segarkan Sesi</span>
