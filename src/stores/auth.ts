@@ -381,15 +381,18 @@ export const useAuthStore = defineStore('auth', () => {
       const { data } = await apiClient.get(
         `/users/${encodeURIComponent(user.value.uid)}/sessions`,
         {
-          params: { deviceId: currentDeviceId.value },
+          params: {
+            deviceId: currentDeviceId.value,
+            email: user.value.email,
+          },
         }
       );
       if (Array.isArray(data?.sessions)) {
         deviceSessions.value = data.sessions;
       }
-      // If no session registered yet on server (e.g. server restarted), register current device automatically
+      // If current device session was not registered yet on server (e.g. server restarted), register automatically
       if (!data?.currentSession && user.value) {
-        await registerCurrentDeviceSession(user.value, true);
+        await registerCurrentDeviceSession(user.value, false);
       }
     } catch {
       // Ignore network error
@@ -501,7 +504,10 @@ export const useAuthStore = defineStore('auth', () => {
       const { data } = await apiClient.delete(
         `/users/${encodeURIComponent(user.value.uid)}/sessions/${encodeURIComponent(targetDeviceId)}`,
         {
-          params: { actorDeviceId: currentDeviceId.value },
+          params: {
+            actorDeviceId: currentDeviceId.value,
+            email: user.value.email,
+          },
         }
       );
       if (Array.isArray(data?.sessions)) {
@@ -534,6 +540,7 @@ export const useAuthStore = defineStore('auth', () => {
         `/users/${encodeURIComponent(user.value.uid)}/sessions/revoke-others`,
         {
           actorDeviceId: currentDeviceId.value,
+          email: user.value.email,
         }
       );
       if (Array.isArray(data?.sessions)) {
@@ -889,6 +896,9 @@ export const useAuthStore = defineStore('auth', () => {
           );
           await logout(true);
           return;
+        }
+        if (data.sessionFound === false && user.value) {
+          void registerCurrentDeviceSession(user.value, false);
         }
         if (data.status === 'blocked' && user.value.status !== 'blocked') {
           user.value.status = 'blocked';
@@ -1266,6 +1276,23 @@ export const useAuthStore = defineStore('auth', () => {
       }
       isReady.value = true;
     });
+
+    // Auto-sync session and active devices when tab gains visibility or window focuses (e.g., user returns to Chrome laptop)
+    if (typeof window !== 'undefined' && !(window as any).__sisa_uang_visibility_bound) {
+      (window as any).__sisa_uang_visibility_bound = true;
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && user.value) {
+          void registerCurrentDeviceSession(user.value, false);
+          void fetchDeviceSessions(true);
+        }
+      });
+      window.addEventListener('focus', () => {
+        if (user.value) {
+          void registerCurrentDeviceSession(user.value, false);
+          void fetchDeviceSessions(true);
+        }
+      });
+    }
   }
 
   /**

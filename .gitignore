@@ -10,4 +10,5 @@ package-lock.json
 dev-dist/
 .sisa_uang_logs_cache.json
 .sisa_uang_users_cache.json
+.sisa_uang_sessions_cache.json
 bun.lock

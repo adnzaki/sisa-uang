@@ -1538,31 +1538,162 @@ async function startServer() {
     });
   });
 
-  // Check current user status (used for real-time blocking enforcement)
-  app.get('/api/users/:uid/status', (req: Request, res: Response) => {
-    const uid = String(req.params.uid || '');
-    const email = String(req.query.email || '').toLowerCase();
-    const deviceId = String(req.query.deviceId || '').trim();
+  // Helper to parse User-Agent
+  function parseUserAgentInfo(uaRaw: string): {
+    browser: string;
+    os: string;
+    deviceType: 'desktop' | 'mobile' | 'tablet';
+    defaultName: string;
+  } {
+    const ua = uaRaw || '';
+    let browser = 'Browser Web';
+    if (/Edg\//i.test(ua)) browser = 'Microsoft Edge';
+    else if (/OPR\/|Opera/i.test(ua)) browser = 'Opera';
+    else if (/Chrome\//i.test(ua) && !/Edg\//i.test(ua)) browser = 'Google Chrome';
+    else if (/Firefox\//i.test(ua)) browser = 'Mozilla Firefox';
+    else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Apple Safari';
 
-    let sessionRevoked = false;
-    let isPrimaryDevice = false;
-    if (uid && deviceId) {
-      const sessionId = `${uid}__${deviceId}`;
-      const existingSession = deviceSessionsStore.get(sessionId);
-      if (existingSession) {
-        if (existingSession.status === 'revoked') {
-          sessionRevoked = true;
-        } else {
-          existingSession.lastActiveAt = nowIso();
-          isPrimaryDevice = existingSession.isPrimary;
+    let os = 'Perangkat';
+    if (/Windows NT/i.test(ua)) os = 'Windows';
+    else if (/Android/i.test(ua)) os = 'Android';
+    else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+    else if (/Mac OS X|Macintosh/i.test(ua)) os = 'macOS';
+    else if (/Linux/i.test(ua)) os = 'Linux';
+
+    let deviceType: 'desktop' | 'mobile' | 'tablet' = 'desktop';
+    if (/iPad|Tablet/i.test(ua)) deviceType = 'tablet';
+    else if (/Mobile|Android|iPhone|iPod/i.test(ua)) deviceType = 'mobile';
+
+    return {
+      browser,
+      os,
+      deviceType,
+      defaultName: `${browser} di ${os}`,
+    };
+  }
+
+  function extractClientIp(req: Request): string {
+    const xff = req.headers['x-forwarded-for'];
+    const rawIp = Array.isArray(xff)
+      ? xff[0]
+      : typeof xff === 'string'
+        ? xff.split(',')[0].trim()
+        : req.socket.remoteAddress || '127.0.0.1';
+    return rawIp.replace(/^::ffff:/, '') || '127.0.0.1';
+  }
+
+  // Helper to resolve user identities (UIDs and canonical email) across store and sessions
+  function resolveUserIdentities(targetUid?: string, targetEmail?: string): {
+    uids: Set<string>;
+    email: string;
+  } {
+    const uids = new Set<string>();
+    let email = String(targetEmail || '').trim().toLowerCase();
+    const uid = String(targetUid || '').trim();
+
+    if (uid) {
+      uids.add(uid);
+      const u = usersStore.get(uid);
+      if (u?.email) {
+        email = email || u.email.toLowerCase();
+      }
+    }
+
+    if (email) {
+      for (const u of usersStore.values()) {
+        if (u.email && u.email.toLowerCase() === email) {
+          uids.add(u.uid);
+        }
+      }
+      for (const s of deviceSessionsStore.values()) {
+        if (s.email && s.email.toLowerCase() === email && s.uid) {
+          uids.add(s.uid);
         }
       }
     }
 
+    return { uids, email };
+  }
+
+  function isSessionMatching(
+    s: ServerDeviceSessionRecord,
+    identities: { uids: Set<string>; email: string }
+  ): boolean {
+    if (!s) return false;
+    if (s.uid && identities.uids.has(s.uid)) return true;
+    if (identities.email && s.email && s.email.toLowerCase() === identities.email) return true;
+    return false;
+  }
+
+  // Check current user status (used for real-time blocking enforcement & session keep-alive)
+  app.get('/api/users/:uid/status', (req: Request, res: Response) => {
+    const uid = String(req.params.uid || '').trim();
+    const email = String(req.query.email || '').trim().toLowerCase();
+    const deviceId = String(req.query.deviceId || '').trim();
+    const ua = String(req.headers['user-agent'] || '');
+
+    const identities = resolveUserIdentities(uid, email);
+
+    let sessionRevoked = false;
+    let isPrimaryDevice = false;
+    let sessionFound = false;
+
+    if (uid && deviceId) {
+      const sessionId = `${uid}__${deviceId}`;
+      let session = deviceSessionsStore.get(sessionId);
+      if (!session) {
+        for (const s of deviceSessionsStore.values()) {
+          if (s.deviceId === deviceId && isSessionMatching(s, identities)) {
+            session = s;
+            break;
+          }
+        }
+      }
+
+      const clientIp = extractClientIp(req);
+      const now = nowIso();
+
+      if (session) {
+        sessionFound = true;
+        if (session.status === 'revoked') {
+          sessionRevoked = true;
+        } else {
+          session.lastActiveAt = now;
+          session.ipAddress = clientIp;
+          isPrimaryDevice = Boolean(session.isPrimary);
+          savePersistedSessionsCache();
+        }
+      } else {
+        // AUTO-HEAL: If an active device is polling /status, automatically ensure it is registered in session store
+        const parsedUa = parseUserAgentInfo(ua);
+        const autoSession: ServerDeviceSessionRecord = {
+          sessionId,
+          uid,
+          email: email || identities.email || 'user@sisa-uang.id',
+          deviceId,
+          deviceName: parsedUa.defaultName,
+          browser: parsedUa.browser,
+          os: parsedUa.os,
+          deviceType: parsedUa.deviceType,
+          ipAddress: clientIp,
+          isPrimary: false,
+          status: 'active',
+          revokedAt: null,
+          revokedByDeviceId: null,
+          createdAt: now,
+          lastActiveAt: now,
+        };
+        deviceSessionsStore.set(autoSession.sessionId, autoSession);
+        savePersistedSessionsCache();
+        sessionFound = true;
+      }
+    }
+
     let user = usersStore.get(uid);
-    if (!user && email) {
+    if (!user && (email || identities.email)) {
+      const targetEmail = email || identities.email;
       for (const u of usersStore.values()) {
-        if (u.email.toLowerCase() === email) {
+        if (u.email.toLowerCase() === targetEmail) {
           user = u;
           break;
         }
@@ -1579,6 +1710,7 @@ async function startServer() {
         subscriptionExpiresAt: null,
         sessionRevoked,
         isPrimaryDevice,
+        sessionFound,
       });
       return;
     }
@@ -1597,6 +1729,7 @@ async function startServer() {
       updatedAt: user.updatedAt,
       sessionRevoked,
       isPrimaryDevice,
+      sessionFound,
     });
   });
 
@@ -1670,49 +1803,6 @@ async function startServer() {
   // Device & Session Management Endpoints (/api/users/:uid/sessions/*)
   // =========================================================================
 
-  function parseUserAgentInfo(uaRaw: string): {
-    browser: string;
-    os: string;
-    deviceType: 'desktop' | 'mobile' | 'tablet';
-    defaultName: string;
-  } {
-    const ua = uaRaw || '';
-    let browser = 'Browser Web';
-    if (/Edg\//i.test(ua)) browser = 'Microsoft Edge';
-    else if (/OPR\/|Opera/i.test(ua)) browser = 'Opera';
-    else if (/Chrome\//i.test(ua) && !/Edg\//i.test(ua)) browser = 'Google Chrome';
-    else if (/Firefox\//i.test(ua)) browser = 'Mozilla Firefox';
-    else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Apple Safari';
-
-    let os = 'Perangkat';
-    if (/Windows NT/i.test(ua)) os = 'Windows';
-    else if (/Android/i.test(ua)) os = 'Android';
-    else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
-    else if (/Mac OS X|Macintosh/i.test(ua)) os = 'macOS';
-    else if (/Linux/i.test(ua)) os = 'Linux';
-
-    let deviceType: 'desktop' | 'mobile' | 'tablet' = 'desktop';
-    if (/iPad|Tablet/i.test(ua)) deviceType = 'tablet';
-    else if (/Mobile|Android|iPhone|iPod/i.test(ua)) deviceType = 'mobile';
-
-    return {
-      browser,
-      os,
-      deviceType,
-      defaultName: `${browser} di ${os}`,
-    };
-  }
-
-  function extractClientIp(req: Request): string {
-    const xff = req.headers['x-forwarded-for'];
-    const rawIp = Array.isArray(xff)
-      ? xff[0]
-      : typeof xff === 'string'
-        ? xff.split(',')[0].trim()
-        : req.socket.remoteAddress || '127.0.0.1';
-    return rawIp.replace(/^::ffff:/, '') || '127.0.0.1';
-  }
-
   // Register or refresh a device session on login / switch / app boot
   app.post('/api/users/:uid/sessions/register', (req: Request, res: Response) => {
     const uid = String(req.params.uid || '').trim();
@@ -1735,16 +1825,27 @@ async function startServer() {
       return;
     }
 
+    const identities = resolveUserIdentities(uid, email);
     const sessionId = `${uid}__${deviceId}`;
-    const existing = deviceSessionsStore.get(sessionId);
     const now = nowIso();
     const ipAddress = extractClientIp(req);
+
+    // Look for existing session either by sessionId or deviceId matching this user
+    let existing: ServerDeviceSessionRecord | undefined = deviceSessionsStore.get(sessionId);
+    if (!existing) {
+      for (const s of deviceSessionsStore.values()) {
+        if (s.deviceId === deviceId && isSessionMatching(s, identities)) {
+          existing = s;
+          break;
+        }
+      }
+    }
 
     if (existing) {
       // If session was revoked and this is NOT an explicit fresh login, report revoked so client logs out
       if (existing.status === 'revoked' && !forceNewLogin) {
         const userSessions = Array.from(deviceSessionsStore.values()).filter(
-          (s) => s.uid === uid && s.status === 'active'
+          (s) => s.status === 'active' && isSessionMatching(s, identities)
         );
         res.json({
           session: existing,
@@ -1757,7 +1858,8 @@ async function startServer() {
       existing.status = 'active';
       existing.revokedAt = null;
       existing.revokedByDeviceId = null;
-      existing.email = email || existing.email;
+      existing.uid = uid;
+      existing.email = email || existing.email || identities.email;
       existing.deviceName = customDeviceName ? deviceName : existing.deviceName || deviceName;
       existing.browser = browser;
       existing.os = os;
@@ -1769,7 +1871,7 @@ async function startServer() {
       const record: ServerDeviceSessionRecord = {
         sessionId,
         uid,
-        email: email || 'user@sisa-uang.id',
+        email: email || identities.email || 'user@sisa-uang.id',
         deviceId,
         deviceName,
         browser,
@@ -1788,14 +1890,14 @@ async function startServer() {
     }
 
     const activeSessions = Array.from(deviceSessionsStore.values())
-      .filter((s) => s.uid === uid && s.status === 'active')
+      .filter((s) => s.status === 'active' && isSessionMatching(s, identities))
       .sort((a, b) => {
         if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
         return String(b.lastActiveAt).localeCompare(String(a.lastActiveAt));
       });
 
     res.json({
-      session: deviceSessionsStore.get(sessionId),
+      session: deviceSessionsStore.get(sessionId) || existing,
       revoked: false,
       sessions: activeSessions,
     });
@@ -1805,26 +1907,36 @@ async function startServer() {
   app.get('/api/users/:uid/sessions', (req: Request, res: Response) => {
     const uid = String(req.params.uid || '').trim();
     const deviceId = String(req.query.deviceId || '').trim();
+    const emailQuery = String(req.query.email || '').trim().toLowerCase();
+    const identities = resolveUserIdentities(uid, emailQuery);
 
-    if (uid && deviceId) {
-      const current = deviceSessionsStore.get(`${uid}__${deviceId}`);
-      if (current && current.status === 'active') {
-        current.lastActiveAt = nowIso();
+    if (deviceId) {
+      for (const s of deviceSessionsStore.values()) {
+        if (s.deviceId === deviceId && isSessionMatching(s, identities)) {
+          if (s.status === 'active') {
+            s.lastActiveAt = nowIso();
+            s.ipAddress = extractClientIp(req);
+          }
+        }
       }
     }
 
     const activeSessions = Array.from(deviceSessionsStore.values())
-      .filter((s) => s.uid === uid && s.status === 'active')
+      .filter((s) => s.status === 'active' && isSessionMatching(s, identities))
       .sort((a, b) => {
         if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
         return String(b.lastActiveAt).localeCompare(String(a.lastActiveAt));
       });
 
-    const currentSession = deviceId ? deviceSessionsStore.get(`${uid}__${deviceId}`) : null;
+    let currentSession = deviceId
+      ? Array.from(deviceSessionsStore.values()).find(
+          (s) => s.deviceId === deviceId && s.status === 'active' && isSessionMatching(s, identities)
+        )
+      : null;
 
     res.json({
       sessions: activeSessions,
-      currentSession,
+      currentSession: currentSession || null,
       hasPrimaryDevice: activeSessions.some((s) => s.isPrimary),
     });
   });
@@ -1834,8 +1946,8 @@ async function startServer() {
     const uid = String(req.params.uid || '').trim();
     const deviceId = String(req.body?.deviceId || '').trim();
     const rawEmail = String(req.body?.email || '').trim().toLowerCase();
-    const userRecord = usersStore.get(uid);
-    const targetEmail = (rawEmail || userRecord?.email || '').trim().toLowerCase();
+    const identities = resolveUserIdentities(uid, rawEmail);
+    const targetEmail = (rawEmail || identities.email || '').trim().toLowerCase();
 
     if (!uid || !deviceId || !targetEmail) {
       res.status(400).json({
@@ -1846,6 +1958,15 @@ async function startServer() {
 
     const sessionId = `${uid}__${deviceId}`;
     let session = deviceSessionsStore.get(sessionId);
+    if (!session) {
+      for (const s of deviceSessionsStore.values()) {
+        if (s.deviceId === deviceId && isSessionMatching(s, identities)) {
+          session = s;
+          break;
+        }
+      }
+    }
+
     if (!session) {
       const ua = String(req.headers['user-agent'] || '');
       const parsedUa = parseUserAgentInfo(ua);
@@ -1928,7 +2049,16 @@ async function startServer() {
     }
 
     const sessionId = `${uid}__${deviceId}`;
-    const challenge = primaryDeviceOtpChallenges.get(sessionId);
+    let challenge = primaryDeviceOtpChallenges.get(sessionId);
+    if (!challenge) {
+      for (const [key, c] of primaryDeviceOtpChallenges.entries()) {
+        if (c.deviceId === deviceId) {
+          challenge = c;
+          primaryDeviceOtpChallenges.delete(key);
+          break;
+        }
+      }
+    }
 
     if (!challenge) {
       res.status(400).json({
@@ -1955,9 +2085,11 @@ async function startServer() {
 
     primaryDeviceOtpChallenges.delete(sessionId);
 
+    const identities = resolveUserIdentities(uid, challenge.email);
+
     // Demote any previous primary device for this user and promote the verified device
     for (const s of deviceSessionsStore.values()) {
-      if (s.uid === uid) {
+      if (isSessionMatching(s, identities)) {
         s.isPrimary = s.deviceId === deviceId;
         if (s.deviceId === deviceId) {
           s.status = 'active';
@@ -1967,7 +2099,16 @@ async function startServer() {
     }
     savePersistedSessionsCache();
 
-    const targetSession = deviceSessionsStore.get(sessionId);
+    let targetSession = deviceSessionsStore.get(sessionId);
+    if (!targetSession) {
+      for (const s of deviceSessionsStore.values()) {
+        if (s.deviceId === deviceId && isSessionMatching(s, identities)) {
+          targetSession = s;
+          break;
+        }
+      }
+    }
+
     appendLog(
       uid,
       challenge.email,
@@ -1977,7 +2118,7 @@ async function startServer() {
     );
 
     const activeSessions = Array.from(deviceSessionsStore.values())
-      .filter((s) => s.uid === uid && s.status === 'active')
+      .filter((s) => s.status === 'active' && isSessionMatching(s, identities))
       .sort((a, b) => {
         if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
         return String(b.lastActiveAt).localeCompare(String(a.lastActiveAt));
@@ -1996,14 +2137,23 @@ async function startServer() {
     const uid = String(req.params.uid || '').trim();
     const targetDeviceId = String(req.params.targetDeviceId || '').trim();
     const actorDeviceId = String(req.query.actorDeviceId || req.body?.actorDeviceId || '').trim();
+    const email = String(req.query.email || req.body?.email || '').trim().toLowerCase();
+    const identities = resolveUserIdentities(uid, email);
 
     if (!uid || !targetDeviceId) {
       res.status(400).json({ error: 'Parameter sesi perangkat tidak lengkap.' });
       return;
     }
 
-    const targetSessionId = `${uid}__${targetDeviceId}`;
-    const targetSession = deviceSessionsStore.get(targetSessionId);
+    // Find target session by targetDeviceId belonging to this user
+    let targetSession: ServerDeviceSessionRecord | undefined;
+    for (const s of deviceSessionsStore.values()) {
+      if (s.deviceId === targetDeviceId && isSessionMatching(s, identities)) {
+        targetSession = s;
+        break;
+      }
+    }
+
     if (!targetSession) {
       res.status(404).json({ error: 'Sesi perangkat tidak ditemukan.' });
       return;
@@ -2011,7 +2161,14 @@ async function startServer() {
 
     // If revoking a different device, verify that the actor device is the verified Primary Device!
     if (actorDeviceId !== targetDeviceId) {
-      const actorSession = deviceSessionsStore.get(`${uid}__${actorDeviceId}`);
+      let actorSession: ServerDeviceSessionRecord | undefined;
+      for (const s of deviceSessionsStore.values()) {
+        if (s.deviceId === actorDeviceId && isSessionMatching(s, identities)) {
+          actorSession = s;
+          break;
+        }
+      }
+
       if (!actorSession || !actorSession.isPrimary || actorSession.status !== 'active') {
         res.status(403).json({
           error:
@@ -2036,7 +2193,7 @@ async function startServer() {
     );
 
     const activeSessions = Array.from(deviceSessionsStore.values())
-      .filter((s) => s.uid === uid && s.status === 'active')
+      .filter((s) => s.status === 'active' && isSessionMatching(s, identities))
       .sort((a, b) => {
         if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
         return String(b.lastActiveAt).localeCompare(String(a.lastActiveAt));
@@ -2052,13 +2209,22 @@ async function startServer() {
   app.post('/api/users/:uid/sessions/revoke-others', (req: Request, res: Response) => {
     const uid = String(req.params.uid || '').trim();
     const actorDeviceId = String(req.body?.actorDeviceId || '').trim();
+    const email = String(req.body?.email || req.query.email || '').trim().toLowerCase();
+    const identities = resolveUserIdentities(uid, email);
 
     if (!uid || !actorDeviceId) {
       res.status(400).json({ error: 'UID dan Actor Device ID wajib disertakan.' });
       return;
     }
 
-    const actorSession = deviceSessionsStore.get(`${uid}__${actorDeviceId}`);
+    let actorSession: ServerDeviceSessionRecord | undefined;
+    for (const s of deviceSessionsStore.values()) {
+      if (s.deviceId === actorDeviceId && isSessionMatching(s, identities)) {
+        actorSession = s;
+        break;
+      }
+    }
+
     if (!actorSession || !actorSession.isPrimary || actorSession.status !== 'active') {
       res.status(403).json({
         error:
@@ -2070,7 +2236,7 @@ async function startServer() {
     let revokedCount = 0;
     const now = nowIso();
     for (const s of deviceSessionsStore.values()) {
-      if (s.uid === uid && s.deviceId !== actorDeviceId && s.status === 'active') {
+      if (isSessionMatching(s, identities) && s.deviceId !== actorDeviceId && s.status === 'active') {
         s.status = 'revoked';
         s.isPrimary = false;
         s.revokedAt = now;
@@ -2091,7 +2257,7 @@ async function startServer() {
     }
 
     const activeSessions = Array.from(deviceSessionsStore.values())
-      .filter((s) => s.uid === uid && s.status === 'active')
+      .filter((s) => s.status === 'active' && isSessionMatching(s, identities))
       .sort((a, b) => {
         if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
         return String(b.lastActiveAt).localeCompare(String(a.lastActiveAt));
@@ -2102,6 +2268,7 @@ async function startServer() {
       sessions: activeSessions,
     });
   });
+
 
   // Submit SisaUang Pro Payment Proof (QRIS / Bank Transfer) -> Sends email to vuedevo@gmail.com & sets status to 'pending'
   app.post('/api/users/:uid/subscription-payment', async (req: Request, res: Response) => {
