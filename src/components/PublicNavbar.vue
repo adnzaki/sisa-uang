@@ -13,7 +13,7 @@ import {
 } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useThemeStore } from '../stores/theme';
-import { scrollToPageTop } from '../utils/scroll';
+import { scrollToPageTop, scrollToElement } from '../utils/scroll';
 
 const emit = defineEmits<{
   (e: 'open-checkout', plan?: 'monthly' | 'yearly'): void;
@@ -30,12 +30,28 @@ function triggerCheckout() {
   mobileMenuOpen.value = false;
 }
 
-function handleNavClick() {
+function navigateToSection(sectionId: 'features' | 'pricing') {
+  mobileMenuOpen.value = false;
+  const currentPath = router.currentRoute.value.path;
+  const isLanding = currentPath === '/' || currentPath === '/landing';
+
+  if (isLanding) {
+    if (scrollToElement(sectionId, 'smooth', 70)) {
+      history.pushState(null, '', `/#${sectionId}`);
+      return;
+    }
+  }
+
+  router.push({ path: '/', hash: `#${sectionId}` }).then(() => {
+    requestAnimationFrame(() => scrollToElement(sectionId, 'smooth', 70));
+    setTimeout(() => scrollToElement(sectionId, 'smooth', 70), 80);
+    setTimeout(() => scrollToElement(sectionId, 'smooth', 70), 250);
+  });
+}
+
+function handlePageNavClick() {
   mobileMenuOpen.value = false;
   scrollToPageTop('instant');
-  requestAnimationFrame(() => {
-    scrollToPageTop('instant');
-  });
 }
 </script>
 
@@ -64,37 +80,37 @@ function handleNavClick() {
 
         <!-- Desktop Navigation Links -->
         <nav class="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-300">
-          <RouterLink
-            to="/#features"
-            @click="handleNavClick"
-            class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
+          <a
+            href="/#features"
+            @click.prevent="navigateToSection('features')"
+            class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer"
           >
             Fitur
-          </RouterLink>
-          <RouterLink
-            to="/pricing"
-            @click="handleNavClick"
-            class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
+          </a>
+          <a
+            href="/#pricing"
+            @click.prevent="navigateToSection('pricing')"
+            class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer"
           >
             Paket Harga (IDR)
-          </RouterLink>
+          </a>
           <RouterLink
             to="/terms"
-            @click="handleNavClick"
+            @click="handlePageNavClick"
             class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
           >
             Syarat & Ketentuan
           </RouterLink>
           <RouterLink
             to="/refund-policy"
-            @click="handleNavClick"
+            @click="handlePageNavClick"
             class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
           >
             Kebijakan Refund
           </RouterLink>
           <RouterLink
             to="/contact"
-            @click="handleNavClick"
+            @click="handlePageNavClick"
             class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
           >
             Hubungi Kami
@@ -162,45 +178,45 @@ function handleNavClick() {
       class="md:hidden border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 pt-2 pb-5 space-y-3"
     >
       <nav class="flex flex-col space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-        <RouterLink
-          to="/#features"
-          class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-          @click="handleNavClick"
+        <a
+          href="/#features"
+          class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer block text-sm font-medium text-slate-700 dark:text-slate-200"
+          @click.prevent="navigateToSection('features')"
         >
           Fitur Utama
-        </RouterLink>
-        <RouterLink
-          to="/pricing"
-          class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-          @click="handleNavClick"
+        </a>
+        <a
+          href="/#pricing"
+          class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer block text-sm font-medium text-slate-700 dark:text-slate-200"
+          @click.prevent="navigateToSection('pricing')"
         >
           Paket Harga Resmi (IDR)
-        </RouterLink>
+        </a>
         <RouterLink
           to="/terms"
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-          @click="handleNavClick"
+          @click="handlePageNavClick"
         >
           Syarat & Ketentuan Lisensi
         </RouterLink>
         <RouterLink
           to="/refund-policy"
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-          @click="handleNavClick"
+          @click="handlePageNavClick"
         >
           Kebijakan Pengembalian Dana
         </RouterLink>
         <RouterLink
           to="/privacy"
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-          @click="handleNavClick"
+          @click="handlePageNavClick"
         >
           Kebijakan Privasi
         </RouterLink>
         <RouterLink
           to="/contact"
           class="px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-          @click="handleNavClick"
+          @click="handlePageNavClick"
         >
           Hubungi Kami & WhatsApp
         </RouterLink>

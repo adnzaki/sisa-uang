@@ -593,8 +593,17 @@ export function parsePhpMyAdminJson(rawJsonText: string): ParsedPhpMyAdminTable[
       upsertTable('transactions', defaultDbName, parsed);
     }
   } else if (parsed && typeof parsed === 'object') {
-    // Check if top-level has a `tables` array or `data` array
-    if (Array.isArray(parsed.tables)) {
+    // Check if this is a SisaUang Native Full Database Backup payload ({ _metadata: ..., data: { [collection]: [...] } })
+    if (parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)) {
+      if (parsed._metadata?.databaseId) {
+        defaultDbName = String(parsed._metadata.databaseId);
+      }
+      for (const [colName, colDocs] of Object.entries(parsed.data)) {
+        if (Array.isArray(colDocs)) {
+          upsertTable(colName, defaultDbName, colDocs);
+        }
+      }
+    } else if (Array.isArray(parsed.tables)) {
       for (const t of parsed.tables) {
         const tblName = t?.name || t?.table || t?.tableName;
         if (tblName) {

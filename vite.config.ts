@@ -1,14 +1,66 @@
 import tailwindcss from '@tailwindcss/vite';
 import vue from '@vitejs/plugin-vue';
+import fs from 'fs';
 import path from 'path';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { PRERENDERED_PAGES } from './src/prerender/pages';
+import { injectPrerenderedHtml } from './src/prerender/injector';
+
+function ssgPrerenderPlugin() {
+  return {
+    name: 'vite-plugin-sisauang-ssg-prerender',
+    transformIndexHtml(html: string) {
+      const landingData = PRERENDERED_PAGES['/'] || PRERENDERED_PAGES['/landing'];
+      if (landingData) {
+        return injectPrerenderedHtml(html, landingData);
+      }
+      return html;
+    },
+    closeBundle() {
+      const distDir = path.resolve(__dirname, 'dist');
+      const indexHtmlPath = path.join(distDir, 'index.html');
+      if (!fs.existsSync(indexHtmlPath)) return;
+
+      const template = fs.readFileSync(indexHtmlPath, 'utf8');
+
+      // Ensure un-injected SPA app shell is saved as app-shell.html
+      const appShellPath = path.join(distDir, 'app-shell.html');
+      const cleanShell = template.replace(/<div id="app">[\s\S]*?<\/div>/i, '<div id="app"></div>');
+      fs.writeFileSync(appShellPath, cleanShell, 'utf8');
+
+      // Generate all sub-routes (pricing, terms, refund-policy, privacy, contact)
+      for (const [routePath, pageData] of Object.entries(PRERENDERED_PAGES)) {
+        const cleanRoute = routePath.replace(/^\//, '');
+        if (!cleanRoute) continue;
+
+        const folder = path.join(distDir, cleanRoute);
+        if (!fs.existsSync(folder)) {
+          fs.mkdirSync(folder, { recursive: true });
+        }
+        const outputHtml = injectPrerenderedHtml(template, pageData);
+        fs.writeFileSync(path.join(folder, 'index.html'), outputHtml, 'utf8');
+      }
+
+      // Ensure /landing directory also contains the landing page
+      const landingData = PRERENDERED_PAGES['/'] || PRERENDERED_PAGES['/landing'];
+      if (landingData) {
+        const landingFolder = path.join(distDir, 'landing');
+        if (!fs.existsSync(landingFolder)) {
+          fs.mkdirSync(landingFolder, { recursive: true });
+        }
+        fs.writeFileSync(path.join(landingFolder, 'index.html'), injectPrerenderedHtml(template, landingData), 'utf8');
+      }
+    },
+  };
+}
 
 export default defineConfig(() => {
   return {
     plugins: [
       vue(),
       tailwindcss(),
+      ssgPrerenderPlugin(),
       VitePWA({
         registerType: 'prompt',
         includeAssets: [

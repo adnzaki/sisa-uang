@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, watch, nextTick } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
 import {
   Wallet,
@@ -26,16 +26,42 @@ import PublicNavbar from '../components/PublicNavbar.vue';
 import PublicFooter from '../components/PublicFooter.vue';
 import InSiteCheckoutModal from '../components/InSiteCheckoutModal.vue';
 import { useAuthStore } from '../stores/auth';
-import { scrollToPageTop } from '../utils/scroll';
+import { scrollToPageTop, scrollToElement } from '../utils/scroll';
 
 const route = useRoute();
 const authStore = useAuthStore();
 
-onMounted(() => {
-  if (!route.hash) {
+function scrollToTargetSection(targetId: string, smooth = true): boolean {
+  return scrollToElement(targetId, smooth ? 'smooth' : 'instant', 70);
+}
+
+function handleRouteSectionScroll() {
+  const hash = route.hash ? route.hash.replace(/^#/, '') : '';
+  const targetId = route.path === '/pricing' ? 'pricing' : hash;
+
+  if (targetId === 'features' || targetId === 'pricing' || targetId === 'faq') {
+    nextTick(() => {
+      setTimeout(() => {
+        if (!scrollToTargetSection(targetId, true)) {
+          setTimeout(() => scrollToTargetSection(targetId, false), 150);
+        }
+      }, 50);
+    });
+  } else if (!route.hash && route.path !== '/pricing') {
     scrollToPageTop('instant');
   }
+}
+
+onMounted(() => {
+  handleRouteSectionScroll();
 });
+
+watch(
+  () => [route.path, route.hash],
+  () => {
+    handleRouteSectionScroll();
+  }
+);
 
 const checkoutModalOpen = ref(false);
 const activePlanForCheckout = ref<'monthly' | 'yearly'>('yearly');
@@ -216,7 +242,7 @@ const faqs = [
       </section>
 
       <!-- 2. CORE FEATURES SHOWCASE -->
-      <section id="features" class="py-16 md:py-24 border-b border-slate-200/60 dark:border-slate-800/60">
+      <section id="features" class="scroll-mt-20 py-16 md:py-24 border-b border-slate-200/60 dark:border-slate-800/60">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div class="text-center max-w-2xl mx-auto space-y-3">
             <h2 class="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
@@ -313,7 +339,7 @@ const faqs = [
       </section>
 
       <!-- 3. PRICING SECTION (100% IDR COMPLIANT FOR MIDTRANS) -->
-      <section id="pricing" class="py-16 md:py-24 border-b border-slate-200/60 dark:border-slate-800/60 bg-slate-100/50 dark:bg-slate-900/40">
+      <section id="pricing" class="scroll-mt-20 py-16 md:py-24 border-b border-slate-200/60 dark:border-slate-800/60 bg-slate-100/50 dark:bg-slate-900/40">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div class="text-center max-w-2xl mx-auto space-y-3">
             <h2 class="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
@@ -477,7 +503,7 @@ const faqs = [
       </section>
 
       <!-- 4. FAQ SECTION -->
-      <section class="py-16 md:py-24 border-b border-slate-200/60 dark:border-slate-800/60">
+      <section id="faq" class="scroll-mt-20 py-16 md:py-24 border-b border-slate-200/60 dark:border-slate-800/60">
         <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
           <div class="text-center max-w-xl mx-auto space-y-3 mb-10">
             <h2 class="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">

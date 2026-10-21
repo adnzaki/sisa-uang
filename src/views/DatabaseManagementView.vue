@@ -31,10 +31,21 @@ import {
   Eye,
   ChevronLeft,
   ChevronRight,
+  Download,
+  FileSpreadsheet,
+  HardDrive,
+  Clock,
 } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useAdminStore } from '../stores/admin';
 import { useNotificationStore } from '../stores/notification';
+import {
+  downloadJsonFile,
+  downloadCsvFile,
+  getBackupTimestampSlug,
+  type FullDatabaseBackupPayload,
+  type SingleCollectionBackupPayload,
+} from '../utils/databaseExport';
 import {
   parsePhpMyAdminJson,
   buildJsonMigrationAnalysis,
@@ -528,6 +539,347 @@ async function copyInspectingDocJson() {
 }
 
 // =========================================================================
+// FITUR EKSPOR & BACKUP DATABASE RUTIN (Cloud Firestore: sisa-uang)
+// =========================================================================
+const showExportModal = ref<boolean>(false);
+const exportScope = ref<'full' | 'custom' | 'current' | 'filtered'>('full');
+const exportFormat = ref<'json' | 'csv'>('json');
+const exportIncludeSoftDeleted = ref<boolean>(true);
+const isExporting = ref<boolean>(false);
+const exportProgress = ref<{
+  current: number;
+  total: number;
+  collectionName: string;
+  docCount: number;
+} | null>(null);
+
+// Available collections for export (combination of known schema + live firestore stats)
+const availableExportCollections = computed(() => {
+  const map = new Map<string, { name: string; label: string; count: number }>();
+  EXPLORER_COLLECTIONS.forEach((col) => {
+    const stat = firestoreCollectionsStats.value.find((s) => s.collectionName === col.name);
+    map.set(col.name, {
+      name: col.name,
+      label: col.label,
+      count: stat?.docCount ?? 0,
+    });
+  });
+  firestoreCollectionsStats.value.forEach((stat) => {
+    if (!map.has(stat.collectionName)) {
+      map.set(stat.collectionName, {
+        name: stat.collectionName,
+        label: stat.label || stat.collectionName,
+        count: stat.docCount ?? 0,
+      });
+    }
+  });
+  return Array.from(map.values());
+});
+
+const selectedExportCollections = ref<string[]>(EXPLORER_COLLECTIONS.map((c) => c.name));
+
+function selectAllExportCollections() {
+  selectedExportCollections.value = availableExportCollections.value.map((c) => c.name);
+}
+
+function deselectAllExportCollections() {
+  selectedExportCollections.value = [];
+}
+
+// Routine backup persistence tracking in localStorage
+const lastRoutineBackupAt = ref<string | null>(localStorage.getItem('sisauang_last_database_backup'));
+const lastRoutineBackupFilename = ref<string | null>(localStorage.getItem('sisauang_last_database_backup_filename'));
+const lastRoutineBackupDocCount = ref<number | null>(
+  parseInt(localStorage.getItem('sisauang_last_database_backup_docs') || '0', 10) || null
+);
+const lastRoutineBackupColsCount = ref<number | null>(
+  parseInt(localStorage.getItem('sisauang_last_database_backup_cols') || '0', 10) || null
+);
+
+const formattedLastRoutineBackup = computed<string>(() => {
+  if (!lastRoutineBackupAt.value) {
+    return 'Belum pernah dicadangkan di peramban ini';
+  }
+  try {
+    const date = new Date(lastRoutineBackupAt.value);
+    const dayStr = date.toLocaleDateString('id-ID', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+    const timeStr = date.toLocaleTimeString('id-ID', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    return `${dayStr}, ${timeStr} WIB`;
+  } catch {
+    return lastRoutineBackupAt.value;
+  }
+});
+
+const isRoutineBackupRecent = computed<boolean>(() => {
+  if (!lastRoutineBackupAt.value) return false;
+  try {
+    const lastTime = new Date(lastRoutineBackupAt.value).getTime();
+    const now = Date.now();
+    return now - lastTime < 24 * 60 * 60 * 1000;
+  } catch {
+    return false;
+  }
+});
+
+function openExportModal(scope: 'full' | 'custom' | 'current' | 'filtered' = 'full') {
+  exportScope.value = scope;
+  if (scope === 'full' || scope === 'custom') {
+    exportFormat.value = 'json';
+  }
+  if (scope === 'custom' && selectedExportCollections.value.length === 0) {
+    selectAllExportCollections();
+  }
+  showExportModal.value = true;
+}
+
+const computedExportFilename = computed<string>(() => {
+  const timeSlug = getBackupTimestampSlug();
+  const ext = exportFormat.value;
+  if (exportScope.value === 'full') {
+    return `backup-sisauang-database-full_${timeSlug}.json`;
+  }
+  if (exportScope.value === 'custom') {
+    return `backup-sisauang-custom_${selectedExportCollections.value.length}-tabel_${timeSlug}.json`;
+  }
+  if (exportScope.value === 'filtered') {
+    return `backup-sisauang-${explorerSelectedCollection.value}-filtered_${timeSlug}.${ext}`;
+  }
+  return `backup-sisauang-${explorerSelectedCollection.value}_${timeSlug}.${ext}`;
+});
+
+async function handleExecuteExport() {
+  if (isExporting.value) return;
+  isExporting.value = true;
+  exportProgress.value = null;
+
+  try {
+    const filename = computedExportFilename.value;
+    const currentUserEmail = authStore.user?.email || 'superadmin@sisa-uang.id';
+
+    if (exportScope.value === 'full' || exportScope.value === 'custom') {
+      const targetCols =
+        exportScope.value === 'full'
+          ? Array.from(
+              new Set([
+                ...EXPLORER_COLLECTIONS.map((c) => c.name),
+                ...firestoreCollectionsStats.value.map((c) => c.collectionName),
+              ])
+            )
+          : selectedExportCollections.value;
+
+      if (targetCols.length === 0) {
+        notificationStore.notifyWarning(
+          'Tidak Ada Koleksi Dipilih',
+          'Silakan pilih minimal 1 tabel/koleksi untuk diekspor.'
+        );
+        isExporting.value = false;
+        return;
+      }
+
+      exportProgress.value = {
+        current: 0,
+        total: targetCols.length,
+        collectionName: 'Menghubungkan ke Cloud Firestore...',
+        docCount: 0,
+      };
+
+      const rawBackupData = await adminStore.fetchAllCollectionsForFullBackup(
+        targetCols,
+        (info) => {
+          exportProgress.value = {
+            current: info.index,
+            total: info.total,
+            collectionName: info.collectionName,
+            docCount: info.docCount,
+          };
+        }
+      );
+
+      // Apply soft-delete filter if unchecked
+      const backupData: Record<string, Record<string, any>[]> = {};
+      const collectionsSummary: Record<string, number> = {};
+      let grandTotalDocs = 0;
+
+      for (const [col, docs] of Object.entries(rawBackupData)) {
+        const finalDocs = exportIncludeSoftDeleted.value
+          ? docs
+          : docs.filter((d) => d.deleted !== true);
+        backupData[col] = finalDocs;
+        collectionsSummary[col] = finalDocs.length;
+        grandTotalDocs += finalDocs.length;
+      }
+
+      const fullPayload: FullDatabaseBackupPayload = {
+        _metadata: {
+          appName: 'SisaUang Platform',
+          appVersion: '1.0.0',
+          exportType: exportScope.value === 'full' ? 'full_database_backup' : ('custom_collections_backup' as any),
+          databaseId: 'sisa-uang',
+          projectId: 'sisa-uang-dfb7b',
+          exportedAt: new Date().toISOString(),
+          exportedBy: currentUserEmail,
+          totalCollections: Object.keys(backupData).length,
+          totalDocuments: grandTotalDocs,
+          collectionsSummary,
+          filtersApplied: {
+            includeSoftDeleted: exportIncludeSoftDeleted.value,
+          } as any,
+        },
+        data: backupData,
+      };
+
+      downloadJsonFile(fullPayload, filename);
+
+      // Record in localStorage for routine backup indicator
+      const nowIso = new Date().toISOString();
+      localStorage.setItem('sisauang_last_database_backup', nowIso);
+      localStorage.setItem('sisauang_last_database_backup_filename', filename);
+      localStorage.setItem('sisauang_last_database_backup_docs', String(grandTotalDocs));
+      localStorage.setItem('sisauang_last_database_backup_cols', String(targetCols.length));
+      lastRoutineBackupAt.value = nowIso;
+      lastRoutineBackupFilename.value = filename;
+      lastRoutineBackupDocCount.value = grandTotalDocs;
+      lastRoutineBackupColsCount.value = targetCols.length;
+
+      await authStore.recordAuditLog(
+        'database_full_backup_exported',
+        `Super Admin (${currentUserEmail}) mengekspor ${
+          exportScope.value === 'full' ? 'Full Database Backup' : 'Custom Backup'
+        } (${grandTotalDocs} dokumen dari ${targetCols.length} koleksi: ${filename}).`,
+        'info'
+      );
+
+      notificationStore.notifySuccess(
+        'Backup Database Berhasil Diunduh',
+        `Berkas backup "${filename}" (${grandTotalDocs.toLocaleString('id-ID')} dokumen dari ${targetCols.length} koleksi) berhasil disimpan.`
+      );
+      showExportModal.value = false;
+    } else if (exportScope.value === 'current') {
+      const colName = explorerSelectedCollection.value;
+      const rawDocs = explorerRawDocs.value;
+      const docs = exportIncludeSoftDeleted.value
+        ? rawDocs
+        : rawDocs.filter((d) => d.deleted !== true);
+
+      if (exportFormat.value === 'csv') {
+        downloadCsvFile(docs, filename, explorerAvailableFields.value);
+      } else {
+        const payload: SingleCollectionBackupPayload = {
+          _metadata: {
+            appName: 'SisaUang Platform',
+            appVersion: '1.0.0',
+            exportType: 'single_collection',
+            databaseId: 'sisa-uang',
+            projectId: 'sisa-uang-dfb7b',
+            exportedAt: new Date().toISOString(),
+            exportedBy: currentUserEmail,
+            totalCollections: 1,
+            totalDocuments: docs.length,
+            collectionsSummary: { [colName]: docs.length },
+          },
+          collection: colName,
+          totalCount: docs.length,
+          documents: docs,
+        };
+        downloadJsonFile(payload, filename);
+      }
+
+      await authStore.recordAuditLog(
+        'collection_backup_exported',
+        `Super Admin (${currentUserEmail}) mengekspor koleksi "${colName}" (${docs.length} dokumen, format ${exportFormat.value.toUpperCase()}: ${filename}).`,
+        'info'
+      );
+
+      notificationStore.notifySuccess(
+        'Ekspor Koleksi Berhasil',
+        `Berkas "${filename}" (${docs.length.toLocaleString('id-ID')} dokumen) berhasil diunduh.`
+      );
+      showExportModal.value = false;
+    } else {
+      const colName = explorerSelectedCollection.value;
+      const filteredDocs = explorerFilteredAndSortedDocs.value;
+      const docs = exportIncludeSoftDeleted.value
+        ? filteredDocs
+        : filteredDocs.filter((d) => d.deleted !== true);
+
+      if (exportFormat.value === 'csv') {
+        downloadCsvFile(docs, filename, explorerAvailableFields.value);
+      } else {
+        const payload: SingleCollectionBackupPayload = {
+          _metadata: {
+            appName: 'SisaUang Platform',
+            appVersion: '1.0.0',
+            exportType: 'filtered_query',
+            databaseId: 'sisa-uang',
+            projectId: 'sisa-uang-dfb7b',
+            exportedAt: new Date().toISOString(),
+            exportedBy: currentUserEmail,
+            totalCollections: 1,
+            totalDocuments: docs.length,
+            collectionsSummary: { [colName]: docs.length },
+            filtersApplied: {
+              collection: colName,
+              searchQuery: explorerGlobalLikeSearch.value || undefined,
+              softDeleteFilter: explorerSoftDeleteFilter.value,
+              whereClauseSql: explorerQuerySummarySql.value,
+              totalFiltered: docs.length,
+              totalUnfiltered: explorerRawDocs.value.length,
+            },
+          },
+          collection: colName,
+          totalCount: docs.length,
+          documents: docs,
+        };
+        downloadJsonFile(payload, filename);
+      }
+
+      await authStore.recordAuditLog(
+        'filtered_query_exported',
+        `Super Admin (${currentUserEmail}) mengekspor hasil query koleksi "${colName}" (${docs.length} dokumen, format ${exportFormat.value.toUpperCase()}: ${filename}).`,
+        'info'
+      );
+
+      notificationStore.notifySuccess(
+        'Ekspor Hasil Query Berhasil',
+        `Berkas "${filename}" (${docs.length.toLocaleString('id-ID')} dokumen) berhasil diunduh.`
+      );
+      showExportModal.value = false;
+    }
+  } catch (err: any) {
+    notificationStore.notifyError(
+      'Gagal Mengekspor Database',
+      err,
+      'Terjadi kendala saat membaca data koleksi Cloud Firestore untuk backup.'
+    );
+  } finally {
+    isExporting.value = false;
+    exportProgress.value = null;
+  }
+}
+
+// 1-Click fast routine backup action directly from the explorer tab banner
+async function handleQuickRoutineBackup() {
+  exportScope.value = 'full';
+  exportFormat.value = 'json';
+  exportIncludeSoftDeleted.value = true;
+  await handleExecuteExport();
+}
+
+function handleQuickExportCurrentResults(format: 'json' | 'csv') {
+  exportScope.value = 'filtered';
+  exportFormat.value = format;
+  void handleExecuteExport();
+}
+
+// =========================================================================
 // TAB 2: Hapus Database (Live Firestore Collections Cleanup / Bulk Delete)
 // =========================================================================
 const firestoreCollectionsStats = ref<
@@ -561,6 +913,7 @@ onMounted(() => {
   if (authStore.isSuperAdmin) {
     if (activeDbTab.value === 'explorer') {
       loadExplorerCollectionDocs(explorerSelectedCollection.value, false);
+      void loadFirestoreCollectionStats(false);
     } else if (activeDbTab.value === 'delete') {
       loadFirestoreCollectionStats(false);
     }
@@ -1211,16 +1564,124 @@ async function confirmAndExecuteImport() {
           </p>
         </div>
 
-        <div class="flex items-center gap-2 shrink-0">
+        <div class="flex flex-wrap items-center gap-2 shrink-0">
           <button
             type="button"
-            :disabled="isLoadingExplorerDocs"
-            class="w-full sm:w-auto min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 hover:border-emerald-500 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+            :disabled="isExporting"
+            class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+            @click="openExportModal('full')"
+          >
+            <Download class="w-4 h-4 shrink-0" />
+            <span>Ekspor / Backup Database</span>
+          </button>
+
+          <button
+            type="button"
+            :disabled="isLoadingExplorerDocs || isExporting"
+            class="w-full sm:w-auto min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 hover:border-emerald-500 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
             @click="loadExplorerCollectionDocs(explorerSelectedCollection, true)"
           >
             <RefreshCw class="w-3.5 h-3.5 shrink-0" :class="isLoadingExplorerDocs ? 'animate-spin text-emerald-600' : ''" />
             <span>Muat Ulang Data</span>
           </button>
+        </div>
+      </div>
+
+      <!-- Routine Database Backup Banner (Sarana Backup Rutin Super Admin) -->
+      <div class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/60 bg-gradient-to-br from-emerald-50/70 via-white to-slate-50 dark:from-emerald-950/25 dark:via-slate-900 dark:to-slate-900 p-4 sm:p-5 relative overflow-hidden shadow-2xs space-y-3">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div class="flex items-start gap-3.5 min-w-0">
+            <div class="p-2.5 rounded-xl bg-emerald-600 text-white shadow-2xs shrink-0 mt-0.5">
+              <HardDrive class="w-5 h-5 shrink-0" />
+            </div>
+            <div class="space-y-1.5 min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-xs font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                  Sarana Backup Rutin Database
+                </span>
+                <span
+                  v-if="isRoutineBackupRecent"
+                  class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300 flex items-center gap-1"
+                >
+                  <CheckCircle2 class="w-3 h-3" />
+                  <span>Sudah Dicadangkan Hari Ini</span>
+                </span>
+                <span
+                  v-else
+                  class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 flex items-center gap-1"
+                >
+                  <AlertTriangle class="w-3 h-3" />
+                  <span>Disarankan Backup Rutin</span>
+                </span>
+              </div>
+              <h3 class="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100">
+                Pencadangan Penuh Cloud Firestore (Database "sisa-uang")
+              </h3>
+              <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed max-w-3xl">
+                Unduh seluruh data Cloud Firestore (users, dompet, transaksi, kategori, anggaran, &amp; audit log) dalam format JSON terstruktur lengkap dengan metadata timestamp untuk disaster recovery atau pemulihan berkala.
+              </p>
+
+              <!-- Backup Status Indicator -->
+              <div class="flex flex-wrap items-center gap-y-1 gap-x-4 pt-1 text-[11px] text-slate-500 dark:text-slate-400 font-medium">
+                <div class="flex items-center gap-1.5">
+                  <Clock class="w-3.5 h-3.5 text-slate-400" />
+                  <span>Status: <strong class="text-slate-700 dark:text-slate-300">{{ formattedLastRoutineBackup }}</strong></span>
+                </div>
+                <div v-if="lastRoutineBackupFilename" class="flex items-center gap-1.5 truncate max-w-xs sm:max-w-md">
+                  <FileJson class="w-3.5 h-3.5 text-emerald-600" />
+                  <span class="truncate font-mono">{{ lastRoutineBackupFilename }}</span>
+                  <span v-if="lastRoutineBackupDocCount" class="text-emerald-600 font-semibold shrink-0">({{ lastRoutineBackupDocCount.toLocaleString('id-ID') }} dok)</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <ShieldCheck class="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Kompatibel Tab Impor Database</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Actions inside Backup Banner -->
+          <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+            <button
+              type="button"
+              :disabled="isExporting"
+              class="min-h-[42px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer disabled:opacity-50"
+              title="Langsung unduh backup lengkap seluruh koleksi database dalam format JSON"
+              @click="handleQuickRoutineBackup"
+            >
+              <Download class="w-4 h-4 shrink-0" :class="isExporting && exportScope === 'full' ? 'animate-bounce' : ''" />
+              <span>{{ isExporting && exportScope === 'full' ? 'Sedang Membaca Database...' : '⚡ Unduh Backup Lengkap Sekarang' }}</span>
+            </button>
+
+            <button
+              type="button"
+              :disabled="isExporting"
+              class="min-h-[42px] px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-emerald-500 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
+              @click="openExportModal('full')"
+            >
+              <FileJson class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>Opsi &amp; Kustom Ekspor...</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Progress bar when export is actively running -->
+        <div v-if="isExporting && exportProgress" class="pt-3 border-t border-emerald-200/60 dark:border-emerald-900/40 space-y-2">
+          <div class="flex items-center justify-between text-xs">
+            <span class="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+              <RefreshCw class="w-3.5 h-3.5 animate-spin text-emerald-600" />
+              <span>Memproses Backup: {{ exportProgress.collectionName }}</span>
+            </span>
+            <span class="font-mono text-emerald-700 dark:text-emerald-400">
+              {{ exportProgress.current }} / {{ exportProgress.total }} koleksi ({{ Math.round((exportProgress.current / Math.max(1, exportProgress.total)) * 100) }}%)
+            </span>
+          </div>
+          <div class="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+            <div
+              class="h-full bg-emerald-600 transition-all duration-300 rounded-full"
+              :style="{ width: `${Math.round((exportProgress.current / Math.max(1, exportProgress.total)) * 100)}%` }"
+            ></div>
+          </div>
         </div>
       </div>
 
@@ -1472,33 +1933,59 @@ async function confirmAndExecuteImport() {
 
       <!-- Results Toolbar: View Switcher (Table vs Raw JSON) & Pagination -->
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div class="flex items-center gap-2">
-          <button
-            type="button"
-            class="min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition-colors"
-            :class="
-              explorerViewMode === 'table'
-                ? 'border-emerald-600 bg-emerald-600 text-white'
-                : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300'
-            "
-            @click="explorerViewMode = 'table'"
-          >
-            <TableIcon class="w-3.5 h-3.5 shrink-0" />
-            <span>Tabel Interaktif</span>
-          </button>
-          <button
-            type="button"
-            class="min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition-colors"
-            :class="
-              explorerViewMode === 'json'
-                ? 'border-emerald-600 bg-emerald-600 text-white'
-                : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300'
-            "
-            @click="explorerViewMode = 'json'"
-          >
-            <Braces class="w-3.5 h-3.5 shrink-0" />
-            <span>Raw JSON</span>
-          </button>
+        <div class="flex flex-wrap items-center gap-2">
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              class="min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition-colors cursor-pointer"
+              :class="
+                explorerViewMode === 'table'
+                  ? 'border-emerald-600 bg-emerald-600 text-white'
+                  : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300'
+              "
+              @click="explorerViewMode = 'table'"
+            >
+              <TableIcon class="w-3.5 h-3.5 shrink-0" />
+              <span>Tabel Interaktif</span>
+            </button>
+            <button
+              type="button"
+              class="min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition-colors cursor-pointer"
+              :class="
+                explorerViewMode === 'json'
+                  ? 'border-emerald-600 bg-emerald-600 text-white'
+                  : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300'
+              "
+              @click="explorerViewMode = 'json'"
+            >
+              <Braces class="w-3.5 h-3.5 shrink-0" />
+              <span>Raw JSON</span>
+            </button>
+          </div>
+
+          <!-- Quick Export Buttons for current filtered records -->
+          <div class="flex items-center gap-1.5 sm:border-l sm:border-slate-200 sm:dark:border-slate-800 sm:pl-2">
+            <button
+              type="button"
+              :disabled="explorerFilteredAndSortedDocs.length === 0 || isExporting"
+              class="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-40 cursor-pointer"
+              title="Unduh hasil penelusuran saat ini dalam format JSON"
+              @click="handleQuickExportCurrentResults('json')"
+            >
+              <FileJson class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>Ekspor JSON ({{ explorerFilteredAndSortedDocs.length.toLocaleString('id-ID') }})</span>
+            </button>
+            <button
+              type="button"
+              :disabled="explorerFilteredAndSortedDocs.length === 0 || isExporting"
+              class="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-40 cursor-pointer"
+              title="Unduh hasil penelusuran saat ini dalam format CSV (Excel)"
+              @click="handleQuickExportCurrentResults('csv')"
+            >
+              <FileSpreadsheet class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>Ekspor CSV</span>
+            </button>
+          </div>
         </div>
 
         <!-- Pagination Controls -->
@@ -3104,6 +3591,320 @@ async function confirmAndExecuteImport() {
         </div>
       </div>
     </section>
+
+    <!-- ===================================================================== -->
+    <!-- MODAL: Ekspor & Backup Database Cloud Firestore (AppModal)            -->
+    <!-- ===================================================================== -->
+    <AppModal
+      v-model="showExportModal"
+      title="Ekspor &amp; Backup Database Cloud Firestore"
+      subtitle="Sarana backup rutin data SisaUang Platform (database: sisa-uang)"
+      max-width="2xl"
+    >
+      <div class="space-y-5 text-slate-800 dark:text-slate-200">
+        <!-- 1. Pilihan Lingkup Ekspor (Scope) -->
+        <div class="space-y-2">
+          <label class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            1. Lingkup Backup / Data yang Diekspor
+          </label>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <!-- Full Database -->
+            <button
+              type="button"
+              class="p-3.5 rounded-xl border text-left transition-all relative flex flex-col justify-between cursor-pointer"
+              :class="
+                exportScope === 'full'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
+              "
+              @click="exportScope = 'full'; exportFormat = 'json'"
+            >
+              <div class="space-y-1">
+                <div class="flex items-center justify-between">
+                  <div class="text-xs font-bold flex items-center gap-1.5">
+                    <Database class="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Full Database Backup</span>
+                  </div>
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-600 text-white">
+                    Rutin
+                  </span>
+                </div>
+                <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                  Mencakup seluruh {{ availableExportCollections.length }} tabel koleksi Firestore secara lengkap.
+                </p>
+              </div>
+            </button>
+
+            <!-- Custom Collections -->
+            <button
+              type="button"
+              class="p-3.5 rounded-xl border text-left transition-all relative flex flex-col justify-between cursor-pointer"
+              :class="
+                exportScope === 'custom'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
+              "
+              @click="exportScope = 'custom'; exportFormat = 'json'"
+            >
+              <div class="space-y-1">
+                <div class="flex items-center justify-between">
+                  <div class="text-xs font-bold flex items-center gap-1.5">
+                    <Layers class="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Koleksi Pilihan (Kustom)</span>
+                  </div>
+                  <span class="text-[10px] font-mono text-slate-400">
+                    {{ selectedExportCollections.length }} / {{ availableExportCollections.length }}
+                  </span>
+                </div>
+                <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                  Pilih tabel tertentu dengan checklist untuk backup parsial.
+                </p>
+              </div>
+            </button>
+
+            <!-- Current Collection -->
+            <button
+              type="button"
+              class="p-3.5 rounded-xl border text-left transition-all relative flex flex-col justify-between cursor-pointer"
+              :class="
+                exportScope === 'current'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
+              "
+              @click="exportScope = 'current'"
+            >
+              <div class="space-y-1">
+                <div class="flex items-center justify-between">
+                  <div class="text-xs font-bold flex items-center gap-1.5">
+                    <TableIcon class="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Tabel Saat Ini: /{{ explorerSelectedCollection }}</span>
+                  </div>
+                  <span class="text-[10px] font-mono text-slate-400">
+                    {{ explorerRawDocs.length }} dok
+                  </span>
+                </div>
+                <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                  Seluruh dokumen mentah pada koleksi yang aktif dibuka di Data Explorer.
+                </p>
+              </div>
+            </button>
+
+            <!-- Filtered Query -->
+            <button
+              type="button"
+              class="p-3.5 rounded-xl border text-left transition-all relative flex flex-col justify-between cursor-pointer"
+              :class="
+                exportScope === 'filtered'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
+              "
+              @click="exportScope = 'filtered'"
+            >
+              <div class="space-y-1">
+                <div class="flex items-center justify-between">
+                  <div class="text-xs font-bold flex items-center gap-1.5">
+                    <Filter class="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Hasil Filter &amp; Pencarian</span>
+                  </div>
+                  <span class="text-[10px] font-mono text-emerald-600 font-semibold">
+                    {{ explorerFilteredAndSortedDocs.length }} dok
+                  </span>
+                </div>
+                <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                  Hanya dokumen yang sesuai dengan kueri WHERE &amp; LIKE saat ini.
+                </p>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Checklist if Scope is Custom -->
+        <div v-if="exportScope === 'custom'" class="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-slate-700 dark:text-slate-300">
+              Pilih Tabel yang Diikutsertakan:
+            </span>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="text-[11px] font-semibold text-emerald-600 hover:text-emerald-700 cursor-pointer"
+                @click="selectAllExportCollections"
+              >
+                Pilih Semua
+              </button>
+              <span class="text-slate-300 dark:text-slate-700">|</span>
+              <button
+                type="button"
+                class="text-[11px] font-semibold text-slate-500 hover:text-slate-700 cursor-pointer"
+                @click="deselectAllExportCollections"
+              >
+                Batal Pilih
+              </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <label
+              v-for="col in availableExportCollections"
+              :key="col.name"
+              class="flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer transition-colors"
+              :class="
+                selectedExportCollections.includes(col.name)
+                  ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-200'
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400'
+              "
+            >
+              <input
+                type="checkbox"
+                :value="col.name"
+                v-model="selectedExportCollections"
+                class="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+              />
+              <span class="truncate font-mono font-medium">{{ col.label }}</span>
+              <span class="text-[10px] text-slate-400 font-mono ml-auto">
+                {{ col.count }}
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <!-- 2. Format File Ekspor -->
+        <div class="space-y-2">
+          <label class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            2. Format Berkas Cadangan (Backup Format)
+          </label>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <label
+              class="flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all"
+              :class="
+                exportFormat === 'json'
+                  ? 'border-emerald-600 bg-emerald-50/40 dark:bg-emerald-950/30 ring-1 ring-emerald-500'
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
+              "
+            >
+              <input
+                type="radio"
+                name="export_format"
+                value="json"
+                v-model="exportFormat"
+                class="mt-1 text-emerald-600 focus:ring-emerald-500"
+              />
+              <div class="space-y-0.5 min-w-0">
+                <div class="flex items-center gap-1.5 text-xs font-bold text-slate-900 dark:text-slate-100">
+                  <FileJson class="w-4 h-4 text-emerald-600" />
+                  <span>JSON (.json) — Standar Backup SisaUang</span>
+                </div>
+                <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                  Mempertahankan semua relasi, tipe data, Timestamp, dan metadata. Dapat diimpor kembali ke database melalui tab Impor Database.
+                </p>
+              </div>
+            </label>
+
+            <label
+              class="flex items-start gap-3 p-3 rounded-xl border transition-all"
+              :class="[
+                exportScope === 'full' || exportScope === 'custom'
+                  ? 'opacity-50 cursor-not-allowed bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800'
+                  : exportFormat === 'csv'
+                  ? 'border-emerald-600 bg-emerald-50/40 dark:bg-emerald-950/30 ring-1 ring-emerald-500 cursor-pointer'
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 cursor-pointer'
+              ]"
+            >
+              <input
+                type="radio"
+                name="export_format"
+                value="csv"
+                :disabled="exportScope === 'full' || exportScope === 'custom'"
+                v-model="exportFormat"
+                class="mt-1 text-emerald-600 focus:ring-emerald-500"
+              />
+              <div class="space-y-0.5 min-w-0">
+                <div class="flex items-center gap-1.5 text-xs font-bold text-slate-900 dark:text-slate-100">
+                  <FileSpreadsheet class="w-4 h-4 text-emerald-600" />
+                  <span>CSV / Excel (.csv) — Tabular Data</span>
+                </div>
+                <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                  Format tabel spreadsheet untuk Microsoft Excel / Google Sheets (khusus koleksi tunggal atau hasil query).
+                </p>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- 3. Opsi Tambahan: Dokumen Soft-Deleted -->
+        <div class="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 space-y-2">
+          <label class="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
+            <input
+              type="checkbox"
+              v-model="exportIncludeSoftDeleted"
+              class="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+            />
+            <span>Sertakan dokumen yang berstatus <code>deleted: true</code> (Arsip / Soft-deleted)</span>
+          </label>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 pl-6 leading-snug">
+            Sangat direkomendasikan dicentang untuk backup rutin agar seluruh riwayat arsip dan transaksi lama tetap aman terlindungi.
+          </p>
+        </div>
+
+        <!-- 4. Preview Target Berkas & Ringkasan Estimasi -->
+        <div class="p-3.5 rounded-xl border border-emerald-200/80 dark:border-emerald-900/50 bg-emerald-50/30 dark:bg-emerald-950/20 space-y-1.5 text-xs">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
+              <Download class="w-3.5 h-3.5 text-emerald-600" />
+              <span>Nama Berkas Backup:</span>
+            </span>
+            <span class="font-mono font-semibold text-emerald-700 dark:text-emerald-400">
+              {{ computedExportFilename }}
+            </span>
+          </div>
+          <p class="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+            Berkas akan diunduh langsung ke folder Download komputer Anda. Menyertakan metadata waktu, database ID, dan tanda tangan audit Super Admin.
+          </p>
+        </div>
+
+        <!-- Progress in modal if executing -->
+        <div v-if="isExporting && exportProgress" class="space-y-2 pt-1">
+          <div class="flex items-center justify-between text-xs font-semibold text-emerald-800 dark:text-emerald-300">
+            <span class="flex items-center gap-1.5">
+              <RefreshCw class="w-3.5 h-3.5 animate-spin text-emerald-600" />
+              <span>{{ exportProgress.collectionName }}</span>
+            </span>
+            <span class="font-mono">
+              {{ exportProgress.current }} / {{ exportProgress.total }} ({{ Math.round((exportProgress.current / Math.max(1, exportProgress.total)) * 100) }}%)
+            </span>
+          </div>
+          <div class="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+            <div
+              class="h-full bg-emerald-600 transition-all duration-300 rounded-full"
+              :style="{ width: `${Math.round((exportProgress.current / Math.max(1, exportProgress.total)) * 100)}%` }"
+            ></div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex items-center justify-between w-full gap-3">
+          <button
+            type="button"
+            :disabled="isExporting"
+            class="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-50"
+            @click="showExportModal = false"
+          >
+            Tutup
+          </button>
+
+          <button
+            type="button"
+            :disabled="isExporting || (exportScope === 'custom' && selectedExportCollections.length === 0)"
+            class="min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer disabled:opacity-50"
+            @click="handleExecuteExport"
+          >
+            <Download class="w-4 h-4 shrink-0" :class="isExporting ? 'animate-bounce' : ''" />
+            <span>{{ isExporting ? 'Mengekspor Database...' : 'Mulai Ekspor &amp; Unduh Backup' }}</span>
+          </button>
+        </div>
+      </template>
+    </AppModal>
 
     <!-- ===================================================================== -->
     <!-- MODAL: Confirm Delete Firestore Database Tables (AppModal)            -->

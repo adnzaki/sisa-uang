@@ -26,8 +26,8 @@ const COMMON_NAVBAR_HTML = `
         </a>
 
         <nav class="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-300">
-          <a href="/#features" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Fitur</a>
-          <a href="/pricing" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Paket Harga (IDR)</a>
+          <a href="/#features" onclick="const el=document.getElementById('features');if(el){el.scrollIntoView({behavior:'smooth'});return false;}" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Fitur</a>
+          <a href="/#pricing" onclick="const el=document.getElementById('pricing');if(el){el.scrollIntoView({behavior:'smooth'});return false;}" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Paket Harga (IDR)</a>
           <a href="/terms" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Syarat &amp; Ketentuan</a>
           <a href="/refund-policy" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Kebijakan Refund</a>
           <a href="/contact" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Hubungi Kami</a>
@@ -121,7 +121,7 @@ const COMMON_FOOTER_HTML = `
 `;
 
 const PRICING_SECTION_HTML = `
-  <section id="pricing" class="py-16 md:py-24 border-b border-slate-200/60 dark:border-slate-800/60 bg-slate-100/50 dark:bg-slate-900/40">
+  <section id="pricing" class="scroll-mt-20 py-16 md:py-24 border-b border-slate-200/60 dark:border-slate-800/60 bg-slate-100/50 dark:bg-slate-900/40">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="text-center max-w-2xl mx-auto space-y-3">
         <h2 class="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
@@ -377,8 +377,7 @@ const CONTACT_CTA_SECTION_HTML = `
   </section>
 `;
 
-export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
-  '/landing': {
+const LANDING_PAGE_DATA: PreRenderPageData = {
     title: 'Sisa Uang – Platform Manajemen Kas & Anggaran',
     description: 'Platform manajemen kas modern untuk perorangan, bendahara, dan organisasi. Pisahkan kepemilikan dana, kontrol pagu anggaran tahunan, dan unduh laporan kas resmi PDF siap audit.',
     canonicalUrl: 'https://sisauang.bitdanbait.web.id/',
@@ -503,7 +502,7 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
           </section>
 
           <!-- 2. CORE FEATURES SECTION -->
-          <section id="features" class="py-16 md:py-24 border-b border-slate-200/60 dark:border-slate-800/60">
+          <section id="features" class="scroll-mt-20 py-16 md:py-24 border-b border-slate-200/60 dark:border-slate-800/60">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
               <div class="text-center max-w-2xl mx-auto space-y-3 mb-12">
                 <h2 class="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
@@ -585,8 +584,11 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
         ${COMMON_FOOTER_HTML}
       </div>
     `,
-  },
+};
 
+export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
+  '/': LANDING_PAGE_DATA,
+  '/landing': LANDING_PAGE_DATA,
   '/pricing': {
     title: 'Paket Berlangganan Resmi (IDR) – SisaUang Pro',
     description: 'Daftar paket harga resmi SisaUang Pro (IDR) mulai Rp 21.500/bulan dan Rp 215.000/tahun. Pembayaran resmi Rupiah melalui Midtrans QRIS, Virtual Account, dan Kartu Kredit.',

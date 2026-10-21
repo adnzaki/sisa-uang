@@ -1,0 +1,19 @@
+[
+  {
+    "sessionId": "admin_vuedevo_01__dev_as66bp22guq1",
+    "uid": "admin_vuedevo_01",
+    "email": "vuedevo@gmail.com",
+    "deviceId": "dev_as66bp22guq1",
+    "deviceName": "Google Chrome di Android",
+    "browser": "Google Chrome",
+    "os": "Android",
+    "deviceType": "mobile",
+    "ipAddress": "101.255.168.6",
+    "isPrimary": false,
+    "status": "active",
+    "revokedAt": null,
+    "revokedByDeviceId": null,
+    "createdAt": "2026-10-21T00:55:54.010Z",
+    "lastActiveAt": "2026-10-21T01:01:53.641Z"
+  }
+]

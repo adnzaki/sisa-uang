@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory, NavigationGuardNext, RouteLocationNormalized } from 'vue-router';
-import { scrollToPageTop, scrollToPageTopMultiFrame } from '../utils/scroll';
+import { scrollToPageTop, scrollToPageTopMultiFrame, scrollToElement } from '../utils/scroll';
 import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
 import DashboardView from '../views/DashboardView.vue';
@@ -178,7 +178,10 @@ export const router = createRouter({
   ],
   scrollBehavior(to, _from, savedPosition) {
     if (to.hash) {
-      return { el: to.hash, behavior: 'smooth' };
+      return { el: to.hash, top: 70, behavior: 'smooth' };
+    }
+    if (to.path === '/pricing') {
+      return { el: '#pricing', top: 70, behavior: 'smooth' };
     }
     if (savedPosition) {
       return savedPosition;
@@ -188,7 +191,15 @@ export const router = createRouter({
 });
 
 router.afterEach((to) => {
-  if (!to.hash) {
+  if (to.hash) {
+    requestAnimationFrame(() => scrollToElement(to.hash, 'smooth', 70));
+    setTimeout(() => scrollToElement(to.hash, 'smooth', 70), 100);
+    setTimeout(() => scrollToElement(to.hash, 'smooth', 70), 300);
+  } else if (to.path === '/pricing') {
+    requestAnimationFrame(() => scrollToElement('pricing', 'smooth', 70));
+    setTimeout(() => scrollToElement('pricing', 'smooth', 70), 100);
+    setTimeout(() => scrollToElement('pricing', 'smooth', 70), 300);
+  } else {
     scrollToPageTopMultiFrame();
   }
 });

@@ -1648,6 +1648,35 @@ export const useAdminStore = defineStore('admin', () => {
   }
 
   /**
+   * Fetch all documents from specified collections for complete database backup
+   */
+  async function fetchAllCollectionsForFullBackup(
+    collectionsList: string[],
+    onProgress?: (info: {
+      index: number;
+      total: number;
+      collectionName: string;
+      docCount: number;
+    }) => void
+  ): Promise<Record<string, Record<string, any>[]>> {
+    const backupData: Record<string, Record<string, any>[]> = {};
+    for (let i = 0; i < collectionsList.length; i++) {
+      const colName = collectionsList[i];
+      const docs = await fetchFirestoreRawCollectionDocs(colName, false);
+      backupData[colName] = docs;
+      if (onProgress) {
+        onProgress({
+          index: i + 1,
+          total: collectionsList.length,
+          collectionName: colName,
+          docCount: docs.length,
+        });
+      }
+    }
+    return backupData;
+  }
+
+  /**
    * Delete/empty one or multiple collections (tables) inside Cloud Firestore (`sisa-uang`).
    * Exclusively for Super Admin during development.
    */
@@ -1780,6 +1809,7 @@ export const useAdminStore = defineStore('admin', () => {
     importConvertedJsonToFirestore,
     fetchFirestoreCollectionStats,
     fetchFirestoreRawCollectionDocs,
+    fetchAllCollectionsForFullBackup,
     deleteFirestoreCollections,
     dismissInstantAlertBanner,
   };

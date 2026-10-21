@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RouterLink } from 'vue-router';
+import { RouterLink, useRouter } from 'vue-router';
 import {
   Wallet,
   Mail,
@@ -9,10 +9,30 @@ import {
   ExternalLink,
   Heart,
 } from 'lucide-vue-next';
-import { scrollToPageTop, scrollToPageTopMultiFrame } from '../utils/scroll';
+import { scrollToPageTopMultiFrame, scrollToElement } from '../utils/scroll';
+
+const router = useRouter();
 
 function handleFooterLinkClick() {
   scrollToPageTopMultiFrame();
+}
+
+function navigateToSection(sectionId: string) {
+  const currentPath = router.currentRoute.value.path;
+  const isLanding = currentPath === '/' || currentPath === '/landing';
+
+  if (isLanding) {
+    if (scrollToElement(sectionId, 'smooth', 70)) {
+      history.pushState(null, '', `/#${sectionId}`);
+      return;
+    }
+  }
+
+  router.push({ path: '/', hash: `#${sectionId}` }).then(() => {
+    requestAnimationFrame(() => scrollToElement(sectionId, 'smooth', 70));
+    setTimeout(() => scrollToElement(sectionId, 'smooth', 70), 80);
+    setTimeout(() => scrollToElement(sectionId, 'smooth', 70), 250);
+  });
 }
 </script>
 
@@ -85,24 +105,24 @@ function handleFooterLinkClick() {
           </h4>
           <ul class="space-y-2 text-xs text-slate-600 dark:text-slate-400">
             <li>
-              <RouterLink to="/#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <a href="/#features" @click.prevent="navigateToSection('features')" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer">
                 Multi Sumber Dana & Bank
-              </RouterLink>
+              </a>
             </li>
             <li>
-              <RouterLink to="/#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <a href="/#features" @click.prevent="navigateToSection('features')" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer">
                 Manajemen Kepemilikan Dana
-              </RouterLink>
+              </a>
             </li>
             <li>
-              <RouterLink to="/#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <a href="/#features" @click.prevent="navigateToSection('features')" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer">
                 Pagu Anggaran Bulanan & Tahunan
-              </RouterLink>
+              </a>
             </li>
             <li>
-              <RouterLink to="/#features" @click="handleFooterLinkClick" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+              <a href="/#features" @click.prevent="navigateToSection('features')" class="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer">
                 Laporan Kas Berstandar (PDF)
-              </RouterLink>
+              </a>
             </li>
           </ul>
         </div>

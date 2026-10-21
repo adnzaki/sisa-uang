@@ -3146,7 +3146,12 @@ async function startServer() {
   // =========================================================================
   // Vite Middleware (Development) or Static Dist (Production)
   // =========================================================================
-  if (process.env.NODE_ENV !== 'production') {
+  const distPath = path.join(__dirname, 'dist');
+  const distIndexExists = fs.existsSync(path.join(distPath, 'index.html'));
+  const isExplicitDev = process.env.NODE_ENV === 'development' || process.env.npm_lifecycle_event === 'dev';
+  const isProduction = process.env.NODE_ENV === 'production' || (!isExplicitDev && distIndexExists);
+
+  if (!isProduction) {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
@@ -3212,34 +3217,75 @@ async function startServer() {
 
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(__dirname, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req: Request, res: Response) => {
-      const prerenderData = getPrerenderDataForPath(req.path);
-      if (prerenderData) {
-        const cleanPath = req.path.split('?')[0].split('#')[0].replace(/\/$/, '') || '/';
-        // Special case: root "/" and "/landing" serve dist/landing/index.html
-        if (cleanPath === '/' || cleanPath === '/landing') {
-          const landingHtml = path.join(distPath, 'landing', 'index.html');
-          if (fs.existsSync(landingHtml)) {
-            res.sendFile(landingHtml);
-            return;
+    // 1. Guaranteed Pre-rendered Pages Handler (Public & Legal Pages)
+    // Registered BEFORE express.static to prevent serving raw unrendered SPA shell index.html
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      if (req.method !== 'GET') return next();
+
+      const urlPath = req.path;
+      // Do not intercept static assets, api endpoints, or files with extensions
+      if (urlPath.startsWith('/api/') || urlPath.startsWith('/assets/') || urlPath.includes('.')) {
+        return next();
+      }
+
+      const prerenderData = getPrerenderDataForPath(urlPath);
+      if (!prerenderData) {
+        return next();
+      }
+
+      const cleanPath = urlPath.split('?')[0].split('#')[0].replace(/\/$/, '') || '/';
+      const isRoot = cleanPath === '/' || cleanPath === '/landing';
+      const targetHtmlPath = isRoot
+        ? path.join(distPath, 'index.html')
+        : path.join(distPath, cleanPath.replace(/^\//, ''), 'index.html');
+
+      let htmlToSend = '';
+      if (fs.existsSync(targetHtmlPath)) {
+        const diskContent = fs.readFileSync(targetHtmlPath, 'utf8');
+        // If file on disk already contains the pre-rendered content, use it!
+        if (diskContent.includes('Kendalikan Kas') || !diskContent.match(/<div id="app">\s*<\/div>/i)) {
+          htmlToSend = diskContent;
+        } else {
+          // File on disk was un-injected SPA shell: inject pre-rendered content on-the-fly and update disk
+          htmlToSend = injectPrerenderedHtml(diskContent, prerenderData);
+          try {
+            fs.writeFileSync(targetHtmlPath, htmlToSend, 'utf8');
+          } catch {
+            // ignore disk write errors
           }
         }
-
-        const specificHtml = path.join(distPath, cleanPath.replace(/^\//, ''), 'index.html');
-        if (cleanPath !== '/' && fs.existsSync(specificHtml)) {
-          res.sendFile(specificHtml);
-          return;
+      } else {
+        // Fallback: file does not exist on disk, inject into app-shell or index.html template
+        const baseTemplate = fs.existsSync(path.join(distPath, 'app-shell.html'))
+          ? fs.readFileSync(path.join(distPath, 'app-shell.html'), 'utf8')
+          : fs.existsSync(path.join(distPath, 'index.html'))
+          ? fs.readFileSync(path.join(distPath, 'index.html'), 'utf8')
+          : '';
+        if (baseTemplate) {
+          htmlToSend = injectPrerenderedHtml(baseTemplate, prerenderData);
         }
+      }
 
-        const indexHtml = path.join(distPath, 'index.html');
-        if (fs.existsSync(indexHtml)) {
-          const raw = fs.readFileSync(indexHtml, 'utf8');
-          res.setHeader('Content-Type', 'text/html; charset=utf-8');
-          res.send(injectPrerenderedHtml(raw, prerenderData));
-          return;
-        }
+      if (htmlToSend) {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
+        res.status(200).send(htmlToSend);
+        return;
+      }
+
+      next();
+    });
+
+    // 2. Serve static assets (js, css, images, icons, manifest)
+    // Use index: false so express.static does not automatically send un-injected index.html for directory routes
+    app.use(express.static(distPath, { index: false }));
+
+    // 3. Fallback for SPA routes (/dashboard, /auth, /wallets, /transactions, /budgets, etc.)
+    app.get('*', (_req: Request, res: Response) => {
+      const spaShell = path.join(distPath, 'app-shell.html');
+      if (fs.existsSync(spaShell)) {
+        res.sendFile(spaShell);
+        return;
       }
       res.sendFile(path.join(distPath, 'index.html'));
     });
