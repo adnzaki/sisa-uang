@@ -3239,37 +3239,10 @@ async function startServer() {
         ? path.join(distPath, 'index.html')
         : path.join(distPath, cleanPath.replace(/^\//, ''), 'index.html');
 
-      let htmlToSend = '';
       if (fs.existsSync(targetHtmlPath)) {
-        const diskContent = fs.readFileSync(targetHtmlPath, 'utf8');
-        // If file on disk already contains the pre-rendered content, use it!
-        if (diskContent.includes('Kendalikan Kas') || !diskContent.match(/<div id="app">\s*<\/div>/i)) {
-          htmlToSend = diskContent;
-        } else {
-          // File on disk was un-injected SPA shell: inject pre-rendered content on-the-fly and update disk
-          htmlToSend = injectPrerenderedHtml(diskContent, prerenderData);
-          try {
-            fs.writeFileSync(targetHtmlPath, htmlToSend, 'utf8');
-          } catch {
-            // ignore disk write errors
-          }
-        }
-      } else {
-        // Fallback: file does not exist on disk, inject into app-shell or index.html template
-        const baseTemplate = fs.existsSync(path.join(distPath, 'app-shell.html'))
-          ? fs.readFileSync(path.join(distPath, 'app-shell.html'), 'utf8')
-          : fs.existsSync(path.join(distPath, 'index.html'))
-          ? fs.readFileSync(path.join(distPath, 'index.html'), 'utf8')
-          : '';
-        if (baseTemplate) {
-          htmlToSend = injectPrerenderedHtml(baseTemplate, prerenderData);
-        }
-      }
-
-      if (htmlToSend) {
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
-        res.status(200).send(htmlToSend);
+        res.sendFile(targetHtmlPath);
         return;
       }
 

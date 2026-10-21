@@ -15,5 +15,22 @@
     "revokedByDeviceId": null,
     "createdAt": "2026-10-21T00:55:54.010Z",
     "lastActiveAt": "2026-10-21T01:01:53.641Z"
+  },
+  {
+    "sessionId": "ci4_user_1__dev_5riv2j2zxkpb",
+    "uid": "ci4_user_1",
+    "email": "adnzaki@outlook.com",
+    "deviceId": "dev_5riv2j2zxkpb",
+    "deviceName": "Google Chrome di Windows",
+    "browser": "Google Chrome",
+    "os": "Windows",
+    "deviceType": "desktop",
+    "ipAddress": "101.255.168.6",
+    "isPrimary": false,
+    "status": "active",
+    "revokedAt": null,
+    "revokedByDeviceId": null,
+    "createdAt": "2026-10-21T08:20:20.524Z",
+    "lastActiveAt": "2026-10-21T08:25:12.735Z"
   }
 ]
