@@ -623,6 +623,148 @@
         "customTitles",
         "updatedAt"
       ]
+    },
+    "Automation": {
+      "title": "Automation",
+      "description": "Penjadwalan pencatatan otomatis transaksi keuangan berkala (Dengan Konfirmasi / Tanpa Konfirmasi).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "User account UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Nama jadwal otomatisasi",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "type": {
+          "type": "string",
+          "description": "Jenis transaksi: income, expense, atau transfer",
+          "enum": ["income", "expense", "transfer"]
+        },
+        "walletId": {
+          "type": "string",
+          "description": "Sumber dana ID asal",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "walletName": {
+          "type": "string",
+          "description": "Nama sumber dana asal",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "fundOwnerId": {
+          "type": "string",
+          "description": "ID kepemilikan dana asal",
+          "maxLength": 128
+        },
+        "fundOwnerName": {
+          "type": "string",
+          "description": "Nama pemilik dana asal",
+          "maxLength": 60
+        },
+        "toWalletId": {
+          "type": "string",
+          "description": "Sumber dana tujuan (transfer)",
+          "maxLength": 128
+        },
+        "toWalletName": {
+          "type": "string",
+          "description": "Nama sumber dana tujuan (transfer)",
+          "maxLength": 60
+        },
+        "toFundOwnerId": {
+          "type": "string",
+          "description": "ID kepemilikan dana tujuan (transfer)",
+          "maxLength": 128
+        },
+        "toFundOwnerName": {
+          "type": "string",
+          "description": "Nama pemilik dana tujuan (transfer)",
+          "maxLength": 60
+        },
+        "category": {
+          "type": "string",
+          "description": "Nama kategori transaksi",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "amount": {
+          "type": "number",
+          "description": "Nominal transaksi positif"
+        },
+        "adminFee": {
+          "type": "number",
+          "description": "Biaya admin transfer opsional"
+        },
+        "note": {
+          "type": "string",
+          "description": "Catatan transaksi",
+          "maxLength": 200
+        },
+        "scheduleDays": {
+          "type": "array",
+          "description": "Daftar tanggal setiap bulan saat transaksi dicatat (1-31)",
+          "items": { "type": "integer" }
+        },
+        "executionTime": {
+          "type": "string",
+          "description": "Jam pelaksanaan (HH:mm)"
+        },
+        "mode": {
+          "type": "string",
+          "description": "Opsi otomatisasi: with_confirmation atau without_confirmation",
+          "enum": ["with_confirmation", "without_confirmation"]
+        },
+        "isActive": {
+          "type": "boolean",
+          "description": "Status aktif otomatisasi"
+        },
+        "lastExecutedDate": {
+          "type": "string",
+          "description": "Tanggal terakhir transaksi berhasil dicatat (YYYY-MM-DD)"
+        },
+        "lastCancelledDate": {
+          "type": "string",
+          "description": "Tanggal terakhir transaksi dibatalkan user (YYYY-MM-DD)"
+        },
+        "snoozedUntil": {
+          "type": "string",
+          "description": "Timestamp ISO atau waktu penundaan"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "name",
+        "type",
+        "walletId",
+        "walletName",
+        "category",
+        "amount",
+        "scheduleDays",
+        "executionTime",
+        "mode",
+        "isActive",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -665,6 +807,10 @@
     "/report_settings/{settingId}": {
       "schema": { "$ref": "#/entities/ReportSettings" },
       "description": "Per-user and default configuration for report kop surat, titles, and signers."
+    },
+    "/automations/{automationId}": {
+      "schema": { "$ref": "#/entities/Automation" },
+      "description": "Jadwal pencatatan otomatis transaksi keuangan."
     }
   }
 }

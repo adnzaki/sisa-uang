@@ -1,7 +1,9 @@
 import { createRouter, createWebHistory, NavigationGuardNext, RouteLocationNormalized } from 'vue-router';
 import { scrollToPageTop, scrollToPageTopMultiFrame, scrollToElement } from '../utils/scroll';
+import { auth } from '../firebase';
 import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
+import { useAutomationStore } from '../stores/automation';
 import DashboardView from '../views/DashboardView.vue';
 import TransactionsView from '../views/TransactionsView.vue';
 import WalletsView from '../views/WalletsView.vue';
@@ -162,6 +164,16 @@ export const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/utilities/automation',
+      name: 'automation',
+      component: () => import('../views/AutomationView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/automations',
+      redirect: '/utilities/automation',
+    },
+    {
       path: '/database',
       name: 'database',
       component: DatabaseManagementView,
@@ -201,6 +213,22 @@ router.afterEach((to) => {
     setTimeout(() => scrollToElement('pricing', 'smooth', 70), 300);
   } else {
     scrollToPageTopMultiFrame();
+  }
+
+  // Activity check for automated schedules (with 5-minute quota cache protection)
+  try {
+    const authStore = useAuthStore();
+    const currentEmail = String(auth.currentUser?.email || authStore.user?.email || '').trim().toLowerCase();
+    const isAdmin =
+      authStore.isSuperAdmin ||
+      currentEmail === 'vuedevo@gmail.com';
+
+    if (!isAdmin && (authStore.isAuthenticated || auth.currentUser)) {
+      const automationStore = useAutomationStore();
+      void automationStore.checkAndTriggerOnActivity();
+    }
+  } catch {
+    // Ignore
   }
 });
 

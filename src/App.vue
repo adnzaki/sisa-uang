@@ -41,18 +41,22 @@ import {
   Trash2,
   FileSpreadsheet,
   SlidersHorizontal,
+  Wrench,
 } from 'lucide-vue-next';
 import { useAuthStore } from './stores/auth';
 import { useThemeStore, ThemeMode } from './stores/theme';
 import { useFinanceStore } from './stores/finance';
 import { useAdminStore } from './stores/admin';
+import { auth } from './firebase';
 import { useNotificationStore } from './stores/notification';
+import { useAutomationStore } from './stores/automation';
 import QuickTransactionModal from './components/QuickTransactionModal.vue';
 import AppModal from './components/AppModal.vue';
 import PWAInstallButton from './components/PWAInstallButton.vue';
 import OfflineIndicator from './components/OfflineIndicator.vue';
 import AppUpdateBanner from './components/AppUpdateBanner.vue';
 import ReleaseNotesModal from './components/ReleaseNotesModal.vue';
+import AutomationConfirmBanner from './components/AutomationConfirmBanner.vue';
 import { scrollToPageTop, scrollToPageTopMultiFrame } from './utils/scroll';
 
 const { t, locale } = useI18n();
@@ -63,6 +67,7 @@ const themeStore = useThemeStore();
 const financeStore = useFinanceStore();
 const adminStore = useAdminStore();
 const notificationStore = useNotificationStore();
+const automationStore = useAutomationStore();
 
 const mobileDrawerOpen = ref(false);
 const accountMenuOpen = ref(false);
@@ -440,11 +445,20 @@ watch(mobileDrawerOpen, (isOpen) => {
   }
 });
 
+function isCurrentSuperAdmin(): boolean {
+  const currentEmail = String(auth.currentUser?.email || authStore.user?.email || '').trim().toLowerCase();
+  return (
+    authStore.isSuperAdmin ||
+    currentEmail === 'vuedevo@gmail.com'
+  );
+}
+
 function handleAppVisibilityOrFocus() {
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
   if (authStore.isAuthenticated && authStore.user?.uid) {
-    if (!authStore.isSuperAdmin) {
+    if (!isCurrentSuperAdmin()) {
       void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid);
+      void automationStore.checkAndTriggerOnActivity();
     }
     if (typeof themeStore.fetchRemoteReportSettings === 'function') {
       void themeStore.fetchRemoteReportSettings(authStore.user.uid);
@@ -452,11 +466,23 @@ function handleAppVisibilityOrFocus() {
   }
 }
 
+let activityDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+function handleUserActivity() {
+  if (!authStore.isAuthenticated || isCurrentSuperAdmin()) return;
+  if (activityDebounceTimer) return;
+  activityDebounceTimer = setTimeout(() => {
+    activityDebounceTimer = null;
+    void automationStore.checkAndTriggerOnActivity();
+  }, 1200);
+}
+
 onMounted(() => {
   themeStore.initThemeListener();
   authStore.initAuth();
   window.addEventListener('popstate', handleDrawerPopState);
   window.addEventListener('focus', handleAppVisibilityOrFocus);
+  window.addEventListener('pointerdown', handleUserActivity, { passive: true });
+  window.addEventListener('keydown', handleUserActivity, { passive: true });
   document.addEventListener('visibilitychange', handleAppVisibilityOrFocus);
   document.addEventListener('mousedown', handleAccountMenuClickOutside);
 });
@@ -464,6 +490,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('popstate', handleDrawerPopState);
   window.removeEventListener('focus', handleAppVisibilityOrFocus);
+  window.removeEventListener('pointerdown', handleUserActivity);
+  window.removeEventListener('keydown', handleUserActivity);
   document.removeEventListener('visibilitychange', handleAppVisibilityOrFocus);
   document.removeEventListener('mousedown', handleAccountMenuClickOutside);
 });
@@ -473,7 +501,7 @@ watch(
   (uid) => {
     if (uid && authStore.isAuthenticated) {
       themeStore.loadReportSignatureConfig(uid);
-      if (authStore.isSuperAdmin) {
+      if (isCurrentSuperAdmin()) {
         financeStore.cleanupListeners();
         if (authStore.canAccessControlPanel) {
           adminStore.startRealtimeMonitoring();
@@ -481,6 +509,7 @@ watch(
       } else {
         adminStore.stopRealtimeMonitoring();
         financeStore.initFinanceData(uid);
+        void automationStore.loadAutomations(uid);
       }
     } else {
       financeStore.cleanupListeners();
@@ -585,11 +614,22 @@ const settingsAccordionOpen = ref<boolean>(
   route.path === '/settings' || route.path === '/report-settings'
 );
 
+const isUtilitiesRouteActive = computed(
+  () => route.path === '/utilities/automation' || route.path.startsWith('/utilities')
+);
+
+const utilitiesAccordionOpen = ref<boolean>(
+  route.path === '/utilities/automation' || route.path.startsWith('/utilities')
+);
+
 watch(
   () => route.path,
   (newPath) => {
     if (newPath === '/settings' || newPath === '/report-settings') {
       settingsAccordionOpen.value = true;
+    }
+    if (newPath === '/utilities/automation' || newPath.startsWith('/utilities')) {
+      utilitiesAccordionOpen.value = true;
     }
   },
   { immediate: true }
@@ -597,6 +637,10 @@ watch(
 
 function toggleSettingsAccordion() {
   settingsAccordionOpen.value = !settingsAccordionOpen.value;
+}
+
+function toggleUtilitiesAccordion() {
+  utilitiesAccordionOpen.value = !utilitiesAccordionOpen.value;
 }
 
 // Super Admin navigation items (User Management, Activity Logs, Alerts, Database)
@@ -845,6 +889,9 @@ async function handleSubmitProPayment() {
         </button>
       </div>
     </div>
+
+    <!-- Global Automatic Transaction Recording Confirmation Banner -->
+    <AutomationConfirmBanner />
 
     <!-- ===================================================================== -->
     <!-- GLOBAL FLOATING POPUP BANNER STACK (Success & Error Notifications)   -->
@@ -1168,6 +1215,57 @@ async function handleSubmitProPayment() {
                   <div class="flex items-center gap-2.5 truncate min-w-0">
                     <FileSpreadsheet class="w-3.5 h-3.5 shrink-0" />
                     <span class="truncate">{{ t('nav.settingsReport') }}</span>
+                  </div>
+                </RouterLink>
+              </div>
+            </div>
+
+            <!-- Utilitas Accordion: Menu Utama dengan Sub-menu Otomatisasi -->
+            <div class="pt-1">
+              <button
+                type="button"
+                class="w-full min-h-[42px] flex items-center justify-between px-3.5 py-2 rounded-xl text-xs sm:text-sm font-medium transition-colors select-none text-left cursor-pointer"
+                :class="
+                  isUtilitiesRouteActive
+                    ? 'bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                "
+                :aria-expanded="utilitiesAccordionOpen"
+                @click="toggleUtilitiesAccordion"
+              >
+                <div class="flex items-center gap-3 truncate min-w-0">
+                  <Wrench class="w-4 h-4 shrink-0" />
+                  <span class="truncate">{{ t('nav.utilities') }}</span>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <span
+                    v-if="isUtilitiesRouteActive"
+                    class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
+                  />
+                  <ChevronDown
+                    class="w-4 h-4 transition-transform duration-200"
+                    :class="{ 'rotate-180': utilitiesAccordionOpen }"
+                  />
+                </div>
+              </button>
+
+              <!-- Utilitas Submenu: Otomatisasi -->
+              <div
+                v-show="utilitiesAccordionOpen"
+                class="mt-1 pl-3 py-1 space-y-1 border-l-2 border-emerald-200/80 dark:border-emerald-900/60 ml-4 transition-all"
+              >
+                <RouterLink
+                  to="/utilities/automation"
+                  class="min-h-[38px] flex items-center justify-between px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors"
+                  :class="
+                    route.path === '/utilities/automation'
+                      ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                  "
+                >
+                  <div class="flex items-center gap-2.5 truncate min-w-0">
+                    <Clock class="w-3.5 h-3.5 shrink-0" />
+                    <span class="truncate">{{ t('nav.automation') }}</span>
                   </div>
                 </RouterLink>
               </div>
@@ -2058,6 +2156,58 @@ async function handleSubmitProPayment() {
                     <div class="flex items-center gap-2.5 truncate min-w-0">
                       <FileSpreadsheet class="w-4 h-4 shrink-0" />
                       <span class="truncate">{{ t('nav.settingsReport') }}</span>
+                    </div>
+                  </a>
+                </div>
+              </div>
+
+              <!-- Mobile Drawer Utilitas Accordion: Menu Utama dengan Sub-menu Otomatisasi -->
+              <div class="pt-1">
+                <button
+                  type="button"
+                  class="w-full min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors select-none text-left cursor-pointer"
+                  :class="
+                    isUtilitiesRouteActive
+                      ? 'bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  "
+                  :aria-expanded="utilitiesAccordionOpen"
+                  @click="toggleUtilitiesAccordion"
+                >
+                  <div class="flex items-center gap-3 truncate min-w-0">
+                    <Wrench class="w-4 h-4 shrink-0" />
+                    <span class="truncate">{{ t('nav.utilities') }}</span>
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <span
+                      v-if="isUtilitiesRouteActive"
+                      class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
+                    />
+                    <ChevronDown
+                      class="w-4 h-4 transition-transform duration-200"
+                      :class="{ 'rotate-180': utilitiesAccordionOpen }"
+                    />
+                  </div>
+                </button>
+
+                <!-- Accordion Submenu: Otomatisasi -->
+                <div
+                  v-show="utilitiesAccordionOpen"
+                  class="mt-1 pl-3 py-1 space-y-1 border-l-2 border-emerald-200/80 dark:border-emerald-900/60 ml-4 transition-all"
+                >
+                  <a
+                    href="/utilities/automation"
+                    class="min-h-[40px] flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                    :class="
+                      route.path === '/utilities/automation'
+                        ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    "
+                    @click.prevent="navigateFromMobileDrawer('/utilities/automation')"
+                  >
+                    <div class="flex items-center gap-2.5 truncate min-w-0">
+                      <Clock class="w-4 h-4 shrink-0" />
+                      <span class="truncate">{{ t('nav.automation') }}</span>
                     </div>
                   </a>
                 </div>

@@ -236,6 +236,63 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidAutomation(data) {
+      return data.keys().hasAll(['ownerId', 'name', 'type', 'walletId', 'walletName', 'category', 'amount', 'scheduleDays', 'executionTime', 'mode', 'isActive', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'name',
+          'type',
+          'walletId',
+          'walletName',
+          'fundOwnerId',
+          'fundOwnerName',
+          'toWalletId',
+          'toWalletName',
+          'toFundOwnerId',
+          'toFundOwnerName',
+          'category',
+          'amount',
+          'adminFee',
+          'note',
+          'scheduleDays',
+          'executionTime',
+          'mode',
+          'isActive',
+          'lastExecutedDate',
+          'lastCancelledDate',
+          'snoozedUntil',
+          'deleted',
+          'deletedAt',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.type is string && (data.type == 'income' || data.type == 'expense' || data.type == 'transfer') &&
+        data.walletId is string && data.walletId.size() >= 1 && data.walletId.size() <= 128 && data.walletId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.walletName is string && data.walletName.size() >= 1 && data.walletName.size() <= 60 &&
+        (!('fundOwnerId' in data) || data.fundOwnerId == null || (data.fundOwnerId is string && data.fundOwnerId.size() <= 128)) &&
+        (!('fundOwnerName' in data) || data.fundOwnerName == null || (data.fundOwnerName is string && data.fundOwnerName.size() <= 60)) &&
+        (!('toWalletId' in data) || data.toWalletId == null || (data.toWalletId is string && data.toWalletId.size() <= 128)) &&
+        (!('toWalletName' in data) || data.toWalletName == null || (data.toWalletName is string && data.toWalletName.size() <= 60)) &&
+        (!('toFundOwnerId' in data) || data.toFundOwnerId == null || (data.toFundOwnerId is string && data.toFundOwnerId.size() <= 128)) &&
+        (!('toFundOwnerName' in data) || data.toFundOwnerName == null || (data.toFundOwnerName is string && data.toFundOwnerName.size() <= 60)) &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 50 &&
+        (data.amount is int || data.amount is float) && data.amount > 0 &&
+        (!('adminFee' in data) || data.adminFee == null || ((data.adminFee is int || data.adminFee is float) && data.adminFee >= 0)) &&
+        (!('note' in data) || data.note == null || (data.note is string && data.note.size() <= 200)) &&
+        data.scheduleDays is list && data.scheduleDays.size() >= 1 && data.scheduleDays.size() <= 31 &&
+        data.executionTime is string && data.executionTime.size() >= 4 && data.executionTime.size() <= 5 &&
+        data.mode is string && (data.mode == 'with_confirmation' || data.mode == 'without_confirmation') &&
+        data.isActive is bool &&
+        (!('lastExecutedDate' in data) || data.lastExecutedDate == null || (data.lastExecutedDate is string && data.lastExecutedDate.size() <= 40)) &&
+        (!('lastCancelledDate' in data) || data.lastCancelledDate == null || (data.lastCancelledDate is string && data.lastCancelledDate.size() <= 40)) &&
+        (!('snoozedUntil' in data) || data.snoozedUntil == null || (data.snoozedUntil is string && data.snoozedUntil.size() <= 60)) &&
+        isValidSoftDelete(data) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     // =========================================================================
     // Collection Rules
     // =========================================================================
@@ -655,6 +712,66 @@ service cloud.firestore {
           )
         );
       allow delete: if isSignedIn() && isValidId(settingId) && isAdmin();
+    }
+
+    // 11. Automations Collection (/automations/{automationId})
+    match /automations/{automationId} {
+      allow get: if isSignedIn() && isValidId(automationId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+        isValidId(automationId) &&
+        isValidAutomation(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (incoming().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+      allow update: if isSignedIn() &&
+        isValidId(automationId) &&
+        isValidAutomation(incoming()) &&
+        (incoming().ownerId == existing().ownerId || isAdmin()) &&
+        (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name',
+              'type',
+              'walletId',
+              'walletName',
+              'fundOwnerId',
+              'fundOwnerName',
+              'toWalletId',
+              'toWalletName',
+              'toFundOwnerId',
+              'toFundOwnerName',
+              'category',
+              'amount',
+              'adminFee',
+              'note',
+              'scheduleDays',
+              'executionTime',
+              'mode',
+              'isActive',
+              'lastExecutedDate',
+              'lastCancelledDate',
+              'snoozedUntil',
+              'deleted',
+              'deletedAt',
+              'updatedAt'
+            ]) &&
+            isNotBlocked()
+          ) ||
+          isAdmin()
+        );
+      allow delete: if isSignedIn() &&
+        isValidId(automationId) &&
+        (
+          (existing().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
     }
   }
 }
