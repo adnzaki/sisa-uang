@@ -57,6 +57,7 @@ import OfflineIndicator from './components/OfflineIndicator.vue';
 import AppUpdateBanner from './components/AppUpdateBanner.vue';
 import ReleaseNotesModal from './components/ReleaseNotesModal.vue';
 import AutomationConfirmBanner from './components/AutomationConfirmBanner.vue';
+import InSiteCheckoutModal from './components/InSiteCheckoutModal.vue';
 import { scrollToPageTop, scrollToPageTopMultiFrame } from './utils/scroll';
 
 const { t, locale } = useI18n();
@@ -447,10 +448,7 @@ watch(mobileDrawerOpen, (isOpen) => {
 
 function isCurrentSuperAdmin(): boolean {
   const currentEmail = String(auth.currentUser?.email || authStore.user?.email || '').trim().toLowerCase();
-  return (
-    authStore.isSuperAdmin ||
-    currentEmail === 'vuedevo@gmail.com'
-  );
+  return currentEmail === 'vuedevo@gmail.com';
 }
 
 function handleAppVisibilityOrFocus() {
@@ -1490,7 +1488,7 @@ async function handleSubmitProPayment() {
                         ? 'border-amber-300 dark:border-amber-800/70 bg-amber-50/80 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300'
                         : 'border-amber-300/90 dark:border-amber-800/70 bg-amber-50/90 dark:bg-amber-950/40 hover:bg-amber-100/80 text-amber-900 dark:text-amber-200'
                     "
-                    @click="accountMenuOpen = false; notificationStore.openProModal()"
+                    @click="accountMenuOpen = false; notificationStore.openCheckoutModal('yearly')"
                   >
                     <span class="flex items-center gap-2 truncate">
                       <Crown class="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
@@ -2580,18 +2578,32 @@ async function handleSubmitProPayment() {
           </ul>
         </div>
 
-        <div class="pt-1">
+        <div class="pt-1 flex flex-col sm:flex-row gap-2.5">
           <button
             type="button"
-            class="w-full min-h-[46px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shadow-xs cursor-pointer"
+            class="flex-1 min-h-[46px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shadow-xs cursor-pointer"
+            @click="notificationStore.openCheckoutModal('yearly')"
+          >
+            <Crown class="w-4 h-4 shrink-0 text-amber-300" />
+            <span>Langganan SisaUang Pro</span>
+          </button>
+          <button
+            type="button"
+            class="min-h-[46px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
             @click="notificationStore.closeProModal()"
           >
-            <Check class="w-4 h-4 shrink-0" />
-            <span>Mengerti</span>
+            <span>Tutup</span>
           </button>
         </div>
       </div>
     </AppModal>
+
+    <!-- Global In-Site Checkout Modal (Duitku Payment Gateway V2) -->
+    <InSiteCheckoutModal
+      :is-open="notificationStore.checkoutModalOpen"
+      :initial-plan="notificationStore.checkoutPlan"
+      @close="notificationStore.closeCheckoutModal()"
+    />
 
     <!-- Global Delete Confirmation Modal -->
     <AppModal

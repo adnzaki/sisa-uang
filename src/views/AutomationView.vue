@@ -15,7 +15,6 @@ import {
   SlidersHorizontal,
   Sparkles,
   ArrowRight,
-  ShieldCheck,
   Check,
   ChevronDown,
   Info,
@@ -68,11 +67,37 @@ const formIsActive = ref(true);
 const isSaving = ref(false);
 const filterTab = ref<'all' | 'with_confirmation' | 'without_confirmation' | 'active'>('all');
 
-onMounted(async () => {
-  if (authStore.user?.uid && !authStore.isSuperAdmin) {
-    await automationStore.loadAutomations(authStore.user.uid);
+async function ensureDataReady() {
+  const uid = authStore.user?.uid;
+  if (!uid) return;
+  const currentEmail = String(authStore.user?.email || '').trim().toLowerCase();
+  if (currentEmail === 'vuedevo@gmail.com') return;
+
+  const tasks: Promise<any>[] = [];
+  if (financeStore.wallets.length === 0) {
+    tasks.push(financeStore.initFinanceData(uid));
   }
+  if (automationStore.rules.length === 0) {
+    tasks.push(automationStore.loadAutomations(uid));
+  }
+  if (tasks.length > 0) {
+    await Promise.all(tasks);
+  }
+}
+
+onMounted(async () => {
+  await ensureDataReady();
 });
+
+watch(
+  () => authStore.user?.uid,
+  async (uid) => {
+    if (uid) {
+      await ensureDataReady();
+    }
+  },
+  { immediate: true }
+);
 
 // Format currency display input (Matching QuickTransactionModal)
 function formatNominalDisplay(val: number | string | ''): string {
@@ -241,14 +266,40 @@ const filteredRules = computed(() => {
   return all.filter((r) => !r.deleted);
 });
 
+// Auto-select initial wallet and destination wallet when wallets finish hydrating
+watch(
+  () => financeStore.wallets,
+  (newWallets) => {
+    if (!modalOpen.value) return;
+    const active = newWallets.filter((w) => !w.deleted);
+    if (!walletId.value && active.length > 0) {
+      walletId.value = active[0].id;
+      const holders = financeStore.getHoldersByWalletId(active[0].id);
+      fundOwnerId.value = holders[0]?.id || '';
+    }
+    if (!toWalletId.value && active.length > 0) {
+      toWalletId.value = active[1]?.id || active[0]?.id || '';
+      const destHolders = financeStore.getHoldersByWalletId(toWalletId.value);
+      toFundOwnerId.value = destHolders[0]?.id || '';
+    }
+  },
+  { deep: true }
+);
+
 // Modal Actions
-function openAddModal() {
+async function openAddModal() {
   editingId.value = null;
   errorMsg.value = null;
   txType.value = 'expense';
-  walletId.value = financeStore.wallets[0]?.id || '';
+
+  if (financeStore.wallets.length === 0 && authStore.user?.uid) {
+    await financeStore.initFinanceData(authStore.user.uid);
+  }
+
+  const activeWallets = financeStore.wallets.filter((w) => !w.deleted);
+  walletId.value = activeWallets[0]?.id || '';
   fundOwnerId.value = availableSourceHolders.value[0]?.id || '';
-  toWalletId.value = financeStore.wallets[1]?.id || financeStore.wallets[0]?.id || '';
+  toWalletId.value = activeWallets[1]?.id || activeWallets[0]?.id || '';
   toFundOwnerId.value = availableDestHolders.value[0]?.id || '';
   amount.value = '';
   adminFee.value = '';
@@ -263,7 +314,10 @@ function openAddModal() {
   modalOpen.value = true;
 }
 
-function openEditModal(rule: AutomationItem) {
+async function openEditModal(rule: AutomationItem) {
+  if (financeStore.wallets.length === 0 && authStore.user?.uid) {
+    await financeStore.initFinanceData(authStore.user.uid);
+  }
   editingId.value = rule.id;
   errorMsg.value = null;
   txType.value = rule.type;
@@ -468,19 +522,12 @@ function getExecutionStatusText(rule: AutomationItem): { text: string; color: st
     <!-- Header Section -->
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <div>
-        <div class="flex items-center gap-2.5">
-          <div class="w-10 h-10 rounded-2xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0 border border-emerald-200 dark:border-emerald-800">
-            <Clock class="w-5 h-5" />
-          </div>
-          <div>
-            <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-              Otomatisasi Transaksi
-            </h1>
-            <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-              Pencatatan transaksi berkala otomatis (Dengan Konfirmasi / Tanpa Konfirmasi)
-            </p>
-          </div>
-        </div>
+        <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+          Otomatisasi Transaksi
+        </h1>
+        <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          Pencatatan transaksi berkala otomatis (Dengan Konfirmasi / Tanpa Konfirmasi)
+        </p>
       </div>
 
       <div class="flex items-center gap-2.5">
@@ -492,17 +539,6 @@ function getExecutionStatusText(rule: AutomationItem): { text: string; color: st
           <Plus class="w-4 h-4" />
           <span>Tambah Jadwal Otomatis</span>
         </button>
-      </div>
-    </div>
-
-    <!-- Optimization Info Banner (Firestore Quota Protection) -->
-    <div class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/30 p-4 flex items-start gap-3 text-xs text-emerald-900 dark:text-emerald-200">
-      <ShieldCheck class="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
-      <div class="space-y-0.5">
-        <span class="font-bold">Efisiensi Kuota Firestore Terlindungi</span>
-        <p class="opacity-90 leading-relaxed">
-          Pemeriksaan jadwal pencatatan otomatis di-cache ke memori lokal dengan batas kadaluarsa 5 menit. Seluruh navigasi dan aktivitas Anda di aplikasi dicek secara instan tanpa menguras kuota pembacaan Firestore.
-        </p>
       </div>
     </div>
 

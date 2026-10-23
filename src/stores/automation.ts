@@ -20,8 +20,7 @@ import type { AutomationItem, AutomationsCacheData } from '../types/automation';
 const CACHE_KEY_PREFIX = 'su_automations_cache_';
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL to save Firestore read quota
 
-function isSuperAdminUser(email?: string | null, isSuperAdminFlag?: boolean): boolean {
-  if (isSuperAdminFlag) return true;
+function isSuperAdminUser(email?: string | null): boolean {
   const cleanEmail = String(email || '').trim().toLowerCase();
   return cleanEmail === 'vuedevo@gmail.com';
 }
@@ -115,7 +114,7 @@ export const useAutomationStore = defineStore('automation', () => {
   async function loadAutomations(uidInput?: string, forceRefresh = false): Promise<AutomationItem[]> {
     const authStore = useAuthStore();
     const currentEmail = auth.currentUser?.email || authStore.user?.email;
-    if (isSuperAdminUser(currentEmail, authStore.isSuperAdmin)) {
+    if (isSuperAdminUser(currentEmail)) {
       rules.value = [];
       return [];
     }
@@ -582,7 +581,7 @@ export const useAutomationStore = defineStore('automation', () => {
   async function checkAndTriggerOnActivity(): Promise<void> {
     const authStore = useAuthStore();
     const currentEmail = auth.currentUser?.email || authStore.user?.email;
-    if (isSuperAdminUser(currentEmail, authStore.isSuperAdmin)) {
+    if (isSuperAdminUser(currentEmail)) {
       return;
     }
     if (!authStore.isAuthenticated || !authStore.user?.uid) {

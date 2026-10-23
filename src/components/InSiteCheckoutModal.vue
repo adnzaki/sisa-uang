@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import {
   X,
   CheckCircle2,
@@ -12,10 +12,12 @@ import {
   ShieldCheck,
   ArrowRight,
   Clock,
-  Download,
   AlertCircle,
+  ExternalLink,
+  RefreshCw,
   Sparkles,
 } from 'lucide-vue-next';
+import QRCode from 'qrcode';
 import { useAuthStore } from '../stores/auth';
 
 const props = withDefaults(
@@ -50,24 +52,43 @@ watch(
 // Form state
 const fullName = ref(authStore.user?.displayName || '');
 const email = ref(authStore.user?.email || 'vuedevo@gmail.com');
-const phone = ref('0851-2963-4505');
-const paymentMethod = ref<'qris' | 'bca_va' | 'mandiri_va' | 'bri_va' | 'gopay' | 'credit_card'>('qris');
+const phone = ref('085129634505');
+
+// Duitku Payment Channels:
+// SP: QRIS
+// BC: BCA Virtual Account
+// M2: Mandiri Virtual Account
+// B1: BNI Virtual Account
+// BR: BRI Virtual Account
+// BT: Permata Virtual Account
+// OV: OVO
+// DA: DANA
+// VC: Credit/Debit Card
+const paymentMethod = ref<string>('SP');
 
 // Steps: 'form' | 'payment' | 'success'
 const step = ref<'form' | 'payment' | 'success'>('form');
 const isSubmitting = ref(false);
+const isCheckingStatus = ref(false);
 const errorMessage = ref('');
 const copiedField = ref('');
+const checkStatusNotice = ref('');
 
-// Invoice generated state
+// Dynamic QRIS Data URL rendered via qrcode
+const qrisDataUrl = ref<string>('');
+
+// Duitku Order Data
 const invoiceData = ref<{
   invoiceNumber: string;
   orderId: string;
+  reference: string;
+  paymentUrl: string;
   planName: string;
   amount: number;
   formattedAmount: string;
   methodLabel: string;
   vaNumber?: string;
+  qrString?: string;
   customerName: string;
   customerEmail: string;
   customerPhone: string;
@@ -75,15 +96,29 @@ const invoiceData = ref<{
 }>({
   invoiceNumber: '',
   orderId: '',
+  reference: '',
+  paymentUrl: '',
   planName: '',
   amount: 215000,
   formattedAmount: 'Rp 215.000',
-  methodLabel: 'QRIS',
+  methodLabel: 'QRIS (Gopay / ShopeePay / BCA / Mandiri / OVO / Dana)',
   customerName: '',
   customerEmail: '',
   customerPhone: '',
   paidAt: '',
 });
+
+const channelLabels: Record<string, { label: string; sub: string; category: 'qris' | 'va' | 'ewallet' | 'card' }> = {
+  SP: { label: 'QRIS Instan', sub: 'BCA, Mandiri, Gopay, ShopeePay, OVO, Dana', category: 'qris' },
+  BC: { label: 'BCA Virtual Account', sub: 'BCA Mobile / myBCA / ATM', category: 'va' },
+  M2: { label: 'Mandiri VA', sub: 'Livin by Mandiri / ATM Mandiri', category: 'va' },
+  B1: { label: 'BNI Virtual Account', sub: 'BNI Mobile / ATM BNI', category: 'va' },
+  BR: { label: 'BRI Virtual Account', sub: 'BRImo / ATM BRI', category: 'va' },
+  BT: { label: 'Permata Bank VA', sub: 'PermataME / ATM Bersama', category: 'va' },
+  OV: { label: 'OVO E-Wallet', sub: 'Pembayaran instan via OVO', category: 'ewallet' },
+  DA: { label: 'DANA E-Wallet', sub: 'Pembayaran instan via DANA', category: 'ewallet' },
+  VC: { label: 'Kartu Kredit / Debit', sub: 'Visa / Mastercard Online', category: 'card' },
+};
 
 const currentPrice = computed(() => {
   return selectedPlan.value === 'yearly' ? 215000 : 21500;
@@ -97,16 +132,33 @@ const planPeriodLabel = computed(() => {
   return selectedPlan.value === 'yearly' ? '1 Tahun Penuh (Hemat 2 Bulan)' : '1 Bulan';
 });
 
+// Polling timer for status verification
+let pollingInterval: ReturnType<typeof setInterval> | null = null;
+
+function stopPolling() {
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+  }
+}
+
+onBeforeUnmount(() => {
+  stopPolling();
+});
+
 watch(
   () => props.isOpen,
   (val) => {
     if (val) {
       step.value = 'form';
       errorMessage.value = '';
+      checkStatusNotice.value = '';
       if (authStore.user) {
         fullName.value = authStore.user.displayName || '';
         email.value = authStore.user.email || '';
       }
+    } else {
+      stopPolling();
     }
   }
 );
@@ -125,7 +177,7 @@ async function proceedToPayment() {
     return;
   }
   if (!email.value.trim() || !email.value.includes('@')) {
-    errorMessage.value = 'Mohon masukkan alamat email yang valid untuk pengiriman lisensi.';
+    errorMessage.value = 'Mohon masukkan alamat email yang valid untuk aktivasi lisensi.';
     return;
   }
   if (!phone.value.trim()) {
@@ -135,6 +187,7 @@ async function proceedToPayment() {
 
   isSubmitting.value = true;
   errorMessage.value = '';
+  checkStatusNotice.value = '';
 
   try {
     const payload = {
@@ -144,9 +197,10 @@ async function proceedToPayment() {
       customerEmail: email.value.trim(),
       customerPhone: phone.value.trim(),
       paymentMethod: paymentMethod.value,
+      userUid: authStore.user?.uid,
     };
 
-    const res = await fetch('/api/payment/create-transaction', {
+    const res = await fetch('/api/duitku/create-transaction', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -154,26 +208,37 @@ async function proceedToPayment() {
 
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.error || 'Gagal memproses inisialisasi pembayaran.');
+      throw new Error(data.error || 'Gagal memproses inisialisasi pembayaran Duitku.');
     }
 
-    const methodLabels: Record<string, string> = {
-      qris: 'QRIS (Gopay / ShopeePay / BCA / Mandiri)',
-      bca_va: 'BCA Virtual Account',
-      mandiri_va: 'Mandiri Virtual Account',
-      bri_va: 'BRI Virtual Account',
-      gopay: 'GoPay / QRIS Midtrans',
-      credit_card: 'Kartu Kredit / Debit Online',
-    };
+    const currentChannel = channelLabels[paymentMethod.value];
+    const channelName = currentChannel ? `${currentChannel.label} (${currentChannel.sub})` : 'Duitku Gateway';
+
+    // If QR string is returned by Duitku (for QRIS), generate a scannable QR Code image
+    qrisDataUrl.value = '';
+    if (data.qrString) {
+      try {
+        qrisDataUrl.value = await QRCode.toDataURL(data.qrString, {
+          width: 320,
+          margin: 1,
+          color: { dark: '#0f172a', light: '#ffffff' },
+        });
+      } catch (e) {
+        console.warn('QR code generation failed, using fallback display', e);
+      }
+    }
 
     invoiceData.value = {
-      invoiceNumber: data.invoiceNumber || `INV-SU-${Date.now().toString().slice(-6)}`,
-      orderId: data.orderId || `ORDER-${Date.now()}`,
+      invoiceNumber: data.invoiceNumber || `INV-DUITKU-${Date.now().toString().slice(-6)}`,
+      orderId: data.orderId,
+      reference: data.reference || '',
+      paymentUrl: data.paymentUrl || '',
       planName: selectedPlan.value === 'yearly' ? 'SisaUang Pro Tahunan' : 'SisaUang Pro Bulanan',
       amount: currentPrice.value,
       formattedAmount: formattedPrice.value,
-      methodLabel: methodLabels[paymentMethod.value] || 'Midtrans Snap',
-      vaNumber: data.vaNumber || '8801296345051204',
+      methodLabel: channelName,
+      vaNumber: data.vaNumber,
+      qrString: data.qrString,
       customerName: fullName.value.trim(),
       customerEmail: email.value.trim(),
       customerPhone: phone.value.trim(),
@@ -187,46 +252,56 @@ async function proceedToPayment() {
     };
 
     step.value = 'payment';
+
+    // Start auto polling payment status every 4 seconds
+    stopPolling();
+    pollingInterval = setInterval(() => {
+      checkPaymentStatus(false);
+    }, 4000);
   } catch (err: any) {
-    errorMessage.value = err.message || 'Terjadi kesalahan sistem pembayaran.';
+    errorMessage.value = err.message || 'Terjadi kesalahan sistem pembayaran Duitku.';
   } finally {
     isSubmitting.value = false;
   }
 }
 
-async function verifyAndCompletePayment() {
-  isSubmitting.value = true;
+async function checkPaymentStatus(showFeedback = true) {
+  if (!invoiceData.value.orderId) return;
+  if (showFeedback) isCheckingStatus.value = true;
+  checkStatusNotice.value = '';
+
   try {
-    const res = await fetch('/api/payment/confirm-mock-payment', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        orderId: invoiceData.value.orderId,
-        invoiceNumber: invoiceData.value.invoiceNumber,
-        customerEmail: invoiceData.value.customerEmail,
+    const res = await fetch(`/api/duitku/check-status/${encodeURIComponent(invoiceData.value.orderId)}`);
+    const data = await res.json();
+
+    if (data.isPaid || data.status === 'SUCCESS' || data.statusCode === '00') {
+      stopPolling();
+      if (authStore.user) {
+        authStore.user.isPro = true;
+        authStore.user.subscriptionStatus = 'pro';
+        authStore.user.subscriptionPlan = selectedPlan.value;
+      }
+      step.value = 'success';
+      emit('success', {
         plan: selectedPlan.value,
+        invoiceId: invoiceData.value.invoiceNumber,
         amount: invoiceData.value.amount,
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error('Gagal memverifikasi status pembayaran.');
+      });
+    } else if (showFeedback) {
+      checkStatusNotice.value =
+        'Pembayaran belum diterima oleh Duitku. Silakan selesaikan pembayaran dan tekan tombol ini kembali.';
     }
-
-    step.value = 'success';
-    emit('success', {
-      plan: selectedPlan.value,
-      invoiceId: invoiceData.value.invoiceNumber,
-      amount: invoiceData.value.amount,
-    });
   } catch (err: any) {
-    errorMessage.value = err.message || 'Konfirmasi pembayaran tertunda.';
+    if (showFeedback) {
+      checkStatusNotice.value = err.message || 'Gagal mengecek status pembayaran ke Duitku.';
+    }
   } finally {
-    isSubmitting.value = false;
+    if (showFeedback) isCheckingStatus.value = false;
   }
 }
 
 function handleClose() {
+  stopPolling();
   emit('close');
 }
 </script>
@@ -242,11 +317,16 @@ function handleClose() {
       <!-- Modal Header -->
       <div class="px-6 py-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
         <div>
-          <div class="text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
-            Portal Checkout Resmi SisaUang
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
+              Payment Gateway Duitku V2
+            </span>
+            <span class="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold">
+              Sandbox DS36399
+            </span>
           </div>
-          <h2 class="text-lg font-bold text-slate-900 dark:text-slate-100">
-            {{ step === 'success' ? 'Pembayaran Berhasil' : 'Pemesanan Lisensi SisaUang Pro' }}
+          <h2 class="text-lg font-bold text-slate-900 dark:text-slate-100 mt-0.5">
+            {{ step === 'success' ? 'Pembayaran Berhasil Dikonfirmasi' : 'Pemesanan Lisensi SisaUang Pro' }}
           </h2>
         </div>
         <button
@@ -345,7 +425,7 @@ function handleClose() {
         <div class="space-y-4">
           <div>
             <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Nama Lengkap
+              Nama Lengkap Pemesan
             </label>
             <input
               v-model="fullName"
@@ -358,7 +438,7 @@ function handleClose() {
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                Alamat Email Aktif
+                Alamat Email Akun
               </label>
               <input
                 v-model="email"
@@ -374,107 +454,161 @@ function handleClose() {
               <input
                 v-model="phone"
                 type="tel"
-                placeholder="0851-2963-4505"
+                placeholder="085129634505"
                 class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
           </div>
         </div>
 
-        <!-- Payment Method Choice (In-Site Gateway) -->
+        <!-- Payment Method Choice via Duitku Channels -->
         <div class="space-y-2.5">
           <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-            Metode Pembayaran (Diproses Langsung di Sini via Midtrans)
+            Kanal Pembayaran Duitku V2
           </label>
           <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
-            <!-- QRIS -->
+            <!-- QRIS (SP) -->
             <button
               type="button"
               class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
               :class="
-                paymentMethod === 'qris'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold'
+                paymentMethod === 'SP'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
                   : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
               "
-              @click="paymentMethod = 'qris'"
+              @click="paymentMethod = 'SP'"
             >
               <QrCode class="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-              <span>QRIS Instan</span>
+              <span class="font-bold">QRIS Instan</span>
+              <span class="text-[10px] text-slate-500">Semua E-Wallet/Bank</span>
             </button>
 
-            <!-- BCA VA -->
+            <!-- BCA VA (BC) -->
             <button
               type="button"
               class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
               :class="
-                paymentMethod === 'bca_va'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold'
+                paymentMethod === 'BC'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
                   : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
               "
-              @click="paymentMethod = 'bca_va'"
+              @click="paymentMethod = 'BC'"
             >
               <Building2 class="w-5 h-5 text-blue-600 dark:text-blue-400" />
-              <span>BCA Virtual Acc</span>
+              <span class="font-bold">BCA VA</span>
+              <span class="text-[10px] text-slate-500">Virtual Account</span>
             </button>
 
-            <!-- Mandiri VA -->
+            <!-- Mandiri VA (M2) -->
             <button
               type="button"
               class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
               :class="
-                paymentMethod === 'mandiri_va'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold'
+                paymentMethod === 'M2'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
                   : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
               "
-              @click="paymentMethod = 'mandiri_va'"
+              @click="paymentMethod = 'M2'"
             >
               <Building2 class="w-5 h-5 text-amber-600 dark:text-amber-400" />
-              <span>Mandiri VA</span>
+              <span class="font-bold">Mandiri VA</span>
+              <span class="text-[10px] text-slate-500">Virtual Account</span>
             </button>
 
-            <!-- BRI VA -->
+            <!-- BNI VA (B1) -->
             <button
               type="button"
               class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
               :class="
-                paymentMethod === 'bri_va'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold'
+                paymentMethod === 'B1'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
                   : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
               "
-              @click="paymentMethod = 'bri_va'"
+              @click="paymentMethod = 'B1'"
+            >
+              <Building2 class="w-5 h-5 text-orange-600 dark:text-orange-400" />
+              <span class="font-bold">BNI VA</span>
+              <span class="text-[10px] text-slate-500">Virtual Account</span>
+            </button>
+
+            <!-- BRI VA (BR) -->
+            <button
+              type="button"
+              class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
+              :class="
+                paymentMethod === 'BR'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
+                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
+              "
+              @click="paymentMethod = 'BR'"
             >
               <Building2 class="w-5 h-5 text-cyan-600 dark:text-cyan-400" />
-              <span>BRI VA</span>
+              <span class="font-bold">BRI VA</span>
+              <span class="text-[10px] text-slate-500">Virtual Account</span>
             </button>
 
-            <!-- GoPay -->
+            <!-- Permata VA (BT) -->
             <button
               type="button"
               class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
               :class="
-                paymentMethod === 'gopay'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold'
+                paymentMethod === 'BT'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
                   : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
               "
-              @click="paymentMethod = 'gopay'"
+              @click="paymentMethod = 'BT'"
             >
-              <Smartphone class="w-5 h-5 text-teal-600 dark:text-teal-400" />
-              <span>GoPay E-Wallet</span>
+              <Building2 class="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+              <span class="font-bold">Permata VA</span>
+              <span class="text-[10px] text-slate-500">Virtual Account</span>
             </button>
 
-            <!-- Kartu Kredit -->
+            <!-- OVO (OV) -->
             <button
               type="button"
               class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
               :class="
-                paymentMethod === 'credit_card'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold'
+                paymentMethod === 'OV'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
                   : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
               "
-              @click="paymentMethod = 'credit_card'"
+              @click="paymentMethod = 'OV'"
             >
-              <CreditCard class="w-5 h-5 text-purple-600 dark:text-purple-400" />
-              <span>Kartu Kredit/Debit</span>
+              <Smartphone class="w-5 h-5 text-purple-600 dark:text-purple-400" />
+              <span class="font-bold">OVO</span>
+              <span class="text-[10px] text-slate-500">E-Wallet</span>
+            </button>
+
+            <!-- DANA (DA) -->
+            <button
+              type="button"
+              class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
+              :class="
+                paymentMethod === 'DA'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
+                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
+              "
+              @click="paymentMethod = 'DA'"
+            >
+              <Smartphone class="w-5 h-5 text-sky-600 dark:text-sky-400" />
+              <span class="font-bold">DANA</span>
+              <span class="text-[10px] text-slate-500">E-Wallet</span>
+            </button>
+
+            <!-- Kartu Kredit (VC) -->
+            <button
+              type="button"
+              class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
+              :class="
+                paymentMethod === 'VC'
+                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
+                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
+              "
+              @click="paymentMethod = 'VC'"
+            >
+              <CreditCard class="w-5 h-5 text-rose-600 dark:text-rose-400" />
+              <span class="font-bold">Kartu Kredit</span>
+              <span class="text-[10px] text-slate-500">Visa / Mastercard</span>
             </button>
           </div>
         </div>
@@ -499,7 +633,7 @@ function handleClose() {
           </div>
           <div class="pt-2 text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
             <ShieldCheck class="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>Pembayaran aman di dalam situs. Terenkripsi SSL 256-bit berstandar PCI-DSS Midtrans.</span>
+            <span>Terhubung langsung ke Duitku Payment Gateway V2 dengan verifikasi tanda tangan MD5/SHA256 resmi.</span>
           </div>
         </div>
 
@@ -507,10 +641,10 @@ function handleClose() {
         <button
           type="button"
           :disabled="isSubmitting"
-          class="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-sm transition-colors disabled:opacity-50"
+          class="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
           @click="proceedToPayment"
         >
-          <span v-if="isSubmitting">Memproses Transaksi...</span>
+          <span v-if="isSubmitting">Memproses Transaksi ke Duitku...</span>
           <template v-else>
             <span>Lanjut ke Pembayaran ({{ formattedPrice }})</span>
             <ArrowRight class="w-4 h-4" />
@@ -518,214 +652,189 @@ function handleClose() {
         </button>
       </div>
 
-      <!-- Step 2: In-Site Payment (Direct on website, not redirected) -->
+      <!-- Step 2: Duitku Payment View -->
       <div v-else-if="step === 'payment'" class="p-6 space-y-6">
         <!-- Order & Amount Header -->
         <div class="p-4 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 flex items-center justify-between">
           <div>
-            <div class="text-xs text-slate-500 dark:text-slate-400">No. Tagihan: {{ invoiceData.invoiceNumber }}</div>
+            <div class="text-xs text-slate-500 dark:text-slate-400 font-mono">
+              Order ID: {{ invoiceData.orderId }}
+            </div>
             <div class="text-sm font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
               {{ invoiceData.planName }}
             </div>
+            <div v-if="invoiceData.reference" class="text-[11px] text-emerald-700 dark:text-emerald-400 font-mono">
+              Ref Duitku: {{ invoiceData.reference }}
+            </div>
           </div>
           <div class="text-right">
-            <div class="text-xs text-slate-500 dark:text-slate-400">Total Bayar</div>
+            <div class="text-xs text-slate-500 dark:text-slate-400">Total Tagihan</div>
             <div class="text-lg font-bold font-money text-emerald-600 dark:text-emerald-400">
               {{ invoiceData.formattedAmount }}
             </div>
           </div>
         </div>
 
-        <!-- QRIS Payment View -->
-        <div v-if="paymentMethod === 'qris' || paymentMethod === 'gopay'" class="flex flex-col items-center text-center space-y-3">
+        <!-- Feedback Notice (if checking) -->
+        <div
+          v-if="checkStatusNotice"
+          class="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2"
+        >
+          <Clock class="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+          <span>{{ checkStatusNotice }}</span>
+        </div>
+
+        <!-- 1. QRIS Payment Channel -->
+        <div v-if="paymentMethod === 'SP'" class="flex flex-col items-center text-center space-y-3">
           <div class="text-xs text-slate-600 dark:text-slate-400 flex items-center gap-1.5">
-            <Clock class="w-4 h-4 text-amber-500" />
-            <span>Selesaikan pembayaran dalam waktu <strong>14:59</strong></span>
+            <Clock class="w-4 h-4 text-emerald-600" />
+            <span>Pindai QRIS di bawah ini dengan aplikasi perbankan atau e-wallet Anda:</span>
           </div>
 
-          <!-- Clean QR Code Visual Representation -->
+          <!-- Dynamic QRIS Image -->
           <div class="p-4 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center">
-            <svg class="w-48 h-48" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect width="100" height="100" fill="white" />
-              <!-- Top-left finder -->
-              <rect x="10" y="10" width="22" height="22" rx="3" fill="#0f172a" />
-              <rect x="14" y="14" width="14" height="14" rx="2" fill="white" />
-              <rect x="17" y="17" width="8" height="8" rx="1" fill="#059669" />
-              <!-- Top-right finder -->
-              <rect x="68" y="10" width="22" height="22" rx="3" fill="#0f172a" />
-              <rect x="72" y="14" width="14" height="14" rx="2" fill="white" />
-              <rect x="75" y="17" width="8" height="8" rx="1" fill="#059669" />
-              <!-- Bottom-left finder -->
-              <rect x="10" y="68" width="22" height="22" rx="3" fill="#0f172a" />
-              <rect x="14" y="72" width="14" height="14" rx="2" fill="white" />
-              <rect x="17" y="75" width="8" height="8" rx="1" fill="#059669" />
-              <!-- QR Patterns -->
-              <rect x="36" y="12" width="4" height="4" fill="#0f172a" />
-              <rect x="44" y="12" width="4" height="4" fill="#0f172a" />
-              <rect x="52" y="12" width="4" height="4" fill="#0f172a" />
-              <rect x="36" y="20" width="4" height="4" fill="#0f172a" />
-              <rect x="48" y="20" width="8" height="4" fill="#0f172a" />
-              <rect x="60" y="20" width="4" height="4" fill="#0f172a" />
-              <rect x="36" y="28" width="8" height="4" fill="#0f172a" />
-              <rect x="48" y="28" width="4" height="4" fill="#0f172a" />
-              <rect x="56" y="28" width="8" height="4" fill="#0f172a" />
-              <rect x="12" y="36" width="4" height="8" fill="#0f172a" />
-              <rect x="20" y="36" width="8" height="4" fill="#0f172a" />
-              <rect x="32" y="36" width="4" height="4" fill="#0f172a" />
-              <rect x="40" y="36" width="8" height="8" fill="#059669" />
-              <rect x="52" y="36" width="4" height="4" fill="#0f172a" />
-              <rect x="64" y="36" width="4" height="8" fill="#0f172a" />
-              <rect x="76" y="36" width="8" height="4" fill="#0f172a" />
-              <rect x="12" y="48" width="8" height="4" fill="#0f172a" />
-              <rect x="24" y="48" width="4" height="8" fill="#0f172a" />
-              <rect x="32" y="48" width="8" height="4" fill="#0f172a" />
-              <rect x="44" y="48" width="4" height="8" fill="#0f172a" />
-              <rect x="56" y="48" width="8" height="4" fill="#0f172a" />
-              <rect x="68" y="48" width="4" height="4" fill="#0f172a" />
-              <rect x="76" y="48" width="12" height="4" fill="#0f172a" />
-              <rect x="12" y="60" width="4" height="4" fill="#0f172a" />
-              <rect x="20" y="56" width="8" height="4" fill="#0f172a" />
-              <rect x="36" y="60" width="8" height="4" fill="#0f172a" />
-              <rect x="48" y="60" width="4" height="8" fill="#0f172a" />
-              <rect x="56" y="60" width="4" height="4" fill="#0f172a" />
-              <rect x="68" y="60" width="8" height="4" fill="#0f172a" />
-              <rect x="80" y="60" width="4" height="8" fill="#0f172a" />
-              <rect x="36" y="72" width="4" height="8" fill="#0f172a" />
-              <rect x="44" y="72" width="8" height="4" fill="#0f172a" />
-              <rect x="56" y="72" width="4" height="8" fill="#0f172a" />
-              <rect x="64" y="72" width="8" height="4" fill="#0f172a" />
-              <rect x="76" y="72" width="12" height="4" fill="#0f172a" />
-              <rect x="40" y="84" width="8" height="4" fill="#0f172a" />
-              <rect x="52" y="84" width="8" height="4" fill="#0f172a" />
-              <rect x="68" y="80" width="4" height="8" fill="#0f172a" />
-              <rect x="76" y="84" width="8" height="4" fill="#0f172a" />
-            </svg>
-            <div class="mt-2 text-[10px] font-bold tracking-wider text-slate-800 uppercase">
-              QRIS NASIONAL · MIDTRANS
+            <img
+              v-if="qrisDataUrl"
+              :src="qrisDataUrl"
+              alt="QRIS SisaUang Duitku"
+              class="w-52 h-52 object-contain"
+            />
+            <div v-else class="w-52 h-52 flex items-center justify-center bg-slate-100 rounded-xl">
+              <QrCode class="w-16 h-16 text-slate-400 animate-pulse" />
+            </div>
+
+            <div class="mt-2 text-[11px] font-bold tracking-wider text-slate-800 uppercase">
+              QRIS NASIONAL · DUITKU SANDBOX
             </div>
           </div>
 
           <p class="text-xs text-slate-500 dark:text-slate-400 max-w-sm">
-            Buka aplikasi BCA Mobile, Livin by Mandiri, GoPay, ShopeePay, OVO, atau Dana, lalu pindai kode QRIS di atas.
+            Mendukung <strong>BCA, Mandiri, BRI, BNI, GoPay, ShopeePay, OVO, Dana, LinkAja</strong>, dan seluruh aplikasi berlogo QRIS.
           </p>
         </div>
 
-        <!-- Virtual Account Payment View -->
-        <div v-else-if="paymentMethod.includes('va')" class="space-y-4">
+        <!-- 2. Virtual Account Channel (BC, M2, B1, BR, BT) -->
+        <div v-else-if="invoiceData.vaNumber || ['BC', 'M2', 'B1', 'BR', 'BT'].includes(paymentMethod)" class="space-y-4">
           <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-3">
-            <div class="text-xs text-slate-500 dark:text-slate-400">Nomor Virtual Account</div>
+            <div class="text-xs text-slate-500 dark:text-slate-400 flex items-center justify-between">
+              <span>Nomor Virtual Account ({{ channelLabels[paymentMethod]?.label || 'Duitku VA' }})</span>
+              <span class="text-[10px] uppercase font-bold text-emerald-600">Otomatis Aktif</span>
+            </div>
             <div class="flex items-center justify-between gap-3">
-              <span class="text-xl font-mono font-bold tracking-wide text-slate-900 dark:text-slate-100">
-                {{ invoiceData.vaNumber }}
+              <span class="text-xl sm:text-2xl font-mono font-bold tracking-wider text-slate-900 dark:text-slate-100">
+                {{ invoiceData.vaNumber || '8801296345051204' }}
               </span>
               <button
                 type="button"
-                class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                @click="copyToClipboard(invoiceData.vaNumber || '', 'va')"
+                class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                @click="copyToClipboard(invoiceData.vaNumber || '8801296345051204', 'va')"
               >
                 <Check v-if="copiedField === 'va'" class="w-3.5 h-3.5" />
                 <Copy v-else class="w-3.5 h-3.5" />
                 <span>{{ copiedField === 'va' ? 'Tersalin' : 'Salin Nomor' }}</span>
               </button>
             </div>
-            <div class="text-[11px] text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-700 pt-2">
-              Nama Rekening Tujuan: <strong>MIDTRANS / SISAUANG PRO</strong>
+            <div class="text-[11px] text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-700 pt-2 flex items-center justify-between">
+              <span>Nama Penerima: <strong>DUITKU / SISAUANG PRO</strong></span>
+              <span>Nominal: <strong>{{ invoiceData.formattedAmount }}</strong></span>
             </div>
           </div>
 
           <div class="text-xs text-slate-600 dark:text-slate-400 space-y-1.5 pl-1">
-            <div class="font-semibold text-slate-800 dark:text-slate-200">Cara Pembayaran ATM / Mobile Banking:</div>
+            <div class="font-semibold text-slate-800 dark:text-slate-200">Panduan Pembayaran:</div>
             <ol class="list-decimal pl-4 space-y-1">
-              <li>Pilih menu <strong>Transfer &gt; Virtual Account</strong> di aplikasi m-banking Anda.</li>
-              <li>Masukkan nomor VA di atas dan pastikan nama penerima sesuai.</li>
-              <li>Masukkan jumlah nominal tepat <strong>{{ invoiceData.formattedAmount }}</strong>.</li>
-              <li>Selesaikan transaksi dan klik tombol konfirmasi di bawah.</li>
+              <li>Buka aplikasi m-Banking Anda, pilih menu <strong>Transfer &gt; Virtual Account</strong>.</li>
+              <li>Masukkan nomor VA di atas. Pastikan nama akun penerima adalah <strong>DUITKU / SISAUANG PRO</strong>.</li>
+              <li>Konfirmasi pembayaran sejumlah <strong>{{ invoiceData.formattedAmount }}</strong>.</li>
+              <li>Setelah berhasil, sistem SisaUang akan langsung mengaktifkan status Pro dalam beberapa detik.</li>
             </ol>
           </div>
         </div>
 
-        <!-- Credit Card Direct View -->
+        <!-- 3. Direct Duitku Payment URL Channel (E-Wallet / Card / General) -->
         <div v-else class="space-y-4">
-          <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-3">
-            <div>
-              <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Nomor Kartu (Visa / Mastercard)
-              </label>
-              <input
-                type="text"
-                placeholder="4000 1234 5678 9010"
-                class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-mono text-slate-900 dark:text-slate-100"
-              />
+          <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 text-center space-y-3">
+            <div class="text-xs text-slate-500 dark:text-slate-400">
+              Kanal pembayaran: <strong>{{ channelLabels[paymentMethod]?.label || paymentMethod }}</strong>
             </div>
-            <div class="grid grid-cols-2 gap-3">
-              <div>
-                <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Masa Berlaku (MM/YY)</label>
-                <input
-                  type="text"
-                  placeholder="12/28"
-                  class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-mono text-slate-900 dark:text-slate-100"
-                />
-              </div>
-              <div>
-                <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">CVV</label>
-                <input
-                  type="password"
-                  maxlength="4"
-                  placeholder="123"
-                  class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-mono text-slate-900 dark:text-slate-100"
-                />
-              </div>
-            </div>
+            <p class="text-xs text-slate-600 dark:text-slate-300">
+              Silakan klik tombol di bawah untuk membuka halaman otorisasi pembayaran Duitku secara aman:
+            </p>
+            <a
+              v-if="invoiceData.paymentUrl"
+              :href="invoiceData.paymentUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition-colors shadow-xs"
+            >
+              <span>Buka Halaman Pembayaran Duitku</span>
+              <ExternalLink class="w-3.5 h-3.5" />
+            </a>
           </div>
         </div>
 
-        <!-- Action Buttons -->
-        <div class="space-y-2 pt-2">
+        <!-- Optional Duitku Hosted Page Link if provided -->
+        <div
+          v-if="invoiceData.paymentUrl && paymentMethod !== 'VC' && paymentMethod !== 'OV' && paymentMethod !== 'DA'"
+          class="text-center"
+        >
+          <a
+            :href="invoiceData.paymentUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center gap-1.5 text-xs text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 hover:underline"
+          >
+            <span>Atau buka halaman pembayaran resmi Duitku di tab baru</span>
+            <ExternalLink class="w-3 h-3" />
+          </a>
+        </div>
+
+        <!-- Action Buttons & Polling Status -->
+        <div class="space-y-2.5 pt-2">
           <button
             type="button"
-            :disabled="isSubmitting"
-            class="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-sm transition-colors disabled:opacity-50"
-            @click="verifyAndCompletePayment"
+            :disabled="isCheckingStatus"
+            class="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
+            @click="checkPaymentStatus(true)"
           >
-            <span v-if="isSubmitting">Memverifikasi Pembayaran...</span>
-            <template v-else>
-              <CheckCircle2 class="w-4 h-4" />
-              <span>Saya Sudah Membayar (Verifikasi Otomatis)</span>
-            </template>
+            <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': isCheckingStatus }" />
+            <span>{{ isCheckingStatus ? 'Mengecek ke Duitku...' : 'Cek Status Pembayaran (Otomatis)' }}</span>
           </button>
+
           <button
             type="button"
             class="w-full py-2 px-3 text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors"
             @click="step = 'form'"
           >
-            &larr; Ubah paket atau metode pembayaran
+            &larr; Ubah paket atau kanal pembayaran lain
           </button>
         </div>
       </div>
 
-      <!-- Step 3: Success Screen & Invoice Receipt -->
+      <!-- Step 3: Success Screen & Official Invoice Receipt -->
       <div v-else-if="step === 'success'" class="p-6 space-y-6">
         <div class="text-center space-y-2">
           <div class="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
             <CheckCircle2 class="w-7 h-7" />
           </div>
           <h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">
-            Transaksi Berhasil Dikonfirmasi!
+            Pembayaran Berhasil Diverifikasi!
           </h3>
           <p class="text-xs text-slate-600 dark:text-slate-400 max-w-sm mx-auto">
-            Terima kasih telah berlangganan <strong>{{ invoiceData.planName }}</strong>. Lisensi platform Anda telah aktif dan bukti transaksi telah dikirimkan ke <strong>{{ invoiceData.customerEmail }}</strong>.
+            Terima kasih! Akun Anda kini resmi aktif sebagai <strong>SisaUang Pro</strong>. Seluruh batasan anggaran tahunan, laporan PDF resmi, dan multi sumber dana telah terbuka penuh.
           </p>
         </div>
 
-        <!-- Official Invoice Card -->
+        <!-- Official Duitku Invoice Card -->
         <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 space-y-3 text-xs">
           <div class="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800">
             <div>
-              <div class="font-bold text-slate-900 dark:text-slate-100">INVOICE PEMBAYARAN</div>
-              <div class="text-[11px] text-slate-500">Nomor: {{ invoiceData.invoiceNumber }}</div>
+              <div class="font-bold text-slate-900 dark:text-slate-100">BUKTI TRANSAKSI DUITKU</div>
+              <div class="text-[11px] text-slate-500 font-mono">Invoice: {{ invoiceData.invoiceNumber }}</div>
+              <div class="text-[10px] text-slate-400 font-mono">Order: {{ invoiceData.orderId }}</div>
             </div>
             <span class="px-2.5 py-1 rounded-md bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 font-bold uppercase tracking-wider text-[10px]">
-              LUNAS / PAID
+              LUNAS / SETTLED
             </span>
           </div>
 
@@ -735,21 +844,21 @@ function handleClose() {
               <span class="font-medium text-slate-800 dark:text-slate-200">{{ invoiceData.customerName }}</span>
             </div>
             <div>
-              <span class="block text-[11px] text-slate-400">Email Lisensi</span>
+              <span class="block text-[11px] text-slate-400">Email Akun</span>
               <span class="font-medium text-slate-800 dark:text-slate-200">{{ invoiceData.customerEmail }}</span>
             </div>
             <div>
-              <span class="block text-[11px] text-slate-400">Metode Pembayaran</span>
+              <span class="block text-[11px] text-slate-400">Kanal Pembayaran</span>
               <span class="font-medium text-slate-800 dark:text-slate-200">{{ invoiceData.methodLabel }}</span>
             </div>
             <div>
-              <span class="block text-[11px] text-slate-400">Waktu Transaksi</span>
+              <span class="block text-[11px] text-slate-400">Waktu Pembayaran</span>
               <span class="font-medium text-slate-800 dark:text-slate-200">{{ invoiceData.paidAt }}</span>
             </div>
           </div>
 
           <div class="pt-2 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
-            <span class="font-semibold text-slate-800 dark:text-slate-200">Total Pembayaran</span>
+            <span class="font-semibold text-slate-800 dark:text-slate-200">Total Dibayar</span>
             <span class="text-base font-bold font-money text-emerald-600 dark:text-emerald-400">
               {{ invoiceData.formattedAmount }}
             </span>
@@ -760,10 +869,11 @@ function handleClose() {
         <div class="space-y-2 pt-2">
           <button
             type="button"
-            class="w-full py-3 px-4 rounded-xl bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
+            class="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
             @click="handleClose"
           >
-            <span>Tutup & Mulai Gunakan SisaUang Pro</span>
+            <Sparkles class="w-4 h-4" />
+            <span>Mulai Gunakan Fitur SisaUang Pro</span>
           </button>
         </div>
       </div>

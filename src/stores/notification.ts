@@ -42,6 +42,10 @@ export const useNotificationStore = defineStore('notification', () => {
   // Global SisaUang Pro Subscription Prompt Modal State
   const proModalOptions = ref<ProModalOptions | null>(null);
 
+  // Global In-Site Checkout Modal (Duitku Payment Gateway)
+  const checkoutModalOpen = ref(false);
+  const checkoutPlan = ref<'monthly' | 'yearly'>('yearly');
+
   function openChangelogModal() {
     changelogModalOpen.value = true;
   }
@@ -62,6 +66,16 @@ export const useNotificationStore = defineStore('notification', () => {
 
   function closeProModal() {
     proModalOptions.value = null;
+  }
+
+  function openCheckoutModal(plan: 'monthly' | 'yearly' = 'yearly') {
+    checkoutPlan.value = plan;
+    checkoutModalOpen.value = true;
+    closeProModal();
+  }
+
+  function closeCheckoutModal() {
+    checkoutModalOpen.value = false;
   }
 
   function requestConfirmation(options: ConfirmDialogOptions): Promise<boolean> {
@@ -269,6 +283,10 @@ export const useNotificationStore = defineStore('notification', () => {
     proModalOptions,
     openProModal,
     closeProModal,
+    checkoutModalOpen,
+    checkoutPlan,
+    openCheckoutModal,
+    closeCheckoutModal,
     showPopup,
     notifyQuotaExceeded,
     notifySuccess,

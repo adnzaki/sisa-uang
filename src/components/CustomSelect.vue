@@ -471,7 +471,12 @@ onBeforeUnmount(() => {
               class="py-5 px-3 text-center space-y-2"
             >
               <p class="text-xs text-slate-500 dark:text-slate-400">
-                Tidak ditemukan hasil untuk "<strong>{{ searchQuery }}</strong>"
+                <template v-if="searchQuery.trim()">
+                  Tidak ditemukan hasil untuk "<strong>{{ searchQuery }}</strong>"
+                </template>
+                <template v-else>
+                  {{ placeholder ? `Belum ada pilihan ${placeholder.toLowerCase()}` : 'Tidak ada pilihan yang tersedia' }}
+                </template>
               </p>
               <button
                 v-if="allowCustomValue && searchQuery.trim()"

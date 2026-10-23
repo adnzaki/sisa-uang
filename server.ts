@@ -2576,6 +2576,524 @@ async function startServer() {
     }
   });
 
+  // =========================================================================
+  // Duitku Payment Gateway (API V2) Integration
+  // =========================================================================
+  const DUITKU_MERCHANT_CODE = (process.env.DUITKU_MERCHANT_CODE || 'DS36399').trim();
+  const DUITKU_API_KEY = (process.env.DUITKU_API_KEY || '05e478bf24fc8d7ca91df07675d08283').trim();
+  const DUITKU_ENV = (
+    process.env.DUITKU_ENV || (DUITKU_MERCHANT_CODE.startsWith('DS') ? 'sandbox' : 'production')
+  ).trim().toLowerCase();
+  const DUITKU_BASE_URL =
+    DUITKU_ENV === 'sandbox'
+      ? 'https://sandbox.duitku.com/webapi/api/merchant'
+      : 'https://passport.duitku.com/webapi/api/merchant';
+
+  interface DuitkuOrderRecord {
+    merchantOrderId: string;
+    reference: string;
+    paymentUrl: string;
+    vaNumber?: string;
+    qrString?: string;
+    amount: number;
+    plan: 'monthly' | 'yearly';
+    customerName: string;
+    customerEmail: string;
+    customerPhone: string;
+    userUid?: string;
+    paymentMethod: string;
+    statusCode: string;
+    statusMessage: string;
+    status: 'PENDING' | 'SUCCESS' | 'FAILED' | 'EXPIRED';
+    paidAt?: string;
+    createdAt: string;
+    expiresAt: string;
+  }
+
+  const DUITKU_ORDERS_FILE = path.join(__dirname, '.sisa_uang_duitku_orders.json');
+  const duitkuOrdersStore = new Map<string, DuitkuOrderRecord>();
+
+  function loadPersistedDuitkuOrders() {
+    try {
+      if (fs.existsSync(DUITKU_ORDERS_FILE)) {
+        const raw = fs.readFileSync(DUITKU_ORDERS_FILE, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          for (const o of parsed) {
+            if (o && o.merchantOrderId) {
+              duitkuOrdersStore.set(o.merchantOrderId, o);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load persisted Duitku orders cache:', err);
+    }
+  }
+
+  function savePersistedDuitkuOrders() {
+    try {
+      const list = Array.from(duitkuOrdersStore.values());
+      fs.writeFileSync(DUITKU_ORDERS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Failed to save persisted Duitku orders cache:', err);
+    }
+  }
+
+  loadPersistedDuitkuOrders();
+
+  // 1. Duitku Gateway Configuration & Public Callback URL info
+  app.get('/api/duitku/config', (req: Request, res: Response) => {
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const baseUrl = `${protocol}://${host}`;
+    res.json({
+      merchantCode: DUITKU_MERCHANT_CODE,
+      environment: DUITKU_ENV,
+      callbackUrl: `${baseUrl}/api/duitku/callback`,
+      returnUrl: `${baseUrl}/dashboard?payment=success`,
+    });
+  });
+
+  // 2. Fetch Active Payment Methods from Duitku (or curated channels)
+  app.get('/api/duitku/payment-methods', async (req: Request, res: Response) => {
+    const amount = Number(req.query.amount) || 215000;
+    const now = new Date();
+    const datetime = now.toISOString().replace('T', ' ').slice(0, 19);
+
+    const fallbackPaymentMethods = [
+      {
+        paymentMethod: 'SP',
+        paymentName: 'QRIS (Gopay / ShopeePay / BCA / Mandiri / Dana / OVO)',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/SP.PNG',
+        totalFee: '0',
+        category: 'qris',
+      },
+      {
+        paymentMethod: 'BC',
+        paymentName: 'BCA Virtual Account',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/BC.PNG',
+        totalFee: '0',
+        category: 'va',
+      },
+      {
+        paymentMethod: 'M2',
+        paymentName: 'Mandiri Virtual Account',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/M2.PNG',
+        totalFee: '0',
+        category: 'va',
+      },
+      {
+        paymentMethod: 'B1',
+        paymentName: 'BNI Virtual Account',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/B1.PNG',
+        totalFee: '0',
+        category: 'va',
+      },
+      {
+        paymentMethod: 'BR',
+        paymentName: 'BRI Virtual Account',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/BR.PNG',
+        totalFee: '0',
+        category: 'va',
+      },
+      {
+        paymentMethod: 'BT',
+        paymentName: 'Permata Bank Virtual Account',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/BT.PNG',
+        totalFee: '0',
+        category: 'va',
+      },
+      {
+        paymentMethod: 'OV',
+        paymentName: 'OVO E-Wallet',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/OV.PNG',
+        totalFee: '0',
+        category: 'ewallet',
+      },
+      {
+        paymentMethod: 'DA',
+        paymentName: 'DANA E-Wallet',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/DA.PNG',
+        totalFee: '0',
+        category: 'ewallet',
+      },
+      {
+        paymentMethod: 'VC',
+        paymentName: 'Kartu Kredit / Debit Online (Visa / Mastercard)',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/VC.PNG',
+        totalFee: '0',
+        category: 'card',
+      },
+    ];
+
+    try {
+      const stringToSign = `${DUITKU_MERCHANT_CODE}${amount}${datetime}`;
+      const signature = crypto.createHmac('sha256', DUITKU_API_KEY).update(stringToSign).digest('hex');
+
+      const response = await fetch(`${DUITKU_BASE_URL}/paymentmethod/getpaymentmethod`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          merchantcode: DUITKU_MERCHANT_CODE,
+          amount,
+          datetime,
+          signature,
+        }),
+      });
+
+      if (response.ok) {
+        const data: any = await response.json();
+        if (Array.isArray(data?.paymentFee) && data.paymentFee.length > 0) {
+          res.json({
+            success: true,
+            paymentMethods: data.paymentFee,
+            source: 'duitku_live',
+          });
+          return;
+        }
+      }
+    } catch {
+      // Ignore live call failure and fallback
+    }
+
+    res.json({
+      success: true,
+      paymentMethods: fallbackPaymentMethods,
+      source: 'duitku_standard',
+    });
+  });
+
+  // 3. Request Transaction via Duitku V2 Inquiry API
+  app.post('/api/duitku/create-transaction', async (req: Request, res: Response) => {
+    try {
+      const plan: 'monthly' | 'yearly' = req.body?.plan === 'yearly' ? 'yearly' : 'monthly';
+      const amount = Number(req.body?.amount) || (plan === 'yearly' ? 215000 : 21500);
+      const customerName = String(req.body?.customerName || 'Pelanggan SisaUang').trim().slice(0, 80);
+      const customerEmail = String(req.body?.customerEmail || 'vuedevo@gmail.com').trim().toLowerCase().slice(0, 100);
+      const customerPhone = String(req.body?.customerPhone || '085129634505').trim().slice(0, 30);
+      const paymentMethod = String(req.body?.paymentMethod || 'SP').trim();
+      const userUid = req.body?.userUid ? String(req.body.userUid).trim() : undefined;
+
+      const timestamp = Date.now();
+      const randomSuffix = crypto.randomBytes(3).toString('hex').toUpperCase();
+      const merchantOrderId = `SU-${timestamp}-${randomSuffix}`;
+      const invoiceNumber = `INV-DUITKU-${timestamp.toString().slice(-6)}`;
+
+      // Duitku v2 inquiry signature: md5(merchantCode + merchantOrderId + paymentAmount + apiKey)
+      const signatureString = `${DUITKU_MERCHANT_CODE}${merchantOrderId}${amount}${DUITKU_API_KEY}`;
+      const signature = crypto.createHash('md5').update(signatureString).digest('hex');
+
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+      const host = req.headers['x-forwarded-host'] || req.headers.host;
+      const baseUrl = `${protocol}://${host}`;
+      const callbackUrl = `${baseUrl}/api/duitku/callback`;
+      const returnUrl = `${baseUrl}/dashboard?payment=success&orderId=${merchantOrderId}`;
+
+      const inquiryPayload = {
+        merchantCode: DUITKU_MERCHANT_CODE,
+        paymentAmount: amount,
+        paymentMethod,
+        merchantOrderId,
+        productDetails: plan === 'yearly' ? 'Langganan SisaUang Pro Tahunan' : 'Langganan SisaUang Pro Bulanan',
+        email: customerEmail,
+        phoneNumber: customerPhone,
+        customerVaName: customerName,
+        signature,
+        expiryPeriod: 1440, // 24 jam
+        itemDetails: [
+          {
+            name: plan === 'yearly' ? 'SisaUang Pro Tahunan' : 'SisaUang Pro Bulanan',
+            price: amount,
+            quantity: 1,
+          },
+        ],
+        customerDetail: {
+          firstName: customerName,
+          email: customerEmail,
+          phoneNumber: customerPhone,
+        },
+        callbackUrl,
+        returnUrl,
+      };
+
+      const duitkuRes = await fetch(`${DUITKU_BASE_URL}/v2/inquiry`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(inquiryPayload),
+      });
+
+      const duitkuData: any = await duitkuRes.json();
+
+      if (!duitkuRes.ok || duitkuData.statusCode !== '00') {
+        const errorMsg = duitkuData.statusMessage || 'Gagal membuat transaksi di Duitku.';
+        appendLog(
+          userUid || 'duitku_checkout',
+          customerEmail,
+          'duitku_inquiry_failed',
+          `Inisialisasi transaksi Duitku gagal: ${errorMsg} (Status Code: ${duitkuData.statusCode || duitkuRes.status}).`,
+          'warning'
+        );
+        res.status(400).json({
+          error: errorMsg,
+          statusCode: duitkuData.statusCode,
+          details: duitkuData,
+        });
+        return;
+      }
+
+      const orderRecord: DuitkuOrderRecord = {
+        merchantOrderId,
+        reference: String(duitkuData.reference || ''),
+        paymentUrl: String(duitkuData.paymentUrl || ''),
+        vaNumber: duitkuData.vaNumber ? String(duitkuData.vaNumber) : undefined,
+        qrString: duitkuData.qrString ? String(duitkuData.qrString) : undefined,
+        amount,
+        plan,
+        customerName,
+        customerEmail,
+        customerPhone,
+        userUid,
+        paymentMethod,
+        statusCode: duitkuData.statusCode,
+        statusMessage: duitkuData.statusMessage,
+        status: 'PENDING',
+        createdAt: nowIso(),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      };
+
+      duitkuOrdersStore.set(merchantOrderId, orderRecord);
+      savePersistedDuitkuOrders();
+
+      appendLog(
+        userUid || 'duitku_checkout',
+        customerEmail,
+        'duitku_order_created',
+        `Transaksi Duitku V2 dibuat: Order ${merchantOrderId} (Ref: ${orderRecord.reference}) senilai Rp ${amount.toLocaleString('id-ID')}. Metode: ${paymentMethod}.`,
+        'info'
+      );
+
+      res.json({
+        success: true,
+        orderId: merchantOrderId,
+        invoiceNumber,
+        reference: orderRecord.reference,
+        paymentUrl: orderRecord.paymentUrl,
+        vaNumber: orderRecord.vaNumber,
+        qrString: orderRecord.qrString,
+        amount,
+        plan,
+        customerName,
+        customerEmail,
+        customerPhone,
+        paymentMethod,
+        callbackUrl,
+        statusCode: orderRecord.statusCode,
+        statusMessage: orderRecord.statusMessage,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Gagal memproses inisialisasi pembayaran Duitku.' });
+    }
+  });
+
+  // 4. Duitku Webhook / HTTP Callback Handler
+  app.post('/api/duitku/callback', async (req: Request, res: Response) => {
+    try {
+      const merchantCode = String(req.body?.merchantCode || '');
+      const amount = String(req.body?.amount || '');
+      const merchantOrderId = String(req.body?.merchantOrderId || '');
+      const resultCode = String(req.body?.resultCode || '');
+      const reference = String(req.body?.reference || '');
+      const incomingSignature = String(req.body?.signature || '');
+
+      // Verify signature (handling both parameter ordering standards in Duitku documentation)
+      const sig1 = crypto
+        .createHash('md5')
+        .update(`${merchantCode}${amount}${merchantOrderId}${DUITKU_API_KEY}`)
+        .digest('hex');
+      const sig2 = crypto
+        .createHash('md5')
+        .update(`${merchantCode}${merchantOrderId}${amount}${DUITKU_API_KEY}`)
+        .digest('hex');
+
+      if (incomingSignature !== sig1 && incomingSignature !== sig2) {
+        console.warn(
+          `[Duitku Callback] Invalid signature received for order ${merchantOrderId}: ${incomingSignature}`
+        );
+        res.status(400).send('Bad Signature');
+        return;
+      }
+
+      const order = duitkuOrdersStore.get(merchantOrderId);
+      if (order) {
+        order.reference = reference || order.reference;
+      }
+
+      if (resultCode === '00') {
+        if (order) {
+          order.status = 'SUCCESS';
+          order.paidAt = nowIso();
+          savePersistedDuitkuOrders();
+        }
+
+        let matchedUser: ServerUserRecord | null = null;
+        if (order?.userUid) {
+          matchedUser = usersStore.get(order.userUid) || null;
+        }
+        if (!matchedUser && order?.customerEmail) {
+          for (const u of usersStore.values()) {
+            if (u.email.toLowerCase() === order.customerEmail.toLowerCase()) {
+              matchedUser = u;
+              break;
+            }
+          }
+        }
+
+        const plan = order ? order.plan : 'yearly';
+        const now = new Date();
+        const expiresAt = new Date(
+          now.getTime() + (plan === 'yearly' ? 365 : 30) * 24 * 60 * 60 * 1000
+        )
+          .toISOString()
+          .slice(0, 10);
+
+        if (matchedUser) {
+          matchedUser.subscriptionStatus = 'pro';
+          matchedUser.isPro = true;
+          matchedUser.subscriptionPlan = plan;
+          matchedUser.subscriptionExpiresAt = expiresAt;
+          matchedUser.updatedAt = nowIso();
+          savePersistedUsersCache();
+        }
+
+        appendLog(
+          matchedUser?.uid || order?.userUid || 'duitku_system',
+          matchedUser?.email || order?.customerEmail || 'billing@duitku.com',
+          'duitku_payment_settled',
+          `Callback Duitku: Pembayaran Order ${merchantOrderId} (Ref: ${reference}) senilai Rp ${Number(amount).toLocaleString('id-ID')} BERHASIL. Akun ${matchedUser ? matchedUser.email : order?.customerEmail} otomatis ditingkatkan ke SisaUang Pro (${plan === 'yearly' ? 'Tahunan' : 'Bulanan'}).`,
+          'info'
+        );
+
+        res.status(200).send('SUCCESS');
+        return;
+      } else {
+        if (order) {
+          order.status = 'FAILED';
+          savePersistedDuitkuOrders();
+        }
+
+        appendLog(
+          order?.userUid || 'duitku_system',
+          order?.customerEmail || 'billing@duitku.com',
+          'duitku_payment_failed',
+          `Callback Duitku: Pembayaran Order ${merchantOrderId} gagal atau dibatalkan (ResultCode: ${resultCode}).`,
+          'warning'
+        );
+
+        res.status(200).send('SUCCESS');
+        return;
+      }
+    } catch (err: any) {
+      console.error('[Duitku Callback Error]', err);
+      res.status(500).send('Callback Error: ' + err.message);
+    }
+  });
+
+  // 5. Check Duitku Transaction Status & Instant Pro Auto-Activation
+  app.get('/api/duitku/check-status/:orderId', async (req: Request, res: Response) => {
+    try {
+      const orderId = String(req.params.orderId || '').trim();
+      if (!orderId) {
+        res.status(400).json({ error: 'Order ID wajib disertakan.' });
+        return;
+      }
+
+      const order = duitkuOrdersStore.get(orderId);
+
+      // Signature: md5(merchantCode + merchantOrderId + apiKey)
+      const sigString = `${DUITKU_MERCHANT_CODE}${orderId}${DUITKU_API_KEY}`;
+      const signature = crypto.createHash('md5').update(sigString).digest('hex');
+
+      const checkRes = await fetch(`${DUITKU_BASE_URL}/transactionStatus`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          merchantCode: DUITKU_MERCHANT_CODE,
+          merchantOrderId: orderId,
+          signature,
+        }),
+      });
+
+      const checkData: any = await checkRes.json();
+      const isPaid = checkData?.statusCode === '00';
+
+      if (isPaid) {
+        if (order) {
+          order.status = 'SUCCESS';
+          order.paidAt = order.paidAt || nowIso();
+          savePersistedDuitkuOrders();
+        }
+
+        let matchedUser: ServerUserRecord | null = null;
+        if (order?.userUid) {
+          matchedUser = usersStore.get(order.userUid) || null;
+        }
+        if (!matchedUser && order?.customerEmail) {
+          for (const u of usersStore.values()) {
+            if (u.email.toLowerCase() === order.customerEmail.toLowerCase()) {
+              matchedUser = u;
+              break;
+            }
+          }
+        }
+
+        const plan = order ? order.plan : 'yearly';
+        const now = new Date();
+        const expiresAt = new Date(
+          now.getTime() + (plan === 'yearly' ? 365 : 30) * 24 * 60 * 60 * 1000
+        )
+          .toISOString()
+          .slice(0, 10);
+
+        if (matchedUser && matchedUser.subscriptionStatus !== 'pro') {
+          matchedUser.subscriptionStatus = 'pro';
+          matchedUser.isPro = true;
+          matchedUser.subscriptionPlan = plan;
+          matchedUser.subscriptionExpiresAt = expiresAt;
+          matchedUser.updatedAt = nowIso();
+          savePersistedUsersCache();
+
+          appendLog(
+            matchedUser.uid,
+            matchedUser.email,
+            'duitku_payment_settled_status_check',
+            `Verifikasi status Duitku: Pembayaran Order ${orderId} terkonfirmasi Lunas. Status akun aktif sebagai SisaUang Pro (${plan === 'yearly' ? 'Tahunan' : 'Bulanan'}).`,
+            'info'
+          );
+        }
+      }
+
+      res.json({
+        success: true,
+        orderId,
+        isPaid,
+        order: order || null,
+        duitkuStatus: checkData,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Gagal memeriksa status pembayaran Duitku.' });
+    }
+  });
+
   // 4. Contact Message API
   app.post('/api/contact', async (req: Request, res: Response) => {
     try {

@@ -716,8 +716,8 @@ service cloud.firestore {
 
     // 11. Automations Collection (/automations/{automationId})
     match /automations/{automationId} {
-      allow get: if isSignedIn() && isValidId(automationId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(automationId) && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() &&
         isValidId(automationId) &&
         isValidAutomation(incoming()) &&
