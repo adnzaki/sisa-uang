@@ -101,6 +101,7 @@ onMounted(() => {
             <ul class="list-disc pl-5 space-y-1">
               <li>Email Resmi: <a href="mailto:vuedevo@gmail.com" class="text-emerald-600 underline">vuedevo@gmail.com</a></li>
               <li>WhatsApp Layanan: <a href="https://wa.me/6285129634505" class="text-emerald-600 underline">0851-2963-4505</a></li>
+              <li>Alamat Kantor: Jl. Pengasinan Tengah No. 68 Rawalumbu Kota Bekasi 17115</li>
               <li>Jam Layanan: Senin – Jumat pukul 08.00 – 17.00 WIB.</li>
             </ul>
           </section>

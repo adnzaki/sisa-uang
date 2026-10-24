@@ -5,6 +5,7 @@ import {
   Mail,
   Phone,
   Clock,
+  MapPin,
   ShieldCheck,
   ExternalLink,
   Heart,
@@ -178,6 +179,10 @@ function navigateToSection(sectionId: string) {
               >
                 0851-2963-4505 (WhatsApp)
               </a>
+            </li>
+            <li class="flex items-start gap-2">
+              <MapPin class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+              <span class="leading-relaxed">Jl. Pengasinan Tengah No. 68 Rawalumbu Kota Bekasi 17115</span>
             </li>
             <li class="flex items-start gap-2">
               <Clock class="w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0" />

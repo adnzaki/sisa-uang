@@ -101,6 +101,10 @@ const COMMON_FOOTER_HTML = `
               <a href="https://wa.me/6285129634505" target="_blank" rel="noopener noreferrer" class="hover:text-emerald-600 transition-colors">0851-2963-4505 (WhatsApp)</a>
             </li>
             <li class="flex items-start gap-2">
+              <svg class="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+              <span class="leading-relaxed">Jl. Pengasinan Tengah No. 68 Rawalumbu Kota Bekasi 17115</span>
+            </li>
+            <li class="flex items-start gap-2">
               <svg class="w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
               <span>Senin – Jumat (08.00 – 17.00 WIB)</span>
             </li>
@@ -704,6 +708,7 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
                 <ul class="list-disc pl-5 space-y-1">
                   <li>Email Resmi: <a href="mailto:vuedevo@gmail.com" class="text-emerald-600 underline">vuedevo@gmail.com</a></li>
                   <li>WhatsApp Layanan: <a href="https://wa.me/6285129634505" class="text-emerald-600 underline">0851-2963-4505</a></li>
+                  <li>Alamat Kantor: Jl. Pengasinan Tengah No. 68 Rawalumbu Kota Bekasi 17115</li>
                   <li>Jam Layanan: Senin – Jumat pukul 08.00 – 17.00 WIB.</li>
                 </ul>
               </section>
@@ -927,6 +932,13 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
                         <a href="https://wa.me/6285129634505" target="_blank" rel="noopener noreferrer" class="font-semibold text-emerald-600 hover:underline">
                           0851-2963-4505
                         </a>
+                      </div>
+                    </div>
+
+                    <div class="flex items-start gap-3">
+                      <div>
+                        <div class="text-xs text-slate-500">Alamat Kantor / Operasional</div>
+                        <div class="font-medium text-slate-800 dark:text-slate-200 leading-snug">Jl. Pengasinan Tengah No. 68 Rawalumbu Kota Bekasi 17115</div>
                       </div>
                     </div>
 

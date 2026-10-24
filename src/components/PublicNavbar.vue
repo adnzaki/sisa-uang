@@ -68,14 +68,9 @@ function handlePageNavClick() {
           >
             <Wallet class="w-5 h-5" />
           </div>
-          <div>
-            <span class="text-base font-bold text-slate-900 dark:text-slate-100 tracking-tight">
-              SisaUang
-            </span>
-            <span class="hidden sm:inline-block text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold ml-2">
-              Platform Kas & Anggaran
-            </span>
-          </div>
+          <span class="text-base font-bold text-slate-900 dark:text-slate-100 tracking-tight">
+            SisaUang
+          </span>
         </RouterLink>
 
         <!-- Desktop Navigation Links -->

@@ -162,5 +162,5 @@ Berikut tahapan teknis yang akan dilakukan saat eksekusi:
 | Resolusi Firestore Permission Error | Mengeliminasi kesalahan list permissions pada `finance_collections` untuk `adnanzaki65` dan session handling. | Selesai |
 | Halaman Syarat & Ketentuan (`/terms`) | Memuat klausul lengkap lisensi digital goods sesuai template Midtrans. | Selesai |
 | Halaman Kebijakan Refund (`/refund-policy`) | Memuat syarat garansi refund 7 hari dan prosedur pengajuannya. | Selesai |
-| Informasi Kontak Bisnis (`/contact`) | Tercantum email `azzackey@gmail.com`, WhatsApp, jam kerja, dan alamat kantor. | Selesai |
+| Informasi Kontak Bisnis (`/contact`) | Tercantum email bisnis, WhatsApp, jam kerja, dan alamat kantor (Jl. Pengasinan Tengah No. 68 Rawalumbu Kota Bekasi 17115). | Selesai |
 
