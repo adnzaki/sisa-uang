@@ -59,6 +59,7 @@ export interface ServerUserRecord {
   currency: 'IDR' | 'USD';
   subscriptionStatus?: 'free' | 'pending' | 'pro';
   isPro?: boolean;
+  isExplicitlyDeactivated?: boolean;
   subscriptionPlan?: 'monthly' | 'yearly' | null;
   subscriptionExpiresAt?: string | null;
   subscriptionPaymentMethod?: 'qris' | 'bank_transfer' | null;
@@ -82,6 +83,8 @@ function getTodayLocalIso(): string {
 
 function isUserSubscriptionActive(u?: Partial<ServerUserRecord> | null): boolean {
   if (!u) return false;
+  if (u.isExplicitlyDeactivated === true) return false;
+  if (u.subscriptionStatus === 'free' || u.isPro === false) return false;
   if (u.subscriptionStatus === 'pending') return false;
   const markedPro = u.subscriptionStatus === 'pro' || u.isPro === true;
   if (!markedPro) return false;
@@ -1376,8 +1379,14 @@ async function startServer() {
       if (rawUsername && (!existing.username || rawUsername !== emailPrefix || existing.username === emailPrefix)) {
         existing.username = username;
       }
-      if (incomingSubStatus === 'pro' && existing.subscriptionStatus !== 'pending') {
-        // A client device cannot self-promote if the server has explicitly marked the user as free
+      if (existing.isExplicitlyDeactivated === true || existing.subscriptionStatus === 'free') {
+        // Super Admin explicitly deactivated this user or marked them free.
+        // Client device background activity/auto-sync CANNOT revive PRO status!
+        existing.subscriptionStatus = 'free';
+        existing.isPro = false;
+        existing.subscriptionPlan = null;
+        existing.subscriptionExpiresAt = null;
+      } else if (incomingSubStatus === 'pro' && existing.subscriptionStatus !== 'pending') {
         if (existing.subscriptionStatus === 'pro' || isSuperAdmin) {
           existing.subscriptionStatus = 'pro';
           existing.isPro = true;
@@ -1418,10 +1427,10 @@ async function startServer() {
       status: 'active',
       authProvider,
       currency: 'IDR',
-      subscriptionStatus: incomingSubStatus || 'free',
-      isPro: incomingSubStatus === 'pro',
-      subscriptionPlan: incomingSubStatus ? incomingPlan : null,
-      subscriptionExpiresAt: incomingSubStatus === 'pro' ? incomingExpiresAt : null,
+      subscriptionStatus: isSuperAdmin ? (incomingSubStatus || 'free') : 'free',
+      isPro: isSuperAdmin && incomingSubStatus === 'pro',
+      subscriptionPlan: isSuperAdmin ? incomingPlan : null,
+      subscriptionExpiresAt: isSuperAdmin && incomingSubStatus === 'pro' ? incomingExpiresAt : null,
       passwordHash,
       createdAt: nowIso(),
       updatedAt: nowIso(),
@@ -3453,12 +3462,15 @@ async function startServer() {
     targetUser.subscriptionPlan = plan;
     targetUser.subscriptionExpiresAt = expiresAt;
     if (newSubStatus === 'free') {
+      targetUser.isExplicitlyDeactivated = true;
       targetUser.subscriptionPaymentMethod = null;
       targetUser.subscriptionProofDataUrl = null;
       targetUser.subscriptionProofFileName = null;
       targetUser.subscriptionRequestedAt = null;
       targetUser.subscriptionSenderName = null;
       targetUser.subscriptionTransferNote = null;
+    } else {
+      targetUser.isExplicitlyDeactivated = false;
     }
     targetUser.updatedAt = nowIso();
 
@@ -3468,6 +3480,7 @@ async function startServer() {
         if (uid !== targetUid && u.email.toLowerCase() === targetEmailLower) {
           u.subscriptionStatus = 'free';
           u.isPro = false;
+          u.isExplicitlyDeactivated = true;
           u.subscriptionPlan = null;
           u.subscriptionExpiresAt = null;
           u.subscriptionPaymentMethod = null;
@@ -3624,7 +3637,7 @@ async function startServer() {
         isPro = false;
         isPending = false;
       } else if (u.subscriptionStatus === 'pro' || u.isPro === true) {
-        if (existing && existing.subscriptionStatus === 'free' && existing.isPro === false) {
+        if (existing && (existing.isExplicitlyDeactivated === true || existing.subscriptionStatus === 'free')) {
           isPro = false;
         } else {
           isPro = isUserSubscriptionActive({

@@ -1710,30 +1710,34 @@ export const useFinanceStore = defineStore('finance', () => {
     if (proMarkerDocs.length > 0) {
       const authStore = useAuthStore();
       if (authStore.user?.uid === uid) {
-        // Find if there is an active (not deleted and not pro-inactive) marker
-        const activeMarker = proMarkerDocs.find(
-          (b: BudgetItem) => !b.deleted && String(b.period || '') !== 'pro-inactive'
-        );
-
-        if (!activeMarker) {
+        if (authStore.user.subscriptionStatus === 'free' || authStore.user.isPro === false) {
           authStore.setExternalSubscriptionStatus('free', null, null);
         } else {
-          const rawPeriod = String(activeMarker.period || '');
-          if (rawPeriod.startsWith('P:')) {
-            const planCode = rawPeriod.slice(2, 3);
-            const plan: 'monthly' | 'yearly' = planCode === 'Y' ? 'yearly' : 'monthly';
-            authStore.setExternalSubscriptionStatus('pending', plan, null);
+          // Find if there is an active (not deleted and not pro-inactive) marker
+          const activeMarker = proMarkerDocs.find(
+            (b: BudgetItem) => !b.deleted && String(b.period || '') !== 'pro-inactive'
+          );
+
+          if (!activeMarker) {
+            authStore.setExternalSubscriptionStatus('free', null, null);
           } else {
-            let plan: 'monthly' | 'yearly' = 'monthly';
-            let expiresAt: string | null = null;
-            if (rawPeriod.startsWith('Y:')) {
-              plan = 'yearly';
-              expiresAt = rawPeriod.slice(2) || null;
-            } else if (rawPeriod.startsWith('M:')) {
-              plan = 'monthly';
-              expiresAt = rawPeriod.slice(2) || null;
+            const rawPeriod = String(activeMarker.period || '');
+            if (rawPeriod.startsWith('P:')) {
+              const planCode = rawPeriod.slice(2, 3);
+              const plan: 'monthly' | 'yearly' = planCode === 'Y' ? 'yearly' : 'monthly';
+              authStore.setExternalSubscriptionStatus('pending', plan, null);
+            } else {
+              let plan: 'monthly' | 'yearly' = 'monthly';
+              let expiresAt: string | null = null;
+              if (rawPeriod.startsWith('Y:')) {
+                plan = 'yearly';
+                expiresAt = rawPeriod.slice(2) || null;
+              } else if (rawPeriod.startsWith('M:')) {
+                plan = 'monthly';
+                expiresAt = rawPeriod.slice(2) || null;
+              }
+              authStore.setExternalSubscriptionStatus('pro', plan, expiresAt);
             }
-            authStore.setExternalSubscriptionStatus('pro', plan, expiresAt);
           }
         }
       }
@@ -1869,12 +1873,16 @@ export const useFinanceStore = defineStore('finance', () => {
 
     try {
       // Also check lightweight local server user status & subscription (0 Firestore reads)
+      let serverSaysFree = false;
       let serverReportedProOrPending = false;
       try {
         const res = await fetch(`/api/users/${encodeURIComponent(uid)}/status`);
         if (res.ok) {
           const statusData = await res.json();
-          if (statusData.subscriptionStatus === 'pro' || statusData.isPro === true) {
+          if (statusData.subscriptionStatus === 'free' || statusData.isPro === false) {
+            serverSaysFree = true;
+            authStore.setExternalSubscriptionStatus('free', null, null);
+          } else if (statusData.subscriptionStatus === 'pro' || statusData.isPro === true) {
             serverReportedProOrPending = true;
             authStore.setExternalSubscriptionStatus(
               'pro',
@@ -1888,8 +1896,6 @@ export const useFinanceStore = defineStore('finance', () => {
               statusData.subscriptionPlan || 'monthly',
               null
             );
-          } else if (statusData.subscriptionStatus === 'free' || statusData.isPro === false) {
-            authStore.setExternalSubscriptionStatus('free', null, null);
           }
         }
       } catch {
@@ -1909,7 +1915,10 @@ export const useFinanceStore = defineStore('finance', () => {
       const remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
 
       // Sync subscription directly from the already-read `/users/{uid}` document (0 extra Firestore reads!)
-      if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
+      if (serverSaysFree) {
+        // Authoritative server status is Free: do NOT let stale IndexedDB/Firestore snapshot revive PRO!
+        authStore.setExternalSubscriptionStatus('free', null, null);
+      } else if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
         authStore.setExternalSubscriptionStatus(
           'pro',
           uData?.subscriptionPlan === 'yearly'
@@ -2077,13 +2086,17 @@ export const useFinanceStore = defineStore('finance', () => {
     }
 
     // Sync latest subscription status from Express registry (0 Firestore reads)
+    let serverSaysFree = false;
     let localServerHasProOrPending = false;
     try {
       const res = await fetch(`/api/users/${encodeURIComponent(uid)}/status`);
       if (res.ok) {
         const statusData = await res.json();
         const authStore = useAuthStore();
-        if (statusData.subscriptionStatus === 'pro' || statusData.isPro === true) {
+        if (statusData.subscriptionStatus === 'free' || statusData.isPro === false) {
+          serverSaysFree = true;
+          authStore.setExternalSubscriptionStatus('free', null, null);
+        } else if (statusData.subscriptionStatus === 'pro' || statusData.isPro === true) {
           localServerHasProOrPending = true;
           authStore.setExternalSubscriptionStatus(
             'pro',
@@ -2097,8 +2110,6 @@ export const useFinanceStore = defineStore('finance', () => {
             statusData.subscriptionPlan || 'monthly',
             null
           );
-        } else if (statusData.subscriptionStatus === 'free' || statusData.isPro === false) {
-          authStore.setExternalSubscriptionStatus('free', null, null);
         }
       }
     } catch {
@@ -2122,7 +2133,9 @@ export const useFinanceStore = defineStore('finance', () => {
             confirmedUserDocsInFirestore.add(uid);
             const uData = userSnap.data();
             remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
-            if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
+            if (serverSaysFree) {
+              authStore.setExternalSubscriptionStatus('free', null, null);
+            } else if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
               authStore.setExternalSubscriptionStatus(
                 'pro',
                 uData?.subscriptionPlan === 'yearly'

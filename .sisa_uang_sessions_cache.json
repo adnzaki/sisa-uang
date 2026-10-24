@@ -32,5 +32,22 @@
     "revokedByDeviceId": null,
     "createdAt": "2026-10-21T08:20:20.524Z",
     "lastActiveAt": "2026-10-21T08:25:12.735Z"
+  },
+  {
+    "sessionId": "KlSX6JgegtUIsQinZRKp535OJ6E3__dev_6zndywymeafq",
+    "uid": "KlSX6JgegtUIsQinZRKp535OJ6E3",
+    "email": "vuedevo@gmail.com",
+    "deviceId": "dev_6zndywymeafq",
+    "deviceName": "Google Chrome di Windows",
+    "browser": "Google Chrome",
+    "os": "Windows",
+    "deviceType": "desktop",
+    "ipAddress": "114.10.67.3",
+    "isPrimary": false,
+    "status": "active",
+    "revokedAt": null,
+    "revokedByDeviceId": null,
+    "createdAt": "2026-10-24T16:54:35.236Z",
+    "lastActiveAt": "2026-10-24T17:00:34.734Z"
   }
 ]

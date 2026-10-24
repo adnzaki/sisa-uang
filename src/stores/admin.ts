@@ -1111,6 +1111,69 @@ export const useAdminStore = defineStore('admin', () => {
           }
         }
 
+        if (!nextIsPro) {
+          try {
+            const uidsToClear = new Set<string>([safeTargetUid]);
+            const cleanTargetEmail = (targetUser.email || '').toLowerCase();
+            if (cleanTargetEmail.includes('adnzaki') || cleanTargetEmail.startsWith('adnanzaki')) {
+              uidsToClear.add('ci4_user_1');
+            }
+
+            // 1. If currently active user in localStorage matches target user, set subscriptionStatus = 'free'
+            const activeUserRaw = localStorage.getItem('sisa_uang_active_user');
+            if (activeUserRaw) {
+              const activeParsed = JSON.parse(activeUserRaw);
+              if (
+                uidsToClear.has(activeParsed?.uid) ||
+                (activeParsed?.email && activeParsed.email.toLowerCase() === cleanTargetEmail)
+              ) {
+                activeParsed.subscriptionStatus = 'free';
+                activeParsed.isPro = false;
+                activeParsed.subscriptionPlan = null;
+                activeParsed.subscriptionExpiresAt = null;
+                localStorage.setItem('sisa_uang_active_user', JSON.stringify(activeParsed));
+              }
+            }
+
+            // 2. Sanitize saved accounts in localStorage
+            const savedRaw = localStorage.getItem('sisa_uang_saved_accounts_v1');
+            if (savedRaw) {
+              const savedList = JSON.parse(savedRaw);
+              if (Array.isArray(savedList)) {
+                savedList.forEach((acc: any) => {
+                  if (
+                    uidsToClear.has(acc?.uid) ||
+                    (acc?.email && acc.email.toLowerCase() === cleanTargetEmail)
+                  ) {
+                    acc.subscriptionStatus = 'free';
+                    acc.isPro = false;
+                    acc.subscriptionPlan = null;
+                    acc.subscriptionExpiresAt = null;
+                  }
+                });
+                localStorage.setItem('sisa_uang_saved_accounts_v1', JSON.stringify(savedList));
+              }
+            }
+
+            // 3. Clear finance DB cache in localStorage
+            uidsToClear.forEach((uId) => {
+              const dbCacheKey = `sisa_uang_db_cache_v5_${uId}`;
+              const rawCache = localStorage.getItem(dbCacheKey);
+              if (rawCache) {
+                const parsed = JSON.parse(rawCache);
+                if (parsed && Array.isArray(parsed.budgets)) {
+                  parsed.budgets = parsed.budgets.filter(
+                    (b: any) => b.category !== '__SISAUANG_PRO__'
+                  );
+                  localStorage.setItem(dbCacheKey, JSON.stringify(parsed));
+                }
+              }
+            });
+          } catch {
+            // Ignore localStorage errors
+          }
+        }
+
         if (!firestoreWriteSucceeded && lastFirestoreError) {
           console.warn('[Admin] Firestore write warning:', lastFirestoreError);
           notify.notifyWarning(

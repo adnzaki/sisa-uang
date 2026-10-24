@@ -659,8 +659,26 @@ export const useAuthStore = defineStore('auth', () => {
 
       // Build candidate UIDs to check (exact UID, plus email-matched migrated UID such as `ci4_user_1`)
       const candidateUids = new Set<string>([safeUid]);
-      if (rawEmail === WORKSPACE_ADMIN_EMAIL || rawEmail.startsWith('adnanzaki')) {
+      if (
+        rawEmail === WORKSPACE_ADMIN_EMAIL ||
+        rawEmail.startsWith('adnanzaki') ||
+        rawEmail.startsWith('adnzaki') ||
+        rawEmail.includes('adnzaki')
+      ) {
         candidateUids.add('ci4_user_1');
+      }
+
+      // Authoritative check: If lightweight server already marked user as 'free', enforce it immediately!
+      try {
+        const { data: sData } = await apiClient.get(`/users/${encodeURIComponent(safeUid)}/status`, {
+          params: { email: rawEmail },
+        });
+        if (sData?.subscriptionStatus === 'free' || sData?.isPro === false) {
+          setExternalSubscriptionStatus('free', null, null);
+          return true;
+        }
+      } catch {
+        // Fallback to Firestore checks
       }
 
       let resolvedStatus: 'free' | 'pending' | 'pro' | null = null;
@@ -904,16 +922,10 @@ export const useAuthStore = defineStore('auth', () => {
           );
 
           // If local server instance reports 'free', Super Admin deactivated the user! Update local state immediately!
-          if (!nextIsPro && !nextIsPending && prevIsPro) {
+          if (!nextIsPro && !nextIsPending && (prevIsPro || user.value.subscriptionStatus !== 'free')) {
             if (user.value) {
-              user.value.subscriptionStatus = 'free';
-              user.value.isPro = false;
-              user.value.subscriptionPlan = null;
-              user.value.subscriptionExpiresAt = null;
-              localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
-              upsertSavedAccount(user.value);
+              setExternalSubscriptionStatus('free', null, null);
             }
-            void syncSubscriptionFromFirestoreForUser(user.value.uid, user.value.email);
             return;
           }
 
@@ -990,6 +1002,59 @@ export const useAuthStore = defineStore('auth', () => {
       };
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
       upsertSavedAccount(user.value);
+
+      if (!isPro) {
+        // Deep-clean localStorage caches so stale PRO markers never revive PRO on user activity
+        try {
+          const uidsToClean = new Set<string>([user.value.uid]);
+          const userEmail = (user.value.email || '').toLowerCase();
+          if (userEmail.includes('adnzaki') || userEmail.startsWith('adnanzaki')) {
+            uidsToClean.add('ci4_user_1');
+          }
+
+          // 1. Sanitize all saved accounts in localStorage
+          const savedAccountsRaw = localStorage.getItem(SAVED_ACCOUNTS_STORAGE_KEY);
+          if (savedAccountsRaw) {
+            const list = JSON.parse(savedAccountsRaw);
+            if (Array.isArray(list)) {
+              let changed = false;
+              list.forEach((acc: any) => {
+                if (
+                  uidsToClean.has(acc.uid) ||
+                  (acc.email && acc.email.toLowerCase() === userEmail)
+                ) {
+                  acc.subscriptionStatus = 'free';
+                  acc.isPro = false;
+                  acc.subscriptionPlan = null;
+                  acc.subscriptionExpiresAt = null;
+                  changed = true;
+                }
+              });
+              if (changed) {
+                localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, JSON.stringify(list));
+              }
+            }
+          }
+
+          // 2. Sanitize persisted financial cache so old __SISAUANG_PRO__ budget items don't re-trigger PRO
+          uidsToClean.forEach((targetUid) => {
+            const dbCacheKey = `sisa_uang_db_cache_v5_${targetUid}`;
+            const rawDbCache = localStorage.getItem(dbCacheKey);
+            if (rawDbCache) {
+              const parsed = JSON.parse(rawDbCache);
+              if (parsed && Array.isArray(parsed.budgets)) {
+                parsed.budgets = parsed.budgets.filter(
+                  (b: any) => b.category !== '__SISAUANG_PRO__'
+                );
+                localStorage.setItem(dbCacheKey, JSON.stringify(parsed));
+              }
+            }
+          });
+        } catch {
+          // Ignore cache sanitization errors
+        }
+      }
+
       if (wasPending && isPro) {
         useNotificationStore().notifySuccess(
           'Langganan SisaUang Pro Disetujui!',
