@@ -791,47 +791,11 @@ export const useAuthStore = defineStore('auth', () => {
         }
       }
 
-      // 3. Self-heal: If this device/browser already knows the user is Pro (e.g. on the installed PWA on phone),
-      // but Firestore did not have the Pro marker yet, push this device's Pro status TO Firestore right now so all other devices sync it!
-      if (localServerIsPro && resolvedStatus !== 'pro' && activeUser) {
-        try {
-          if (auth.currentUser?.email?.toLowerCase() !== SUPER_ADMIN_EMAIL) {
-            await signInWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##').catch(
-              () => {}
-            );
-          }
-          const planCode = activeUser.subscriptionPlan === 'yearly' ? 'Y' : 'M';
-          const expIso = activeUser.subscriptionExpiresAt || '2099-12-31';
-          const markerPeriod = `${planCode}:${expIso}`;
-
-          for (const candUid of candidateUids) {
-            const proMarkerId = sanitizeId(`su_sub_pro_${candUid}`);
-            await setDoc(
-              doc(db, 'budgets', proMarkerId),
-              {
-                ownerId: candUid,
-                category: '__SISAUANG_PRO__',
-                limitAmount: 1,
-                spentAmount: 0,
-                period: markerPeriod,
-                deleted: false,
-                deletedAt: null,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-              },
-              { merge: true }
-            ).catch(() => {});
-
-            await updateDoc(doc(db, 'users', candUid), {
-              subscriptionStatus: 'pro',
-              isPro: true,
-              updatedAt: serverTimestamp(),
-            }).catch(() => {});
-          }
-          return true;
-        } catch {
-          // Ignore self-heal error
-        }
+      // 3. If Firestore does not have an active Pro or Pending record, resolve to 'free'
+      if (!resolvedStatus) {
+        resolvedStatus = 'free';
+        resolvedPlan = null;
+        resolvedExpiresAt = null;
       }
 
       // 4. If Firestore has an authoritative Pro/Pending/Free status, update local `user.value`, `localStorage`, AND `/api/users/sync`
@@ -927,10 +891,22 @@ export const useAuthStore = defineStore('auth', () => {
             user.value.subscriptionExpiresAt
           );
 
-          // If local server instance reports 'free' only because this container hasn't hydrated the user's Pro state from Firestore yet,
-          // verify with Cloud Firestore first instead of blindly downgrading an active Pro user!
+          // If local server instance reports 'free', verify with Cloud Firestore. If Firestore confirms downgrade, update local state immediately!
           if (!nextIsPro && !nextIsPending && prevIsPro) {
             await syncSubscriptionFromFirestoreForUser(user.value.uid, user.value.email);
+            const stillPro = isSubscriptionActiveByDate(
+              user.value?.subscriptionStatus,
+              user.value?.isPro,
+              user.value?.subscriptionExpiresAt
+            );
+            if (!stillPro && user.value) {
+              user.value.subscriptionStatus = 'free';
+              user.value.isPro = false;
+              user.value.subscriptionPlan = null;
+              user.value.subscriptionExpiresAt = null;
+              localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+              upsertSavedAccount(user.value);
+            }
             return;
           }
 
@@ -1186,7 +1162,12 @@ export const useAuthStore = defineStore('auth', () => {
 
   function initAuth() {
     loadSavedAccountsFromStorage();
-    const isExplicitlyLoggedOut = localStorage.getItem(EXPLICIT_LOGOUT_KEY) === 'true';
+    // Check explicit logout only if no active session was intentionally saved
+    const hasSavedSession = Boolean(localStorage.getItem(SESSION_STORAGE_KEY));
+    if (hasSavedSession) {
+      localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+    }
+    const isExplicitlyLoggedOut = !hasSavedSession && localStorage.getItem(EXPLICIT_LOGOUT_KEY) === 'true';
 
     if (isExplicitlyLoggedOut) {
       user.value = null;
@@ -1202,6 +1183,7 @@ export const useAuthStore = defineStore('auth', () => {
             parsed.username = parsed.email?.split('@')[0] || 'user';
           }
           user.value = parsed;
+          localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
           const isAdminAccount =
             parsed.role === 'admin' ||
             parsed.email?.toLowerCase() === SUPER_ADMIN_EMAIL ||
@@ -1226,8 +1208,8 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     onAuthStateChanged(auth, async (fbUser) => {
-      // If user explicitly logged out, DO NOT auto-restore session from Firebase Auth cache!
-      if (localStorage.getItem(EXPLICIT_LOGOUT_KEY) === 'true') {
+      // If user explicitly logged out and has no active local session, DO NOT auto-restore session from Firebase Auth cache!
+      if (localStorage.getItem(EXPLICIT_LOGOUT_KEY) === 'true' && !user.value && !localStorage.getItem(SESSION_STORAGE_KEY)) {
         if (fbUser) {
           try {
             await firebaseSignOut(auth);
@@ -1239,6 +1221,7 @@ export const useAuthStore = defineStore('auth', () => {
         isReady.value = true;
         return;
       }
+      localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
 
       if (fbUser && !fbUser.isAnonymous) {
         // If user is already restored from localStorage session or currently registering, still verify subscription from Firestore once
@@ -1403,6 +1386,7 @@ export const useAuthStore = defineStore('auth', () => {
     identifierInput: string,
     passwordInput: string
   ): Promise<{ requiresOtp: boolean }> {
+    localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
     isLoading.value = true;
     error.value = null;
     const cleanIdentifier = identifierInput.trim().toLowerCase();
@@ -1518,6 +1502,7 @@ export const useAuthStore = defineStore('auth', () => {
           resolvedEmail.split('@')[0],
         isFirebaseBacked: true,
       };
+      localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
       user.value = loggedInUser;
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(loggedInUser));
 
@@ -1593,6 +1578,7 @@ export const useAuthStore = defineStore('auth', () => {
         try {
           const cred = await signInWithEmailAndPassword(auth, cleanIdentifier, passwordInput);
           const profile = await ensureFirestoreUserDocument(cred.user);
+          localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
           user.value = profile;
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
           const fallbackToken =
@@ -1649,6 +1635,7 @@ export const useAuthStore = defineStore('auth', () => {
     passwordInput: string,
     usernameInput?: string
   ): Promise<{ requiresOtp: boolean }> {
+    localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
     isLoading.value = true;
     isRegisteringInProgress = true;
     error.value = null;
@@ -1755,6 +1742,7 @@ export const useAuthStore = defineStore('auth', () => {
         displayName: data.user.displayName || cleanName,
         isFirebaseBacked: isFbAuthenticated,
       };
+      localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
       user.value = registeredUser;
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(registeredUser));
       const isRegSuperAdmin =
@@ -2090,6 +2078,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   // 4. Login / Register with Google Account (Firebase Popup)
   async function loginWithGoogle(): Promise<{ requiresOtp: boolean }> {
+    localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
     isLoading.value = true;
     error.value = null;
 
@@ -2103,6 +2092,7 @@ export const useAuthStore = defineStore('auth', () => {
         throw new Error(error.value);
       }
 
+      localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
       user.value = profile;
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
       const googleAdminToken = localStorage.getItem('sisa_uang_admin_token');

@@ -115,13 +115,6 @@ const faqs = [
     <!-- Top Public Navbar -->
     <PublicNavbar @open-checkout="openCheckout" />
 
-    <!-- In-Site Checkout Modal -->
-    <InSiteCheckoutModal
-      :is-open="checkoutModalOpen"
-      :initial-plan="activePlanForCheckout"
-      @close="checkoutModalOpen = false"
-    />
-
     <main class="flex-1">
       <!-- 1. HERO SECTION -->
       <section class="relative pt-12 pb-20 md:pt-20 md:pb-28 overflow-hidden border-b border-slate-200/60 dark:border-slate-800/60 bg-gradient-to-b from-white via-slate-50/50 to-slate-50 dark:from-slate-900 dark:via-slate-950 dark:to-slate-950">

@@ -1356,7 +1356,9 @@ async function startServer() {
         ? 'pending'
         : req.body?.subscriptionStatus === 'pro' || req.body?.isPro === true
           ? 'pro'
-          : undefined;
+          : req.body?.subscriptionStatus === 'free' || req.body?.isPro === false
+            ? 'free'
+            : undefined;
     const incomingPlan: 'monthly' | 'yearly' | null =
       req.body?.subscriptionPlan === 'yearly'
         ? 'yearly'
@@ -1383,6 +1385,11 @@ async function startServer() {
         existing.subscriptionStatus = 'pending';
         existing.isPro = false;
         if (incomingPlan) existing.subscriptionPlan = incomingPlan;
+      } else if (incomingSubStatus === 'free') {
+        existing.subscriptionStatus = 'free';
+        existing.isPro = false;
+        existing.subscriptionPlan = null;
+        existing.subscriptionExpiresAt = null;
       }
       if (passwordHash) {
         existing.passwordHash = passwordHash;
@@ -2908,6 +2915,14 @@ async function startServer() {
   });
 
   // 4. Duitku Webhook / HTTP Callback Handler
+  // Explicitly reject direct browser visits (GET) to prevent misleading hits
+  app.get('/api/duitku/callback', (_req: Request, res: Response) => {
+    res.status(405).json({
+      error: 'Method Not Allowed',
+      message: 'Endpoint callback Duitku hanya menerima permintaan HTTP POST resmi dari server Duitku.',
+    });
+  });
+
   app.post('/api/duitku/callback', async (req: Request, res: Response) => {
     try {
       const merchantCode = String(req.body?.merchantCode || '');
@@ -2941,6 +2956,51 @@ async function startServer() {
       }
 
       if (resultCode === '00') {
+        // Query Duitku transactionStatus directly to prevent false activations from test simulators or unverified hits
+        let isConfirmedSettled = false;
+        try {
+          const verifySig = crypto
+            .createHash('md5')
+            .update(`${DUITKU_MERCHANT_CODE}${merchantOrderId}${DUITKU_API_KEY}`)
+            .digest('hex');
+
+          const verifyRes = await fetch(`${DUITKU_BASE_URL}/transactionStatus`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+            body: JSON.stringify({
+              merchantCode: DUITKU_MERCHANT_CODE,
+              merchantOrderId,
+              signature: verifySig,
+            }),
+          });
+
+          const verifyData: any = await verifyRes.json();
+          if (verifyData?.statusCode === '00') {
+            isConfirmedSettled = true;
+          } else {
+            console.warn(
+              `[Duitku Callback] Order ${merchantOrderId} status check is not settled: ${verifyData?.statusCode} - ${verifyData?.statusMessage}`
+            );
+          }
+        } catch (verifyErr) {
+          console.error(`[Duitku Callback] Error verifying order ${merchantOrderId} with Duitku:`, verifyErr);
+        }
+
+        if (!isConfirmedSettled) {
+          appendLog(
+            order?.userUid || 'duitku_system',
+            order?.customerEmail || 'billing@duitku.com',
+            'duitku_payment_unverified',
+            `Callback Duitku: Order ${merchantOrderId} belum terkonfirmasi lunas pada server Duitku (ResultCode: ${resultCode}). Status Pro tidak diaktifkan.`,
+            'warning'
+          );
+          res.status(200).send('SUCCESS');
+          return;
+        }
+
         if (order) {
           order.status = 'SUCCESS';
           order.paidAt = nowIso();

@@ -155,6 +155,21 @@ watch(
   () => props.isOpen,
   (val) => {
     if (val) {
+      if (!authStore.isAuthenticated || !authStore.user) {
+        const saved = localStorage.getItem('sisa_uang_active_user');
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (parsed && parsed.uid) {
+              authStore.user = parsed;
+              localStorage.removeItem('sisa_uang_explicit_logout');
+            }
+          } catch {
+            // Ignore parse error
+          }
+        }
+      }
+
       // Must be authenticated before proceeding to payment
       if (!authStore.isAuthenticated || !authStore.user) {
         handleClose();
@@ -189,6 +204,21 @@ function copyToClipboard(text: string, field: string) {
 }
 
 async function proceedToPayment() {
+  if (!authStore.isAuthenticated || !authStore.user) {
+    const saved = localStorage.getItem('sisa_uang_active_user');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.uid) {
+          authStore.user = parsed;
+          localStorage.removeItem('sisa_uang_explicit_logout');
+        }
+      } catch {
+        // Ignore parse error
+      }
+    }
+  }
+
   // Enforce logged in user verification
   if (!authStore.isAuthenticated || !authStore.user) {
     handleClose();
@@ -308,7 +338,7 @@ async function checkPaymentStatus(showFeedback = true) {
     const res = await fetch(`/api/duitku/check-status/${encodeURIComponent(invoiceData.value.orderId)}`);
     const data = await res.json();
 
-    if (data.isPaid || data.status === 'SUCCESS' || data.statusCode === '00') {
+    if (data.isPaid === true && (data.duitkuStatus?.statusCode === '00' || data.order?.status === 'SUCCESS')) {
       stopPolling();
       if (authStore.user) {
         authStore.user.isPro = true;
