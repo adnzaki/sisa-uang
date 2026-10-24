@@ -102,6 +102,36 @@
           "type": "boolean",
           "description": "Whether the user has an active SisaUang Pro subscription"
         },
+        "subscriptionPaymentMethod": {
+          "type": "string",
+          "description": "Payment method chosen (qris, bank_transfer)",
+          "maxLength": 40
+        },
+        "subscriptionProofDataUrl": {
+          "type": "string",
+          "description": "Base64 data URL of payment receipt or transfer proof",
+          "maxLength": 2000000
+        },
+        "subscriptionProofFileName": {
+          "type": "string",
+          "description": "Uploaded proof image filename",
+          "maxLength": 120
+        },
+        "subscriptionRequestedAt": {
+          "type": "string",
+          "description": "Timestamp when Pro activation was requested",
+          "maxLength": 40
+        },
+        "subscriptionSenderName": {
+          "type": "string",
+          "description": "Sender bank account or e-wallet name",
+          "maxLength": 80
+        },
+        "subscriptionTransferNote": {
+          "type": "string",
+          "description": "User transfer notes or transaction reference",
+          "maxLength": 200
+        },
         "deleted": {
           "type": "boolean",
           "description": "Soft-delete flag preserving historical records"

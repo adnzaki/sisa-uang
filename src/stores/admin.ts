@@ -265,7 +265,8 @@ export const useAdminStore = defineStore('admin', () => {
       const currentEmail = targetAuth.currentUser?.email?.toLowerCase() || '';
       const isAlreadyAdminEmail =
         currentEmail === 'vuedevo@gmail.com' ||
-        currentEmail === 'adnanzaki65@admin.sd.belajar.id';
+        currentEmail === 'adnanzaki65@admin.sd.belajar.id' ||
+        currentEmail === 'sdnpengasinantujuh@gmail.com';
 
       if (!targetAuth.currentUser || targetAuth.currentUser.isAnonymous || !isAlreadyAdminEmail) {
         try {
@@ -591,34 +592,38 @@ export const useAdminStore = defineStore('admin', () => {
         if (isExplicitlyDeactivated && (fbUser.isPro === true || fbUser.subscriptionStatus === 'pro')) {
           void (async () => {
             try {
-              const fullRepairDoc: Record<string, any> = {
-                ...fbUser,
-                uid: d.id,
-                email: fbUser.email || `${d.id}@sisa-uang.id`,
-                displayName: fbUser.displayName || fbUser.username || d.id,
-                role: fbUser.role === 'admin' ? 'admin' : 'user',
-                status: fbUser.status === 'blocked' ? 'blocked' : 'active',
-                authProvider: fbUser.authProvider === 'google' ? 'google' : 'password',
-                currency: fbUser.currency === 'USD' ? 'USD' : 'IDR',
-                subscriptionStatus: 'free',
-                isPro: false,
-                subscriptionPlan: null,
-                subscriptionExpiresAt: null,
-                updatedAt: serverTimestamp(),
-              };
-              if (fbUser.createdAt) {
-                fullRepairDoc.createdAt = fbUser.createdAt;
-              }
-              await setDoc(doc(targetDb, 'users', d.id), fullRepairDoc, { merge: true });
+              // Priority 1: updateDoc directly modifies only subscription fields (guaranteed to match rules on existing docs)
               await updateDoc(doc(targetDb, 'users', d.id), {
                 subscriptionStatus: 'free',
                 isPro: false,
                 subscriptionPlan: null,
                 subscriptionExpiresAt: null,
                 updatedAt: serverTimestamp(),
-              }).catch(() => {});
+              });
             } catch {
-              // Ignore background auto-repair error
+              try {
+                // Priority 2: Sanitized setDoc fallback with ONLY allowed schema keys
+                const sanitizedRepairDoc: Record<string, any> = {
+                  uid: d.id,
+                  email: fbUser.email || `${d.id}@sisa-uang.id`,
+                  displayName: fbUser.displayName || fbUser.username || d.id,
+                  role: fbUser.role === 'admin' ? 'admin' : 'user',
+                  status: fbUser.status === 'blocked' ? 'blocked' : 'active',
+                  authProvider: fbUser.authProvider === 'google' ? 'google' : 'password',
+                  currency: fbUser.currency === 'USD' ? 'USD' : 'IDR',
+                  subscriptionStatus: 'free',
+                  isPro: false,
+                  subscriptionPlan: null,
+                  subscriptionExpiresAt: null,
+                  updatedAt: serverTimestamp(),
+                };
+                if (fbUser.username) sanitizedRepairDoc.username = fbUser.username;
+                if (fbUser.passwordHash) sanitizedRepairDoc.passwordHash = fbUser.passwordHash;
+                if (fbUser.createdAt) sanitizedRepairDoc.createdAt = fbUser.createdAt;
+                await setDoc(doc(targetDb, 'users', d.id), sanitizedRepairDoc, { merge: true });
+              } catch {
+                // Ignore background auto-repair error
+              }
             }
           })();
         }
@@ -946,8 +951,27 @@ export const useAdminStore = defineStore('admin', () => {
           safeTargetUid
         );
 
+        const ALLOWED_USER_KEYS = [
+          'uid',
+          'username',
+          'email',
+          'displayName',
+          'passwordHash',
+          'role',
+          'status',
+          'authProvider',
+          'currency',
+          'subscriptionStatus',
+          'subscriptionPlan',
+          'subscriptionExpiresAt',
+          'isPro',
+          'deleted',
+          'deletedAt',
+          'createdAt',
+          'updatedAt',
+        ];
+
         const fullUserDoc: Record<string, any> = {
-          ...(existingUserData || {}),
           uid: safeTargetUid,
           email: safeEmail,
           displayName: safeName,
@@ -963,19 +987,14 @@ export const useAdminStore = defineStore('admin', () => {
           updatedAt: serverTimestamp(),
         };
 
+        if (existingUserData?.passwordHash) {
+          fullUserDoc.passwordHash = existingUserData.passwordHash;
+        }
+
         if (existingUserData?.createdAt) {
           fullUserDoc.createdAt = existingUserData.createdAt;
         } else {
           fullUserDoc.createdAt = serverTimestamp();
-        }
-
-        if (nextSubStatus === 'free') {
-          fullUserDoc.subscriptionPaymentMethod = null;
-          fullUserDoc.subscriptionProofDataUrl = null;
-          fullUserDoc.subscriptionProofFileName = null;
-          fullUserDoc.subscriptionRequestedAt = null;
-          fullUserDoc.subscriptionSenderName = null;
-          fullUserDoc.subscriptionTransferNote = null;
         }
 
         let firestoreWriteSucceeded = false;
@@ -983,7 +1002,29 @@ export const useAdminStore = defineStore('admin', () => {
 
         for (const instDb of budgetInstances) {
           try {
-            // Write budget marker
+            // Priority 1: updateDoc directly modifies the user document (preserves existing fields & guarantees schema match)
+            try {
+              await updateDoc(doc(instDb, 'users', safeTargetUid), {
+                subscriptionStatus: nextSubStatus,
+                isPro: nextIsPro,
+                subscriptionPlan: nextPlan,
+                subscriptionExpiresAt: nextExpiresAt,
+                updatedAt: serverTimestamp(),
+              });
+              firestoreWriteSucceeded = true;
+            } catch (updErr: any) {
+              // Priority 2: If document did not exist yet, fallback to strictly sanitized setDoc
+              const sanitizedDoc: Record<string, any> = {};
+              for (const k of ALLOWED_USER_KEYS) {
+                if (k in fullUserDoc && fullUserDoc[k] !== undefined) {
+                  sanitizedDoc[k] = fullUserDoc[k];
+                }
+              }
+              await setDoc(doc(instDb, 'users', safeTargetUid), sanitizedDoc, { merge: true });
+              firestoreWriteSucceeded = true;
+            }
+
+            // Priority 3: Write / update budget marker for rapid offline sync & reactivity
             await setDoc(
               doc(instDb, 'budgets', proMarkerId),
               {
@@ -1023,20 +1064,6 @@ export const useAdminStore = defineStore('admin', () => {
                 ).catch(() => {});
               }
             }
-
-            // Write full user document (complies with all Firestore rules)
-            await setDoc(doc(instDb, 'users', safeTargetUid), fullUserDoc, { merge: true });
-
-            // Also update with updateDoc in case partial write is preferred
-            await updateDoc(doc(instDb, 'users', safeTargetUid), {
-              subscriptionStatus: nextSubStatus,
-              isPro: nextIsPro,
-              subscriptionPlan: nextPlan,
-              subscriptionExpiresAt: nextExpiresAt,
-              updatedAt: serverTimestamp(),
-            }).catch(() => {});
-
-            firestoreWriteSucceeded = true;
           } catch (writeErr) {
             lastFirestoreError = writeErr;
             console.error('[Admin] Firestore write error for user', safeTargetUid, writeErr);
@@ -1053,16 +1080,6 @@ export const useAdminStore = defineStore('admin', () => {
               );
               for (const matchedDoc of emailMatches.docs) {
                 if (matchedDoc.id !== safeTargetUid) {
-                  const mData = matchedDoc.data();
-                  const mDocFull = {
-                    ...mData,
-                    subscriptionStatus: nextSubStatus,
-                    isPro: nextIsPro,
-                    subscriptionPlan: nextPlan,
-                    subscriptionExpiresAt: nextExpiresAt,
-                    updatedAt: serverTimestamp(),
-                  };
-                  await setDoc(doc(instDb, 'users', matchedDoc.id), mDocFull, { merge: true }).catch(() => {});
                   await updateDoc(doc(instDb, 'users', matchedDoc.id), {
                     subscriptionStatus: nextSubStatus,
                     isPro: nextIsPro,

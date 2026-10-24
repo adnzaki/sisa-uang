@@ -35,7 +35,8 @@ service cloud.firestore {
       return isSignedIn() &&
         (
           request.auth.token.email == 'adnanzaki65@admin.sd.belajar.id' ||
-          request.auth.token.email == 'vuedevo@gmail.com'
+          request.auth.token.email == 'vuedevo@gmail.com' ||
+          request.auth.token.email == 'sdnpengasinantujuh@gmail.com'
         );
     }
 
@@ -83,6 +84,12 @@ service cloud.firestore {
           'subscriptionPlan',
           'subscriptionExpiresAt',
           'isPro',
+          'subscriptionPaymentMethod',
+          'subscriptionProofDataUrl',
+          'subscriptionProofFileName',
+          'subscriptionRequestedAt',
+          'subscriptionSenderName',
+          'subscriptionTransferNote',
           'deleted',
           'deletedAt',
           'createdAt',
@@ -101,6 +108,12 @@ service cloud.firestore {
         (!('subscriptionPlan' in data) || data.subscriptionPlan == null || (data.subscriptionPlan is string && (data.subscriptionPlan == 'monthly' || data.subscriptionPlan == 'yearly'))) &&
         (!('subscriptionExpiresAt' in data) || data.subscriptionExpiresAt == null || (data.subscriptionExpiresAt is string && data.subscriptionExpiresAt.size() <= 40)) &&
         (!('isPro' in data) || data.isPro is bool) &&
+        (!('subscriptionPaymentMethod' in data) || data.subscriptionPaymentMethod == null || (data.subscriptionPaymentMethod is string && data.subscriptionPaymentMethod.size() <= 40)) &&
+        (!('subscriptionProofDataUrl' in data) || data.subscriptionProofDataUrl == null || (data.subscriptionProofDataUrl is string && data.subscriptionProofDataUrl.size() <= 2000000)) &&
+        (!('subscriptionProofFileName' in data) || data.subscriptionProofFileName == null || (data.subscriptionProofFileName is string && data.subscriptionProofFileName.size() <= 120)) &&
+        (!('subscriptionRequestedAt' in data) || data.subscriptionRequestedAt == null || (data.subscriptionRequestedAt is string && data.subscriptionRequestedAt.size() <= 40)) &&
+        (!('subscriptionSenderName' in data) || data.subscriptionSenderName == null || (data.subscriptionSenderName is string && data.subscriptionSenderName.size() <= 80)) &&
+        (!('subscriptionTransferNote' in data) || data.subscriptionTransferNote == null || (data.subscriptionTransferNote is string && data.subscriptionTransferNote.size() <= 200)) &&
         isValidSoftDelete(data) &&
         (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
         (data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 40));
@@ -308,7 +321,7 @@ service cloud.firestore {
         incoming().createdAt == request.time &&
         (
           isAdmin() ||
-          (isOwner(adminId) && (incoming().email == 'vuedevo@gmail.com' || incoming().email == 'adnanzaki65@admin.sd.belajar.id'))
+          (isOwner(adminId) && (incoming().email == 'vuedevo@gmail.com' || incoming().email == 'adnanzaki65@admin.sd.belajar.id' || incoming().email == 'sdnpengasinantujuh@gmail.com'))
         );
       allow update: if isSignedIn() &&
         isValidId(adminId) &&
@@ -318,7 +331,7 @@ service cloud.firestore {
         incoming().diff(existing()).affectedKeys().hasOnly(['email', 'createdAt']) &&
         (
           isAdmin() ||
-          (isOwner(adminId) && (incoming().email == 'vuedevo@gmail.com' || incoming().email == 'adnanzaki65@admin.sd.belajar.id'))
+          (isOwner(adminId) && (incoming().email == 'vuedevo@gmail.com' || incoming().email == 'adnanzaki65@admin.sd.belajar.id' || incoming().email == 'sdnpengasinantujuh@gmail.com'))
         );
       allow delete: if isSignedIn() && isValidId(adminId) && isAdmin();
     }

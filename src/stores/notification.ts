@@ -272,6 +272,38 @@ export const useNotificationStore = defineStore('notification', () => {
     });
   }
 
+  function notifyWarning(
+    title: string,
+    message: string,
+    extra?: { detail?: string | null; actionLabel?: string; actionRoute?: string; durationMs?: number }
+  ) {
+    return showPopup({
+      type: 'warning',
+      title,
+      message,
+      detail: extra?.detail,
+      actionLabel: extra?.actionLabel,
+      actionRoute: extra?.actionRoute,
+      durationMs: extra?.durationMs ?? 8000,
+    });
+  }
+
+  function notifyInfo(
+    title: string,
+    message: string,
+    extra?: { detail?: string | null; actionLabel?: string; actionRoute?: string; durationMs?: number }
+  ) {
+    return showPopup({
+      type: 'info',
+      title,
+      message,
+      detail: extra?.detail,
+      actionLabel: extra?.actionLabel,
+      actionRoute: extra?.actionRoute,
+      durationMs: extra?.durationMs ?? 6000,
+    });
+  }
+
   return {
     banners,
     confirmDialog,
@@ -290,6 +322,8 @@ export const useNotificationStore = defineStore('notification', () => {
     showPopup,
     notifyQuotaExceeded,
     notifySuccess,
+    notifyWarning,
+    notifyInfo,
     notifyError,
     dismissBanner,
     clearAll,
