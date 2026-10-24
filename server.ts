@@ -1377,10 +1377,13 @@ async function startServer() {
         existing.username = username;
       }
       if (incomingSubStatus === 'pro' && existing.subscriptionStatus !== 'pending') {
-        existing.subscriptionStatus = 'pro';
-        existing.isPro = true;
-        if (incomingPlan) existing.subscriptionPlan = incomingPlan;
-        if (incomingExpiresAt) existing.subscriptionExpiresAt = incomingExpiresAt;
+        // A client device cannot self-promote if the server has explicitly marked the user as free
+        if (existing.subscriptionStatus === 'pro' || isSuperAdmin) {
+          existing.subscriptionStatus = 'pro';
+          existing.isPro = true;
+          if (incomingPlan) existing.subscriptionPlan = incomingPlan;
+          if (incomingExpiresAt) existing.subscriptionExpiresAt = incomingExpiresAt;
+        }
       } else if (incomingSubStatus === 'pending' && existing.subscriptionStatus !== 'pro') {
         existing.subscriptionStatus = 'pending';
         existing.isPro = false;
@@ -3442,6 +3445,9 @@ async function startServer() {
     }
 
     const wasPending = targetUser.subscriptionStatus === 'pending';
+    const targetEmailLower = targetUser.email.toLowerCase();
+
+    // Update target user record
     targetUser.subscriptionStatus = newSubStatus;
     targetUser.isPro = isPro;
     targetUser.subscriptionPlan = plan;
@@ -3455,6 +3461,27 @@ async function startServer() {
       targetUser.subscriptionTransferNote = null;
     }
     targetUser.updatedAt = nowIso();
+
+    // If deactivating, also ensure any other user record with the exact same email is set to free
+    if (newSubStatus === 'free' && targetEmailLower) {
+      for (const [uid, u] of usersStore.entries()) {
+        if (uid !== targetUid && u.email.toLowerCase() === targetEmailLower) {
+          u.subscriptionStatus = 'free';
+          u.isPro = false;
+          u.subscriptionPlan = null;
+          u.subscriptionExpiresAt = null;
+          u.subscriptionPaymentMethod = null;
+          u.subscriptionProofDataUrl = null;
+          u.subscriptionProofFileName = null;
+          u.subscriptionRequestedAt = null;
+          u.subscriptionSenderName = null;
+          u.subscriptionTransferNote = null;
+          u.updatedAt = nowIso();
+        }
+      }
+    }
+
+    usersRegistrySyncToken = Date.now();
     savePersistedUsersCache();
 
     const planLabel = plan === 'yearly' ? 'Tahunan' : 'Bulanan';
@@ -3584,14 +3611,33 @@ async function startServer() {
         .replace(/\s+/g, '_')
         .slice(0, 60);
 
-      const isPending =
-        u.subscriptionStatus === 'pending' || existing?.subscriptionStatus === 'pending';
-      const isPro =
-        !isPending &&
-        (u.subscriptionStatus === 'pro' ||
-          u.isPro === true ||
-          existing?.subscriptionStatus === 'pro' ||
-          existing?.isPro === true);
+      // Subscription resolution:
+      // 1. If incoming u is explicitly 'free' or has isPro === false, it MUST be 'free'
+      // 2. If existing user in server registry was deactivated to 'free' by Super Admin, DO NOT revive it back to pro during auto-sync
+      // 3. Only mark as 'pro' if incoming u is active pro and server has not deactivated it
+      let isPro = false;
+      let isPending = false;
+
+      if (u.subscriptionStatus === 'pending') {
+        isPending = true;
+      } else if (u.subscriptionStatus === 'free' || u.isPro === false) {
+        isPro = false;
+        isPending = false;
+      } else if (u.subscriptionStatus === 'pro' || u.isPro === true) {
+        if (existing && existing.subscriptionStatus === 'free' && existing.isPro === false) {
+          isPro = false;
+        } else {
+          isPro = isUserSubscriptionActive({
+            subscriptionStatus: 'pro',
+            isPro: true,
+            subscriptionExpiresAt: u.subscriptionExpiresAt || existing?.subscriptionExpiresAt,
+          });
+        }
+      } else if (existing) {
+        isPro = isUserSubscriptionActive(existing);
+        isPending = !isPro && existing.subscriptionStatus === 'pending';
+      }
+
       const subscriptionPlan: 'monthly' | 'yearly' | null =
         isPro || isPending
           ? u.subscriptionPlan === 'yearly' || existing?.subscriptionPlan === 'yearly'

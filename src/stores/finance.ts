@@ -1704,36 +1704,37 @@ export const useFinanceStore = defineStore('finance', () => {
     });
 
     // Check if Firestore has an explicit SisaUang Pro marker document for this user
-    const proMarkerDoc = allBudgetDocsRaw.find(
+    const proMarkerDocs = allBudgetDocsRaw.filter(
       (b: BudgetItem) => b.category === '__SISAUANG_PRO__'
     );
-    if (proMarkerDoc) {
+    if (proMarkerDocs.length > 0) {
       const authStore = useAuthStore();
       if (authStore.user?.uid === uid) {
-        const rawPeriod = String(proMarkerDoc.period || '');
-        if (rawPeriod.startsWith('P:')) {
-          const planCode = rawPeriod.slice(2, 3);
-          const plan: 'monthly' | 'yearly' = planCode === 'Y' ? 'yearly' : 'monthly';
-          authStore.setExternalSubscriptionStatus(
-            proMarkerDoc.deleted ? 'free' : 'pending',
-            proMarkerDoc.deleted ? null : plan,
-            null
-          );
+        // Find if there is an active (not deleted and not pro-inactive) marker
+        const activeMarker = proMarkerDocs.find(
+          (b: BudgetItem) => !b.deleted && String(b.period || '') !== 'pro-inactive'
+        );
+
+        if (!activeMarker) {
+          authStore.setExternalSubscriptionStatus('free', null, null);
         } else {
-          let plan: 'monthly' | 'yearly' = 'monthly';
-          let expiresAt: string | null = null;
-          if (rawPeriod.startsWith('Y:')) {
-            plan = 'yearly';
-            expiresAt = rawPeriod.slice(2) || null;
-          } else if (rawPeriod.startsWith('M:')) {
-            plan = 'monthly';
-            expiresAt = rawPeriod.slice(2) || null;
+          const rawPeriod = String(activeMarker.period || '');
+          if (rawPeriod.startsWith('P:')) {
+            const planCode = rawPeriod.slice(2, 3);
+            const plan: 'monthly' | 'yearly' = planCode === 'Y' ? 'yearly' : 'monthly';
+            authStore.setExternalSubscriptionStatus('pending', plan, null);
+          } else {
+            let plan: 'monthly' | 'yearly' = 'monthly';
+            let expiresAt: string | null = null;
+            if (rawPeriod.startsWith('Y:')) {
+              plan = 'yearly';
+              expiresAt = rawPeriod.slice(2) || null;
+            } else if (rawPeriod.startsWith('M:')) {
+              plan = 'monthly';
+              expiresAt = rawPeriod.slice(2) || null;
+            }
+            authStore.setExternalSubscriptionStatus('pro', plan, expiresAt);
           }
-          authStore.setExternalSubscriptionStatus(
-            proMarkerDoc.deleted ? 'free' : 'pro',
-            proMarkerDoc.deleted ? null : plan,
-            proMarkerDoc.deleted ? null : expiresAt
-          );
         }
       }
     }
@@ -1887,6 +1888,8 @@ export const useFinanceStore = defineStore('finance', () => {
               statusData.subscriptionPlan || 'monthly',
               null
             );
+          } else if (statusData.subscriptionStatus === 'free' || statusData.isPro === false) {
+            authStore.setExternalSubscriptionStatus('free', null, null);
           }
         }
       } catch {
@@ -1914,6 +1917,8 @@ export const useFinanceStore = defineStore('finance', () => {
             : authStore.user?.subscriptionPlan || 'monthly',
           uData?.subscriptionExpiresAt || authStore.user?.subscriptionExpiresAt || null
         );
+      } else if (uData?.subscriptionStatus === 'free' || uData?.isPro === false) {
+        authStore.setExternalSubscriptionStatus('free', null, null);
       } else if (!serverReportedProOrPending) {
         // Check `/budgets/su_sub_pro_{uid}` if `/users/{uid}` doesn't have subscriptionStatus field yet
         void authStore.syncSubscriptionFromFirestoreForUser(uid, authStore.user?.email);
@@ -2092,6 +2097,8 @@ export const useFinanceStore = defineStore('finance', () => {
             statusData.subscriptionPlan || 'monthly',
             null
           );
+        } else if (statusData.subscriptionStatus === 'free' || statusData.isPro === false) {
+          authStore.setExternalSubscriptionStatus('free', null, null);
         }
       }
     } catch {
@@ -2123,6 +2130,8 @@ export const useFinanceStore = defineStore('finance', () => {
                   : authStore.user?.subscriptionPlan || 'monthly',
                 uData?.subscriptionExpiresAt || authStore.user?.subscriptionExpiresAt || null
               );
+            } else if (uData?.subscriptionStatus === 'free' || uData?.isPro === false) {
+              authStore.setExternalSubscriptionStatus('free', null, null);
             } else if (!localServerHasProOrPending) {
               void authStore.syncSubscriptionFromFirestoreForUser(uid, authStore.user?.email);
             }

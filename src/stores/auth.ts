@@ -693,6 +693,8 @@ export const useAuthStore = defineStore('auth', () => {
               resolvedPlan = null;
               resolvedExpiresAt = null;
               foundFirestoreProRecord = true;
+              // Super admin explicitly deactivated this user; do not let stale userDocSnap revive it!
+              break;
             } else if (rawPeriod.startsWith('P:')) {
               resolvedStatus = 'pending';
               resolvedPlan = rawPeriod.slice(2, 3) === 'Y' ? 'yearly' : 'monthly';
@@ -721,7 +723,13 @@ export const useAuthStore = defineStore('auth', () => {
 
           if (userDocSnap && userDocSnap.exists()) {
             const uData = userDocSnap.data();
-            if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
+            if (uData?.subscriptionStatus === 'free' || uData?.isPro === false) {
+              resolvedStatus = 'free';
+              resolvedPlan = null;
+              resolvedExpiresAt = null;
+              foundFirestoreProRecord = true;
+              break;
+            } else if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
               const plan: 'monthly' | 'yearly' =
                 uData?.subscriptionPlan === 'yearly' ? 'yearly' : resolvedPlan || 'monthly';
               const exp: string | null = uData?.subscriptionExpiresAt || resolvedExpiresAt || null;
@@ -737,10 +745,7 @@ export const useAuthStore = defineStore('auth', () => {
               resolvedPlan = uData?.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly';
               resolvedExpiresAt = null;
               foundFirestoreProRecord = true;
-            } else if (
-              (uData?.subscriptionStatus === 'free' || uData?.isPro === false) &&
-              !foundFirestoreProRecord
-            ) {
+            } else if (!foundFirestoreProRecord) {
               resolvedStatus = 'free';
               resolvedPlan = null;
               resolvedExpiresAt = null;
@@ -751,13 +756,20 @@ export const useAuthStore = defineStore('auth', () => {
         }
       }
 
-      // 2. Also check by email in `/users` if still not Pro and email is available (handles cases where different devices used different UIDs for the same email)
-      if (resolvedStatus !== 'pro' && rawEmail) {
+      // 2. Also check by email in `/users` if still not Pro, email is available, and account was NOT explicitly marked free
+      if (resolvedStatus !== 'pro' && resolvedStatus !== 'free' && rawEmail) {
         try {
           const emailQ = query(collection(db, 'users'), where('email', '==', rawEmail));
           const emailSnap = await getDocs(emailQ);
           for (const d of emailSnap.docs) {
             const uData = d.data();
+            if (uData?.subscriptionStatus === 'free' || uData?.isPro === false) {
+              resolvedStatus = 'free';
+              resolvedPlan = null;
+              resolvedExpiresAt = null;
+              foundFirestoreProRecord = true;
+              break;
+            }
             if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
               resolvedStatus = 'pro';
               resolvedPlan =
@@ -891,15 +903,9 @@ export const useAuthStore = defineStore('auth', () => {
             user.value.subscriptionExpiresAt
           );
 
-          // If local server instance reports 'free', verify with Cloud Firestore. If Firestore confirms downgrade, update local state immediately!
+          // If local server instance reports 'free', Super Admin deactivated the user! Update local state immediately!
           if (!nextIsPro && !nextIsPending && prevIsPro) {
-            await syncSubscriptionFromFirestoreForUser(user.value.uid, user.value.email);
-            const stillPro = isSubscriptionActiveByDate(
-              user.value?.subscriptionStatus,
-              user.value?.isPro,
-              user.value?.subscriptionExpiresAt
-            );
-            if (!stillPro && user.value) {
+            if (user.value) {
               user.value.subscriptionStatus = 'free';
               user.value.isPro = false;
               user.value.subscriptionPlan = null;
@@ -907,6 +913,7 @@ export const useAuthStore = defineStore('auth', () => {
               localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
               upsertSavedAccount(user.value);
             }
+            void syncSubscriptionFromFirestoreForUser(user.value.uid, user.value.email);
             return;
           }
 
@@ -982,6 +989,7 @@ export const useAuthStore = defineStore('auth', () => {
         subscriptionExpiresAt: resolvedExpires,
       };
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+      upsertSavedAccount(user.value);
       if (wasPending && isPro) {
         useNotificationStore().notifySuccess(
           'Langganan SisaUang Pro Disetujui!',
@@ -1144,14 +1152,21 @@ export const useAuthStore = defineStore('auth', () => {
         subscriptionPlan: profile.subscriptionPlan,
         subscriptionExpiresAt: profile.subscriptionExpiresAt,
       });
-      if (data?.user?.status) {
-        profile.status = data.user.status;
-      }
-      if (data?.user?.subscriptionStatus === 'pro' || data?.user?.isPro === true) {
-        profile.subscriptionStatus = 'pro';
-        profile.isPro = true;
-        profile.subscriptionPlan = data.user.subscriptionPlan || profile.subscriptionPlan || 'monthly';
-        profile.subscriptionExpiresAt = data.user.subscriptionExpiresAt || profile.subscriptionExpiresAt || null;
+      if (data?.user) {
+        if (data.user.status) {
+          profile.status = data.user.status;
+        }
+        if (data.user.subscriptionStatus === 'free' || data.user.isPro === false) {
+          profile.subscriptionStatus = 'free';
+          profile.isPro = false;
+          profile.subscriptionPlan = null;
+          profile.subscriptionExpiresAt = null;
+        } else if (data.user.subscriptionStatus === 'pro' || data.user.isPro === true) {
+          profile.subscriptionStatus = 'pro';
+          profile.isPro = true;
+          profile.subscriptionPlan = data.user.subscriptionPlan || profile.subscriptionPlan || 'monthly';
+          profile.subscriptionExpiresAt = data.user.subscriptionExpiresAt || profile.subscriptionExpiresAt || null;
+        }
       }
     } catch {
       // Ignore

@@ -64,7 +64,12 @@ export interface AdminUserItem {
   updatedAt: string;
 }
 
-export function isAdminUserProActive(u: AdminUserItem): boolean {
+export function isAdminUserProActive(u: {
+  subscriptionStatus?: 'free' | 'pending' | 'pro' | string;
+  isPro?: boolean;
+  subscriptionExpiresAt?: string | null;
+  [key: string]: any;
+}): boolean {
   if (u.subscriptionStatus === 'pending') return false;
   const markedPro = u.subscriptionStatus === 'pro' || u.isPro === true;
   if (!markedPro) return false;
@@ -81,7 +86,12 @@ export function isAdminUserProActive(u: AdminUserItem): boolean {
   return true;
 }
 
-export function isAdminUserProPending(u: AdminUserItem): boolean {
+export function isAdminUserProPending(u: {
+  subscriptionStatus?: 'free' | 'pending' | 'pro' | string;
+  isPro?: boolean;
+  subscriptionExpiresAt?: string | null;
+  [key: string]: any;
+}): boolean {
   return !isAdminUserProActive(u) && u.subscriptionStatus === 'pending';
 }
 
@@ -518,32 +528,43 @@ export const useAdminStore = defineStore('admin', () => {
       const snap = await getDocs(collection(targetDb, 'users'));
       const proMarkersMap = new Map<
         string,
-        { status: 'pending' | 'pro'; plan: 'monthly' | 'yearly'; expiresAt: string | null }
+        { status: 'pending' | 'pro' | 'free'; plan: 'monthly' | 'yearly' | null; expiresAt: string | null }
       >();
+      const explicitlyDeactivatedOwners = new Set<string>();
+
       try {
         const proSnap = await getDocs(
           query(collection(targetDb, 'budgets'), where('category', '==', '__SISAUANG_PRO__'))
         );
         proSnap.docs.forEach((pd) => {
           const pData = pd.data() as Record<string, any>;
-          if (!pData.deleted && pData.ownerId) {
-            const rawPeriod = String(pData.period || '');
-            let status: 'pending' | 'pro' = 'pro';
-            let plan: 'monthly' | 'yearly' = 'monthly';
-            let expiresAt: string | null = null;
-            if (rawPeriod.startsWith('P:')) {
-              status = 'pending';
-              plan = rawPeriod.slice(2, 3) === 'Y' ? 'yearly' : 'monthly';
-              expiresAt = null;
-            } else if (rawPeriod.startsWith('Y:')) {
-              plan = 'yearly';
-              expiresAt = rawPeriod.slice(2) || null;
-            } else if (rawPeriod.startsWith('M:')) {
-              plan = 'monthly';
-              expiresAt = rawPeriod.slice(2) || null;
-            }
-            proMarkersMap.set(String(pData.ownerId), { status, plan, expiresAt });
+          const ownerId = String(pData.ownerId || '');
+          if (!ownerId) return;
+
+          const rawPeriod = String(pData.period || '');
+          const isDeactivated = pData.deleted === true || rawPeriod === 'pro-inactive';
+
+          if (isDeactivated) {
+            explicitlyDeactivatedOwners.add(ownerId);
+            proMarkersMap.set(ownerId, { status: 'free', plan: null, expiresAt: null });
+            return;
           }
+
+          let status: 'pending' | 'pro' = 'pro';
+          let plan: 'monthly' | 'yearly' = 'monthly';
+          let expiresAt: string | null = null;
+          if (rawPeriod.startsWith('P:')) {
+            status = 'pending';
+            plan = rawPeriod.slice(2, 3) === 'Y' ? 'yearly' : 'monthly';
+            expiresAt = null;
+          } else if (rawPeriod.startsWith('Y:')) {
+            plan = 'yearly';
+            expiresAt = rawPeriod.slice(2) || null;
+          } else if (rawPeriod.startsWith('M:')) {
+            plan = 'monthly';
+            expiresAt = rawPeriod.slice(2) || null;
+          }
+          proMarkersMap.set(ownerId, { status, plan, expiresAt });
         });
       } catch {
         // Ignore if no pro markers yet
@@ -561,13 +582,32 @@ export const useAdminStore = defineStore('admin', () => {
       snap.docs.forEach((d) => {
         const fbUser = d.data();
         const markerInfo = proMarkersMap.get(d.id);
+        const isExplicitlyDeactivated =
+          explicitlyDeactivatedOwners.has(d.id) ||
+          fbUser.subscriptionStatus === 'free' ||
+          fbUser.isPro === false;
+
         const isPending =
-          markerInfo?.status === 'pending' || fbUser.subscriptionStatus === 'pending';
+          !isExplicitlyDeactivated &&
+          (markerInfo?.status === 'pending' || fbUser.subscriptionStatus === 'pending');
+
         const isPro =
+          !isExplicitlyDeactivated &&
           !isPending &&
           (markerInfo?.status === 'pro' ||
-            fbUser.subscriptionStatus === 'pro' ||
-            fbUser.isPro === true);
+            (fbUser.subscriptionStatus === 'pro' || fbUser.isPro === true)) &&
+          isAdminUserProActive({
+            uid: d.id,
+            email: fbUser.email,
+            displayName: fbUser.displayName,
+            role: fbUser.role,
+            status: fbUser.status,
+            authProvider: fbUser.authProvider,
+            subscriptionStatus: markerInfo?.status === 'pro' ? 'pro' : fbUser.subscriptionStatus,
+            isPro: true,
+            subscriptionExpiresAt: markerInfo?.expiresAt || fbUser.subscriptionExpiresAt,
+          });
+
         const subscriptionPlan: 'monthly' | 'yearly' | null =
           isPro || isPending
             ? markerInfo?.plan || (fbUser.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly')
@@ -835,72 +875,98 @@ export const useAdminStore = defineStore('admin', () => {
           ? `${planCode}:${nextExpiresAt || '2099-12-31'}`
           : 'pro-inactive';
 
-        await setDoc(
-          doc(targetDb, 'budgets', proMarkerId),
-          {
-            ownerId: safeTargetUid,
-            category: '__SISAUANG_PRO__',
-            limitAmount: 1,
-            spentAmount: 0,
-            period: markerPeriod,
-            deleted: !nextIsPro,
-            deletedAt: nextIsPro ? null : serverTimestamp(),
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true }
-        );
+        const budgetInstances = targetDb !== db ? [targetDb, db] : [targetDb];
+        const userUpdatePayload = {
+          subscriptionStatus: nextSubStatus,
+          isPro: nextIsPro,
+          subscriptionPlan: nextPlan,
+          subscriptionExpiresAt: nextExpiresAt,
+          updatedAt: serverTimestamp(),
+        };
 
-        try {
-          await updateDoc(doc(targetDb, 'users', safeTargetUid), {
-            subscriptionStatus: nextSubStatus,
-            isPro: nextIsPro,
-            updatedAt: serverTimestamp(),
-          });
-        } catch {
+        for (const instDb of budgetInstances) {
           try {
-            await updateDoc(doc(targetDb, 'users', safeTargetUid), {
-              updatedAt: serverTimestamp(),
-            });
+            await setDoc(
+              doc(instDb, 'budgets', proMarkerId),
+              {
+                ownerId: safeTargetUid,
+                category: '__SISAUANG_PRO__',
+                limitAmount: 1,
+                spentAmount: 0,
+                period: markerPeriod,
+                deleted: !nextIsPro,
+                deletedAt: nextIsPro ? null : serverTimestamp(),
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+
+            // Also find and clear any other __SISAUANG_PRO__ markers owned by this UID
+            const existingMarkers = await getDocs(
+              query(
+                collection(instDb, 'budgets'),
+                where('ownerId', '==', safeTargetUid),
+                where('category', '==', '__SISAUANG_PRO__')
+              )
+            ).catch(() => null);
+
+            if (existingMarkers && !existingMarkers.empty) {
+              for (const mDoc of existingMarkers.docs) {
+                await setDoc(
+                  doc(instDb, 'budgets', mDoc.id),
+                  {
+                    period: markerPeriod,
+                    deleted: !nextIsPro,
+                    deletedAt: nextIsPro ? null : serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                  },
+                  { merge: true }
+                ).catch(() => {});
+              }
+            }
+
+            await setDoc(doc(instDb, 'users', safeTargetUid), userUpdatePayload, { merge: true }).catch(
+              async () => {
+                await updateDoc(doc(instDb, 'users', safeTargetUid), userUpdatePayload).catch(() => {});
+              }
+            );
           } catch {
-            // Ignore if user doc not yet in Firestore
+            // Ignore single instance failure
           }
         }
 
         // Also if targetUser has an email matching another Firestore user doc (e.g. Google OAuth UID vs ci4_user_1), update that doc & marker too so all devices sync seamlessly
         if (targetUser.email) {
-          try {
-            const emailMatches = await getDocs(
-              query(collection(targetDb, 'users'), where('email', '==', targetUser.email.toLowerCase()))
-            );
-            for (const matchedDoc of emailMatches.docs) {
-              if (matchedDoc.id !== safeTargetUid) {
-                const altMarkerId = sanitizeId(`su_sub_pro_${matchedDoc.id}`);
+          const emailLower = targetUser.email.toLowerCase();
+          for (const instDb of budgetInstances) {
+            try {
+              const emailMatches = await getDocs(
+                query(collection(instDb, 'users'), where('email', '==', emailLower))
+              );
+              for (const matchedDoc of emailMatches.docs) {
+                const matchedUid = matchedDoc.id;
+                await setDoc(doc(instDb, 'users', matchedUid), userUpdatePayload, { merge: true }).catch(() => {});
+
+                const altMarkerId = sanitizeId(`su_sub_pro_${matchedUid}`);
                 await setDoc(
-                  doc(targetDb, 'budgets', altMarkerId),
+                  doc(instDb, 'budgets', altMarkerId),
                   {
-                    ownerId: matchedDoc.id,
+                    ownerId: matchedUid,
                     category: '__SISAUANG_PRO__',
                     limitAmount: 1,
                     spentAmount: 0,
                     period: markerPeriod,
                     deleted: !nextIsPro,
                     deletedAt: nextIsPro ? null : serverTimestamp(),
-                    createdAt: serverTimestamp(),
                     updatedAt: serverTimestamp(),
                   },
                   { merge: true }
                 ).catch(() => {});
-
-                await updateDoc(doc(targetDb, 'users', matchedDoc.id), {
-                  subscriptionStatus: nextSubStatus,
-                  isPro: nextIsPro,
-                  updatedAt: serverTimestamp(),
-                }).catch(() => {});
               }
+            } catch {
+              // Ignore email query error
             }
-          } catch {
-            // Ignore email query error
           }
         }
       } catch {
