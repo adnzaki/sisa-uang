@@ -2778,6 +2778,11 @@ async function startServer() {
       const paymentMethod = String(req.body?.paymentMethod || 'SP').trim();
       const userUid = req.body?.userUid ? String(req.body.userUid).trim() : undefined;
 
+      if (!userUid && !customerEmail) {
+        res.status(401).json({ error: 'Pengguna wajib login terlebih dahulu sebelum melakukan checkout pembayaran.' });
+        return;
+      }
+
       const timestamp = Date.now();
       const randomSuffix = crypto.randomBytes(3).toString('hex').toUpperCase();
       const merchantOrderId = `SU-${timestamp}-${randomSuffix}`;

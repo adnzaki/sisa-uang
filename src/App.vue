@@ -80,6 +80,24 @@ const publicScrollContainer = ref<HTMLElement | null>(null);
 const pageTransitionName = ref<'page' | 'page-slide-left' | 'page-slide-right'>('page');
 
 // =========================================================================
+// Auto-open Checkout Modal when returning from Login with ?action=checkout
+// =========================================================================
+watch(
+  [() => authStore.isAuthenticated, () => route.query.action, () => route.query.plan],
+  ([isAuth, action, plan]) => {
+    if (isAuth && action === 'checkout') {
+      const targetPlan = plan === 'monthly' ? 'monthly' : 'yearly';
+      notificationStore.openCheckoutModal(targetPlan);
+      const cleanQuery = { ...route.query };
+      delete cleanQuery.action;
+      delete cleanQuery.plan;
+      router.replace({ path: route.path, query: cleanQuery });
+    }
+  },
+  { immediate: true }
+);
+
+// =========================================================================
 // 1. Native Mobile Swipe Gestures for Popup Notification Banners
 // =========================================================================
 interface BannerSwipeState {

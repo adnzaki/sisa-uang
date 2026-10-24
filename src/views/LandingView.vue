@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, nextTick } from 'vue';
-import { RouterLink, useRoute } from 'vue-router';
+import { RouterLink, useRoute, useRouter } from 'vue-router';
 import {
   Wallet,
   ArrowRight,
@@ -24,12 +24,14 @@ import {
 } from 'lucide-vue-next';
 import PublicNavbar from '../components/PublicNavbar.vue';
 import PublicFooter from '../components/PublicFooter.vue';
-import InSiteCheckoutModal from '../components/InSiteCheckoutModal.vue';
 import { useAuthStore } from '../stores/auth';
+import { useNotificationStore } from '../stores/notification';
 import { scrollToPageTop, scrollToElement } from '../utils/scroll';
 
 const route = useRoute();
+const router = useRouter();
 const authStore = useAuthStore();
+const notificationStore = useNotificationStore();
 
 function scrollToTargetSection(targetId: string, smooth = true): boolean {
   return scrollToElement(targetId, smooth ? 'smooth' : 'instant', 70);
@@ -63,12 +65,19 @@ watch(
   }
 );
 
-const checkoutModalOpen = ref(false);
-const activePlanForCheckout = ref<'monthly' | 'yearly'>('yearly');
-
 function openCheckout(plan: 'monthly' | 'yearly' = 'yearly') {
-  activePlanForCheckout.value = plan;
-  checkoutModalOpen.value = true;
+  if (!authStore.isAuthenticated) {
+    router.push({
+      path: '/auth',
+      query: {
+        redirect: '/dashboard',
+        action: 'checkout',
+        plan,
+      },
+    });
+    return;
+  }
+  notificationStore.openCheckoutModal(plan);
 }
 
 const activeFaq = ref<number | null>(null);
@@ -84,7 +93,7 @@ const faqs = [
   },
   {
     q: 'Bagaimana mekanisme pembayaran langganan dilakukan?',
-    a: 'Pembayaran dilakukan langsung di dalam website SisaUang melalui payment gateway resmi Midtrans. Anda dapat memilih metode QRIS (GoPay, ShopeePay, BCA, Mandiri), Transfer Virtual Account, atau Kartu Kredit/Debit tanpa perlu berpindah ke website pihak ketiga.',
+    a: 'Pembayaran dilakukan langsung di dalam website SisaUang melalui payment gateway resmi Duitku V2. Anda dapat memilih metode QRIS Instan (BCA, Mandiri, BRI, BNI, GoPay, ShopeePay, OVO, Dana), Transfer Virtual Account otomatis, atau Kartu Kredit/Debit secara aman.',
   },
   {
     q: 'Apakah ada jaminan pengembalian dana (refund policy)?',
@@ -349,7 +358,7 @@ const faqs = [
               Investasi Terjangkau untuk Tata Kelola Finansial Profesional
             </h3>
             <p class="text-sm text-slate-600 dark:text-slate-400">
-              Pilih paket yang sesuai dengan kebutuhan Anda. Semua transaksi ditagihkan dalam mata uang Rupiah Indonesia (IDR) melalui Midtrans.
+              Pilih paket yang sesuai dengan kebutuhan Anda. Semua transaksi ditagihkan dalam mata uang Rupiah Indonesia (IDR) melalui Duitku Payment Gateway V2.
             </p>
           </div>
 
@@ -493,10 +502,10 @@ const faqs = [
           <div class="mt-10 max-w-xl mx-auto p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center space-y-2">
             <div class="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center justify-center gap-2">
               <ShieldCheck class="w-4 h-4 text-emerald-600" />
-              <span>Halaman Pembayaran Terintegrasi (Tanpa Redirect Luar)</span>
+              <span>Halaman Pembayaran Resmi Terintegrasi Duitku V2</span>
             </div>
             <p class="text-[11px] text-slate-500 leading-relaxed">
-              Transaksi diproses langsung di dalam portal ini bekerja sama dengan Midtrans Payment Gateway. Didukung QRIS, BCA, Mandiri, BRI, BNI, GoPay, dan Kartu Kredit.
+              Transaksi diproses langsung dengan enkripsi berstandar perbankan melalui Duitku Payment Gateway. Didukung QRIS Instan, Virtual Account BCA, Mandiri, BRI, BNI, Permata, OVO, Dana, dan Kartu Kredit.
             </p>
           </div>
         </div>

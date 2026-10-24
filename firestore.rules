@@ -472,8 +472,18 @@ service cloud.firestore {
 
     // 5. Categories Collection (/categories/{categoryId})
     match /categories/{categoryId} {
-      allow get: if isSignedIn() && isValidId(categoryId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(categoryId) && (
+        existing().ownerId == request.auth.uid ||
+        existing().ownerId == 'default' ||
+        existing().ownerId == 'system' ||
+        isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        existing().ownerId == request.auth.uid ||
+        existing().ownerId == 'default' ||
+        existing().ownerId == 'system' ||
+        isAdmin()
+      );
       allow create: if isSignedIn() &&
         isValidId(categoryId) &&
         isValidCategory(incoming()) &&

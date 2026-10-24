@@ -150,14 +150,17 @@ Berikut tahapan teknis yang akan dilakukan saat eksekusi:
 
 ---
 
-## 6. Verifikasi & Pengujian Akhir untuk Midtrans
+## 6. Verifikasi & Pengujian Akhir untuk Midtrans & Stabilitas Aplikasi
 
 | Item Pengujian | Target Hasil | Status |
 |---|---|---|
-| Akses Publik (Incognito / Guest) | Halaman `/` langsung memuat landing page SisaUang tanpa redirect ke `/auth`. | Terencana |
-| Deskripsi & Fitur Produk Software | Menampilkan penjelasan detail fungsi software SisaUang dan manfaatnya. | Terencana |
-| Mata Uang IDR | Harga tercantum dalam format resmi `Rp 21.500 / bulan` dan `Rp 215.000 / tahun`. | Terencana |
-| Form / Modal Checkout Terintegrasi | Tombol langganan membuka modal checkout langsung di dalam domain sendiri. | Terencana |
-| Halaman Syarat & Ketentuan (`/terms`) | Memuat klausul lengkap lisensi digital goods sesuai template Midtrans. | Terencana |
-| Halaman Kebijakan Refund (`/refund-policy`) | Memuat syarat garansi refund 7 hari dan prosedur pengajuannya. | Terencana |
-| Informasi Kontak Bisnis (`/contact`) | Tercantum email `azzackey@gmail.com`, WhatsApp, jam kerja, dan alamat kantor. | Terencana |
+| Akses Publik (Incognito / Guest) | Halaman `/` langsung memuat landing page SisaUang tanpa redirect ke `/auth`. | Selesai |
+| Deskripsi & Fitur Produk Software | Menampilkan penjelasan detail fungsi software SisaUang dan manfaatnya. | Selesai |
+| Mata Uang IDR | Harga tercantum dalam format resmi `Rp 21.500 / bulan` dan `Rp 215.000 / tahun`. | Selesai |
+| Form / Modal Checkout Terintegrasi | Tombol langganan membuka modal checkout langsung di dalam domain sendiri dengan verifikasi akun login. | Selesai |
+| Wajib Login Sebelum Checkout | Pengguna wajib login sebelum bayar; diarahkan ke `/auth` lalu dikembalikan ke modal checkout. | Selesai |
+| Resolusi Firestore Permission Error | Mengeliminasi kesalahan list permissions pada `finance_collections` untuk `adnanzaki65` dan session handling. | Selesai |
+| Halaman Syarat & Ketentuan (`/terms`) | Memuat klausul lengkap lisensi digital goods sesuai template Midtrans. | Selesai |
+| Halaman Kebijakan Refund (`/refund-policy`) | Memuat syarat garansi refund 7 hari dan prosedur pengajuannya. | Selesai |
+| Informasi Kontak Bisnis (`/contact`) | Tercantum email `azzackey@gmail.com`, WhatsApp, jam kerja, dan alamat kantor. | Selesai |
+

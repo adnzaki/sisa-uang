@@ -506,9 +506,9 @@ export const useFinanceStore = defineStore('finance', () => {
   }
 
   /**
-   * Ensure Firebase Auth has an active session capable of querying and mutating Firestore `sisa-uang`.
-   * For migrated users (`ci4_user_*`) whose `ownerId` is not a random Firebase Auth UID,
-   * signing into the bridge session ensures Firestore Console rules allow full access to their records.
+   * Ensure an active, authenticated Firebase Auth session before querying Cloud Firestore collections.
+   * Recognizes bootstrapped admin emails (adnanzaki65@admin.sd.belajar.id, vuedevo@gmail.com) and authentic user sessions.
+   * Never falls back to returning true for anonymous sessions which lack permissions for private financial data.
    */
   async function ensureFirestoreSessionForUser(uid: string): Promise<boolean> {
     try {
@@ -519,17 +519,31 @@ export const useFinanceStore = defineStore('finance', () => {
       // Ignore
     }
 
+    const authStore = useAuthStore();
     const current = auth.currentUser;
-    const isMigratedId = uid.startsWith('ci4_user_') || uid === 'admin_vuedevo_01';
 
     if (current && !current.isAnonymous) {
-      if (!isMigratedId && current.uid === uid) {
+      const emailLower = current.email?.toLowerCase();
+      // 1. Current user's Firebase Auth UID matches target UID directly
+      if (current.uid === uid) {
         if (isSyncedWithFirestore.value) {
           await ensureUserDocExistsForSyncToken(uid);
         }
         return true;
       }
-      if (current.email?.toLowerCase() === 'vuedevo@gmail.com') {
+      // 2. Current user is a bootstrapped admin or super admin recognized in firestore.rules
+      if (
+        emailLower === 'adnanzaki65@admin.sd.belajar.id' ||
+        emailLower === 'vuedevo@gmail.com' ||
+        authStore.isSuperAdmin
+      ) {
+        if (isSyncedWithFirestore.value) {
+          await ensureUserDocExistsForSyncToken(uid);
+        }
+        return true;
+      }
+      // 3. Current Firebase user's email matches the active user store email
+      if (authStore.user?.email && emailLower === authStore.user.email.toLowerCase()) {
         if (isSyncedWithFirestore.value) {
           await ensureUserDocExistsForSyncToken(uid);
         }
@@ -537,27 +551,39 @@ export const useFinanceStore = defineStore('finance', () => {
       }
     }
 
-    // Authenticate bridge session for migrated users or when currentUser is null
-    try {
-      await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-      if (isSyncedWithFirestore.value) {
-        await ensureUserDocExistsForSyncToken(uid);
+    // Attempt bridge session for super admin / migrated records if not authenticated yet
+    if (!current || current.isAnonymous) {
+      try {
+        await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
+        if (isSyncedWithFirestore.value) {
+          await ensureUserDocExistsForSyncToken(uid);
+        }
+        return true;
+      } catch {
+        // Bridge sign-in was not available
       }
-      return true;
-    } catch {
-      if (auth.currentUser) {
+    }
+
+    // Verify if an authenticated non-anonymous session is now available
+    const finalUser = auth.currentUser;
+    if (finalUser && !finalUser.isAnonymous) {
+      const finalEmailLower = finalUser.email?.toLowerCase();
+      if (
+        finalUser.uid === uid ||
+        finalEmailLower === 'adnanzaki65@admin.sd.belajar.id' ||
+        finalEmailLower === 'vuedevo@gmail.com' ||
+        (authStore.user?.email && finalEmailLower === authStore.user.email.toLowerCase())
+      ) {
         if (isSyncedWithFirestore.value) {
           await ensureUserDocExistsForSyncToken(uid);
         }
         return true;
       }
-      try {
-        await signInAnonymously(auth);
-        return true;
-      } catch {
-        return !!auth.currentUser;
-      }
     }
+
+    // Do NOT return true for anonymous sessions or unauthenticated users.
+    // Returning false lets initFinanceData serve local cached data safely without Firestore permission errors.
+    return false;
   }
 
   /**

@@ -99,8 +99,11 @@ async function handleEmailSubmit() {
         return;
       }
       const defaultTarget = authStore.isSuperAdmin ? '/control-panel' : '/dashboard';
-      const target = (route.query.redirect as string) || defaultTarget;
-      router.push(target);
+      const redirectPath = (route.query.redirect as string) || defaultTarget;
+      const forwardQuery: Record<string, string> = {};
+      if (route.query.action) forwardQuery.action = String(route.query.action);
+      if (route.query.plan) forwardQuery.plan = String(route.query.plan);
+      router.push({ path: redirectPath, query: forwardQuery });
     } else if (activeTab.value === 'register') {
       const res = await authStore.registerWithEmail(
         displayName.value,
@@ -112,7 +115,12 @@ async function handleEmailSubmit() {
         router.replace({ path: '/auth', query: { step: 'otp', redirect: '/control-panel' } });
         return;
       }
-      router.push(authStore.isSuperAdmin ? '/control-panel' : '/dashboard');
+      const defaultTarget = authStore.isSuperAdmin ? '/control-panel' : '/dashboard';
+      const redirectPath = (route.query.redirect as string) || defaultTarget;
+      const forwardQuery: Record<string, string> = {};
+      if (route.query.action) forwardQuery.action = String(route.query.action);
+      if (route.query.plan) forwardQuery.plan = String(route.query.plan);
+      router.push({ path: redirectPath, query: forwardQuery });
     } else if (activeTab.value === 'reset') {
       if (password.value.length < 6) {
         notificationStore.notifyError(
@@ -148,8 +156,11 @@ async function handleGoogleLogin() {
       return;
     }
     const defaultTarget = authStore.isSuperAdmin ? '/control-panel' : '/dashboard';
-    const target = (route.query.redirect as string) || defaultTarget;
-    router.push(target);
+    const redirectPath = (route.query.redirect as string) || defaultTarget;
+    const forwardQuery: Record<string, string> = {};
+    if (route.query.action) forwardQuery.action = String(route.query.action);
+    if (route.query.plan) forwardQuery.plan = String(route.query.plan);
+    router.push({ path: redirectPath, query: forwardQuery });
   } catch {
     // Error handled in store
   }
@@ -348,6 +359,22 @@ async function cancelOtpAndLogout() {
           >
             Kembali ke {{ authStore.user.displayName }}
           </button>
+        </div>
+
+        <!-- Notice: User redirected here to login prior to SisaUang Pro checkout -->
+        <div
+          v-if="route.query.action === 'checkout'"
+          class="rounded-2xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50/90 dark:bg-emerald-950/40 p-4 space-y-1.5"
+        >
+          <div class="flex items-center gap-2">
+            <ShieldCheck class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <h4 class="text-xs sm:text-sm font-bold text-emerald-950 dark:text-emerald-200">
+              Autentikasi Akun untuk SisaUang Pro
+            </h4>
+          </div>
+          <p class="text-xs text-emerald-900/90 dark:text-emerald-300/90 leading-relaxed">
+            Silakan masuk atau daftarkan akun Anda terlebih dahulu. Setelah berhasil masuk, Anda akan langsung dikembalikan ke portal pembayaran dengan lisensi yang otomatis terhubung ke akun Anda.
+          </p>
         </div>
 
         <!-- Back to Landing Page link inside card -->

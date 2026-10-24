@@ -264,7 +264,11 @@ router.beforeEach((to, _from, next) => {
     to.query.mode !== 'add-account' &&
     !(authStore.user?.email.toLowerCase() === 'vuedevo@gmail.com' && !authStore.otpVerified && authStore.requiresOtp)
   ) {
-    next({ path: authStore.isSuperAdmin ? '/control-panel' : '/dashboard' });
+    const target = (to.query.redirect as string) || (authStore.isSuperAdmin ? '/control-panel' : '/dashboard');
+    const query: Record<string, string> = {};
+    if (to.query.action) query.action = String(to.query.action);
+    if (to.query.plan) query.plan = String(to.query.plan);
+    next({ path: target, query });
     return;
   }
 
