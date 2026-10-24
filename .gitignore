@@ -12,3 +12,4 @@ dev-dist/
 .sisa_uang_users_cache.json
 firebase-applet-config.json
 .firebase-applet-config.json
+public/assets/aistudio/*

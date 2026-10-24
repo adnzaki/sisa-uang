@@ -587,6 +587,42 @@ export const useAdminStore = defineStore('admin', () => {
           fbUser.subscriptionStatus === 'free' ||
           fbUser.isPro === false;
 
+        // Auto-repair stale Firestore user document if budget marker shows deactivation but user doc still has PRO
+        if (isExplicitlyDeactivated && (fbUser.isPro === true || fbUser.subscriptionStatus === 'pro')) {
+          void (async () => {
+            try {
+              const fullRepairDoc: Record<string, any> = {
+                ...fbUser,
+                uid: d.id,
+                email: fbUser.email || `${d.id}@sisa-uang.id`,
+                displayName: fbUser.displayName || fbUser.username || d.id,
+                role: fbUser.role === 'admin' ? 'admin' : 'user',
+                status: fbUser.status === 'blocked' ? 'blocked' : 'active',
+                authProvider: fbUser.authProvider === 'google' ? 'google' : 'password',
+                currency: fbUser.currency === 'USD' ? 'USD' : 'IDR',
+                subscriptionStatus: 'free',
+                isPro: false,
+                subscriptionPlan: null,
+                subscriptionExpiresAt: null,
+                updatedAt: serverTimestamp(),
+              };
+              if (fbUser.createdAt) {
+                fullRepairDoc.createdAt = fbUser.createdAt;
+              }
+              await setDoc(doc(targetDb, 'users', d.id), fullRepairDoc, { merge: true });
+              await updateDoc(doc(targetDb, 'users', d.id), {
+                subscriptionStatus: 'free',
+                isPro: false,
+                subscriptionPlan: null,
+                subscriptionExpiresAt: null,
+                updatedAt: serverTimestamp(),
+              }).catch(() => {});
+            } catch {
+              // Ignore background auto-repair error
+            }
+          })();
+        }
+
         const isPending =
           !isExplicitlyDeactivated &&
           (markerInfo?.status === 'pending' || fbUser.subscriptionStatus === 'pending');
@@ -876,7 +912,50 @@ export const useAdminStore = defineStore('admin', () => {
           : 'pro-inactive';
 
         const budgetInstances = targetDb !== db ? [targetDb, db] : [targetDb];
-        const userUpdatePayload = {
+
+        // 1. Fetch existing user document to preserve existing fields while providing defaults for any missing legacy fields
+        let existingUserSnap = await getDoc(doc(targetDb, 'users', safeTargetUid)).catch(() => null);
+        let existingUserData = existingUserSnap && existingUserSnap.exists() ? existingUserSnap.data() : null;
+
+        if (!existingUserData && targetUser.email) {
+          try {
+            const emailQ = query(collection(targetDb, 'users'), where('email', '==', targetUser.email.toLowerCase()));
+            const matches = await getDocs(emailQ);
+            if (!matches.empty) {
+              existingUserSnap = matches.docs[0];
+              existingUserData = matches.docs[0].data();
+            }
+          } catch {
+            // Ignore query error
+          }
+        }
+
+        const safeEmail = sanitizeString(
+          targetUser.email || existingUserData?.email,
+          120,
+          `${safeTargetUid}@sisa-uang.id`
+        ).toLowerCase();
+        const safeName = sanitizeString(
+          targetUser.displayName || existingUserData?.displayName || targetUser.username || safeTargetUid,
+          80,
+          safeTargetUid
+        );
+        const safeUsername = sanitizeString(
+          targetUser.username || existingUserData?.username || safeEmail.split('@')[0],
+          60,
+          safeTargetUid
+        );
+
+        const fullUserDoc: Record<string, any> = {
+          ...(existingUserData || {}),
+          uid: safeTargetUid,
+          email: safeEmail,
+          displayName: safeName,
+          username: safeUsername,
+          role: existingUserData?.role === 'admin' || targetUser.role === 'admin' ? 'admin' : 'user',
+          status: existingUserData?.status === 'blocked' || targetUser.status === 'blocked' ? 'blocked' : 'active',
+          authProvider: existingUserData?.authProvider === 'google' || targetUser.authProvider === 'google' ? 'google' : 'password',
+          currency: existingUserData?.currency === 'USD' || targetUser.currency === 'USD' ? 'USD' : 'IDR',
           subscriptionStatus: nextSubStatus,
           isPro: nextIsPro,
           subscriptionPlan: nextPlan,
@@ -884,8 +963,27 @@ export const useAdminStore = defineStore('admin', () => {
           updatedAt: serverTimestamp(),
         };
 
+        if (existingUserData?.createdAt) {
+          fullUserDoc.createdAt = existingUserData.createdAt;
+        } else {
+          fullUserDoc.createdAt = serverTimestamp();
+        }
+
+        if (nextSubStatus === 'free') {
+          fullUserDoc.subscriptionPaymentMethod = null;
+          fullUserDoc.subscriptionProofDataUrl = null;
+          fullUserDoc.subscriptionProofFileName = null;
+          fullUserDoc.subscriptionRequestedAt = null;
+          fullUserDoc.subscriptionSenderName = null;
+          fullUserDoc.subscriptionTransferNote = null;
+        }
+
+        let firestoreWriteSucceeded = false;
+        let lastFirestoreError: any = null;
+
         for (const instDb of budgetInstances) {
           try {
+            // Write budget marker
             await setDoc(
               doc(instDb, 'budgets', proMarkerId),
               {
@@ -926,17 +1024,26 @@ export const useAdminStore = defineStore('admin', () => {
               }
             }
 
-            await setDoc(doc(instDb, 'users', safeTargetUid), userUpdatePayload, { merge: true }).catch(
-              async () => {
-                await updateDoc(doc(instDb, 'users', safeTargetUid), userUpdatePayload).catch(() => {});
-              }
-            );
-          } catch {
-            // Ignore single instance failure
+            // Write full user document (complies with all Firestore rules)
+            await setDoc(doc(instDb, 'users', safeTargetUid), fullUserDoc, { merge: true });
+
+            // Also update with updateDoc in case partial write is preferred
+            await updateDoc(doc(instDb, 'users', safeTargetUid), {
+              subscriptionStatus: nextSubStatus,
+              isPro: nextIsPro,
+              subscriptionPlan: nextPlan,
+              subscriptionExpiresAt: nextExpiresAt,
+              updatedAt: serverTimestamp(),
+            }).catch(() => {});
+
+            firestoreWriteSucceeded = true;
+          } catch (writeErr) {
+            lastFirestoreError = writeErr;
+            console.error('[Admin] Firestore write error for user', safeTargetUid, writeErr);
           }
         }
 
-        // Also if targetUser has an email matching another Firestore user doc (e.g. Google OAuth UID vs ci4_user_1), update that doc & marker too so all devices sync seamlessly
+        // Also if targetUser has an email matching another Firestore user doc, update that doc & marker too
         if (targetUser.email) {
           const emailLower = targetUser.email.toLowerCase();
           for (const instDb of budgetInstances) {
@@ -945,32 +1052,57 @@ export const useAdminStore = defineStore('admin', () => {
                 query(collection(instDb, 'users'), where('email', '==', emailLower))
               );
               for (const matchedDoc of emailMatches.docs) {
-                const matchedUid = matchedDoc.id;
-                await setDoc(doc(instDb, 'users', matchedUid), userUpdatePayload, { merge: true }).catch(() => {});
-
-                const altMarkerId = sanitizeId(`su_sub_pro_${matchedUid}`);
-                await setDoc(
-                  doc(instDb, 'budgets', altMarkerId),
-                  {
-                    ownerId: matchedUid,
-                    category: '__SISAUANG_PRO__',
-                    limitAmount: 1,
-                    spentAmount: 0,
-                    period: markerPeriod,
-                    deleted: !nextIsPro,
-                    deletedAt: nextIsPro ? null : serverTimestamp(),
+                if (matchedDoc.id !== safeTargetUid) {
+                  const mData = matchedDoc.data();
+                  const mDocFull = {
+                    ...mData,
+                    subscriptionStatus: nextSubStatus,
+                    isPro: nextIsPro,
+                    subscriptionPlan: nextPlan,
+                    subscriptionExpiresAt: nextExpiresAt,
                     updatedAt: serverTimestamp(),
-                  },
-                  { merge: true }
-                ).catch(() => {});
+                  };
+                  await setDoc(doc(instDb, 'users', matchedDoc.id), mDocFull, { merge: true }).catch(() => {});
+                  await updateDoc(doc(instDb, 'users', matchedDoc.id), {
+                    subscriptionStatus: nextSubStatus,
+                    isPro: nextIsPro,
+                    subscriptionPlan: nextPlan,
+                    subscriptionExpiresAt: nextExpiresAt,
+                    updatedAt: serverTimestamp(),
+                  }).catch(() => {});
+
+                  const altMarkerId = sanitizeId(`su_sub_pro_${matchedDoc.id}`);
+                  await setDoc(
+                    doc(instDb, 'budgets', altMarkerId),
+                    {
+                      ownerId: matchedDoc.id,
+                      category: '__SISAUANG_PRO__',
+                      limitAmount: 1,
+                      spentAmount: 0,
+                      period: markerPeriod,
+                      deleted: !nextIsPro,
+                      deletedAt: nextIsPro ? null : serverTimestamp(),
+                      updatedAt: serverTimestamp(),
+                    },
+                    { merge: true }
+                  ).catch(() => {});
+                }
               }
             } catch {
               // Ignore email query error
             }
           }
         }
-      } catch {
-        // Fallback handled by Express server registry (.data/users-cache.json)
+
+        if (!firestoreWriteSucceeded && lastFirestoreError) {
+          console.warn('[Admin] Firestore write warning:', lastFirestoreError);
+          notify.notifyWarning(
+            'Catatan Sinkronisasi Firestore',
+            `Status lokal telah diubah menjadi ${nextSubStatus.toUpperCase()}, namun penulisan langsung ke Cloud Firestore mengalami kendala: ${lastFirestoreError?.message || 'Izin ditolak'}.`
+          );
+        }
+      } catch (fsErr: any) {
+        console.error('[Admin] Firestore global sync error:', fsErr);
       }
 
       const planLabel = nextPlan === 'yearly' ? 'Tahunan' : 'Bulanan';

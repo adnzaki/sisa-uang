@@ -68,7 +68,7 @@ service cloud.firestore {
     }
 
     function isValidUser(data) {
-      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'status', 'authProvider', 'currency', 'createdAt', 'updatedAt']) &&
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'status', 'updatedAt']) &&
         data.keys().hasOnly([
           'uid',
           'username',
@@ -95,15 +95,15 @@ service cloud.firestore {
         (!('passwordHash' in data) || (data.passwordHash is string && data.passwordHash.size() <= 255)) &&
         data.role is string && (data.role == 'user' || data.role == 'admin') &&
         data.status is string && (data.status == 'active' || data.status == 'blocked') &&
-        data.authProvider is string && (data.authProvider == 'password' || data.authProvider == 'google') &&
-        data.currency is string && (data.currency == 'IDR' || data.currency == 'USD') &&
+        (!('authProvider' in data) || (data.authProvider is string && (data.authProvider == 'password' || data.authProvider == 'google'))) &&
+        (!('currency' in data) || (data.currency is string && (data.currency == 'IDR' || data.currency == 'USD'))) &&
         (!('subscriptionStatus' in data) || (data.subscriptionStatus is string && (data.subscriptionStatus == 'free' || data.subscriptionStatus == 'pending' || data.subscriptionStatus == 'pro'))) &&
         (!('subscriptionPlan' in data) || data.subscriptionPlan == null || (data.subscriptionPlan is string && (data.subscriptionPlan == 'monthly' || data.subscriptionPlan == 'yearly'))) &&
         (!('subscriptionExpiresAt' in data) || data.subscriptionExpiresAt == null || (data.subscriptionExpiresAt is string && data.subscriptionExpiresAt.size() <= 40)) &&
         (!('isPro' in data) || data.isPro is bool) &&
         isValidSoftDelete(data) &&
-        data.createdAt is timestamp &&
-        data.updatedAt is timestamp;
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
+        (data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 40));
     }
 
     function isValidWallet(data) {
@@ -346,36 +346,16 @@ service cloud.firestore {
         isValidId(userId) &&
         isValidUser(incoming()) &&
         incoming().uid == existing().uid &&
-        (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
-        incoming().updatedAt == request.time &&
         (
+          isAdmin() ||
           (
-            (isOwner(userId) || existing().email == request.auth.token.email) &&
+            (!('createdAt' in existing()) || !('createdAt' in incoming()) || incoming().createdAt == existing().createdAt) &&
+            incoming().updatedAt == request.time &&
+            (isOwner(userId) || (('email' in existing()) && existing().email == request.auth.token.email)) &&
             existing().status == 'active' &&
             incoming().role == existing().role &&
             incoming().status == existing().status &&
             incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'username', 'currency', 'updatedAt'])
-          ) ||
-          (
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'username',
-              'email',
-              'displayName',
-              'passwordHash',
-              'role',
-              'status',
-              'authProvider',
-              'currency',
-              'subscriptionStatus',
-              'subscriptionPlan',
-              'subscriptionExpiresAt',
-              'isPro',
-              'deleted',
-              'deletedAt',
-              'createdAt',
-              'updatedAt'
-            ]) &&
-            isAdmin()
           )
         );
       allow delete: if isSignedIn() && isValidId(userId) && isAdmin();

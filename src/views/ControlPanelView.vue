@@ -1182,15 +1182,13 @@ onMounted(() => {
       <template #footer>
         <div v-if="selectedSubUser" class="flex flex-wrap items-center justify-between gap-2 w-full">
           <button
-            v-if="isUserPro(selectedSubUser) || isUserPending(selectedSubUser)"
             type="button"
             :disabled="isSavingSubscription"
             class="min-h-[46px] px-4 py-2.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0 cursor-pointer disabled:opacity-50"
             @click="handleDeactivateProSubscription()"
           >
-            <span>{{ isUserPending(selectedSubUser) ? 'Tolak Pengajuan' : 'Nonaktifkan Pro' }}</span>
+            <span>{{ isUserPending(selectedSubUser) ? 'Tolak Pengajuan' : isUserPro(selectedSubUser) ? 'Nonaktifkan Pro' : 'Sinkronkan Status Free ke Firestore' }}</span>
           </button>
-          <div v-else></div>
 
           <button
             type="submit"
