@@ -2579,8 +2579,8 @@ async function startServer() {
   // =========================================================================
   // Duitku Payment Gateway (API V2) Integration
   // =========================================================================
-  const DUITKU_MERCHANT_CODE = (process.env.DUITKU_MERCHANT_CODE || 'DS36399').trim();
-  const DUITKU_API_KEY = (process.env.DUITKU_API_KEY || '05e478bf24fc8d7ca91df07675d08283').trim();
+  const DUITKU_MERCHANT_CODE = (process.env.DUITKU_MERCHANT_CODE || '').trim();
+  const DUITKU_API_KEY = (process.env.DUITKU_API_KEY || '').trim();
   const DUITKU_ENV = (
     process.env.DUITKU_ENV || (DUITKU_MERCHANT_CODE.startsWith('DS') ? 'sandbox' : 'production')
   ).trim().toLowerCase();
