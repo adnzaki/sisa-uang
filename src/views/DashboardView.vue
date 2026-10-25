@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { ref, computed } from 'vue';
 import { RouterLink } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import {
@@ -13,6 +13,7 @@ import {
   Trash2,
   Calendar,
   Users,
+  RotateCcw,
 } from 'lucide-vue-next';
 import {
   useFinanceStore,
@@ -23,6 +24,18 @@ import {
 import { useThemeStore } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
+
+const isRefreshing = ref(false);
+
+async function handleManualRefresh() {
+  if (isRefreshing.value) return;
+  isRefreshing.value = true;
+  try {
+    await financeStore.refreshData();
+  } finally {
+    isRefreshing.value = false;
+  }
+}
 
 const { t, locale } = useI18n();
 const financeStore = useFinanceStore();
@@ -94,6 +107,18 @@ function getDateBadge(dateStr: string) {
             </template>
           </CustomSelect>
         </div>
+
+        <!-- Segarkan Data Button -->
+        <button
+          type="button"
+          class="w-full sm:w-auto min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-emerald-600 flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
+          :disabled="isRefreshing"
+          title="Muat data transaksi & saldo terbaru langsung dari Firestore"
+          @click="handleManualRefresh"
+        >
+          <RotateCcw class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" :class="{ 'animate-spin': isRefreshing }" />
+          <span>Segarkan Data</span>
+        </button>
 
         <RouterLink
           v-if="authStore.isSuperAdmin"

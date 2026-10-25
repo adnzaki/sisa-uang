@@ -36,6 +36,17 @@ const selectedHolderFilter = ref<string>('all');
 // Server-side Pagination state when 'all' (Semua Periode) is active: 25 transactions per page
 const TX_PAGE_SIZE = 25;
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const isRefreshing = ref(false);
+
+async function handleManualRefresh() {
+  if (isRefreshing.value) return;
+  isRefreshing.value = true;
+  try {
+    await financeStore.refreshData();
+  } finally {
+    isRefreshing.value = false;
+  }
+}
 
 function triggerServerTransactionsFetch(targetPage: number, silent = false) {
   void financeStore.fetchTransactionsServerPage(
@@ -279,6 +290,18 @@ function getDateBadge(dateStr: string) {
           >
             {{ activeFilterCount > 0 ? `${activePeriodLabel} +${activeFilterCount}` : activePeriodLabel }}
           </span>
+        </button>
+
+        <!-- Segarkan Data dari Firestore Button -->
+        <button
+          type="button"
+          class="w-full sm:w-auto h-[46px] min-h-[46px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 hover:border-emerald-600 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 whitespace-nowrap"
+          :disabled="isRefreshing"
+          title="Muat data transaksi & saldo terbaru langsung dari Firestore"
+          @click="handleManualRefresh"
+        >
+          <RotateCcw class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" :class="{ 'animate-spin': isRefreshing }" />
+          <span>Segarkan</span>
         </button>
       </div>
     </div>

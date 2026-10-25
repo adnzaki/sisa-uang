@@ -367,12 +367,12 @@ export const useFinanceStore = defineStore('finance', () => {
    * Piggybacks `updatedAt: serverTimestamp()` onto `/users/{uid}` inside the same atomic WriteBatch
    * whenever any financial mutation happens, so other devices can detect changes with just 1 document read.
    */
-  const CACHE_SCHEMA_VERSION = 'v4_annual_sync_2026';
+  const CACHE_SCHEMA_VERSION = 'v5_oct25_fresh_sync';
   const confirmedUserDocsInFirestore = new Set<string>();
   const knownFirestoreBudgetDocIds = new Set<string>();
 
   async function ensureUserDocExistsForSyncToken(uid: string) {
-    if (!uid || uid === 'guest' || confirmedUserDocsInFirestore.has(uid)) return;
+    if (!uid || uid === 'guest') return;
     try {
       const authStore = useAuthStore();
       const uRef = doc(db, 'users', uid);
@@ -412,10 +412,13 @@ export const useFinanceStore = defineStore('finance', () => {
 
   function touchUserSyncTokenInBatch(batch: WriteBatch, uid: string) {
     if (!uid || uid === 'guest') return;
-    if (!confirmedUserDocsInFirestore.has(uid)) return;
-    batch.update(doc(db, 'users', uid), {
-      updatedAt: serverTimestamp(),
-    });
+    try {
+      batch.update(doc(db, 'users', uid), {
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      // Ignore if user doc cannot be touched
+    }
   }
 
   function upsertBudgetDocInBatch(
@@ -489,10 +492,10 @@ export const useFinanceStore = defineStore('finance', () => {
       if (defaultCategories.value.length > 0) {
         localStorage.setItem('sisa_uang_real_default_categories', JSON.stringify(defaultCategories.value));
       }
-      // Only cache the most recent 100 transactions locally so we don't bloat memory or localStorage
+      // Cache the most recent 250 transactions locally so full current month and recent transactions are instantly available
       localStorage.setItem(
         storageKey('transactions', uid),
-        JSON.stringify(rawTransactions.value.slice(0, 100))
+        JSON.stringify(rawTransactions.value.slice(0, 250))
       );
       if (markSyncedNow) {
         const tokenMs = remoteSyncTokenMs && remoteSyncTokenMs > 0 ? remoteSyncTokenMs : Date.now();
@@ -530,9 +533,7 @@ export const useFinanceStore = defineStore('finance', () => {
       const emailLower = current.email?.toLowerCase();
       // 1. Current user's Firebase Auth UID matches target UID directly
       if (current.uid === uid) {
-        if (isSyncedWithFirestore.value) {
-          await ensureUserDocExistsForSyncToken(uid);
-        }
+        await ensureUserDocExistsForSyncToken(uid);
         return true;
       }
       // 2. Current user is a bootstrapped admin or super admin recognized in firestore.rules
@@ -541,16 +542,12 @@ export const useFinanceStore = defineStore('finance', () => {
         emailLower === 'vuedevo@gmail.com' ||
         authStore.isSuperAdmin
       ) {
-        if (isSyncedWithFirestore.value) {
-          await ensureUserDocExistsForSyncToken(uid);
-        }
+        await ensureUserDocExistsForSyncToken(uid);
         return true;
       }
       // 3. Current Firebase user's email matches the active user store email
       if (authStore.user?.email && emailLower === authStore.user.email.toLowerCase()) {
-        if (isSyncedWithFirestore.value) {
-          await ensureUserDocExistsForSyncToken(uid);
-        }
+        await ensureUserDocExistsForSyncToken(uid);
         return true;
       }
     }
@@ -559,9 +556,7 @@ export const useFinanceStore = defineStore('finance', () => {
     if (!current || current.isAnonymous) {
       try {
         await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-        if (isSyncedWithFirestore.value) {
-          await ensureUserDocExistsForSyncToken(uid);
-        }
+        await ensureUserDocExistsForSyncToken(uid);
         return true;
       } catch {
         // Bridge sign-in was not available
@@ -578,9 +573,7 @@ export const useFinanceStore = defineStore('finance', () => {
         finalEmailLower === 'vuedevo@gmail.com' ||
         (authStore.user?.email && finalEmailLower === authStore.user.email.toLowerCase())
       ) {
-        if (isSyncedWithFirestore.value) {
-          await ensureUserDocExistsForSyncToken(uid);
-        }
+        await ensureUserDocExistsForSyncToken(uid);
         return true;
       }
     }
@@ -1860,7 +1853,7 @@ export const useFinanceStore = defineStore('finance', () => {
     bypassCooldown = false
   ): Promise<boolean> {
     const authStore = useAuthStore();
-    if (!authStore.isAuthenticated || authStore.isSuperAdmin) return false;
+    if (!authStore.isAuthenticated) return false;
 
     const uid = sanitizeId(uidInput || authStore.user?.uid || activeOwnerUid.value || '');
     if (!uid || uid === 'guest') return false;
@@ -2175,19 +2168,12 @@ export const useFinanceStore = defineStore('finance', () => {
           }
         }
 
-        if (
-          !forceRefresh &&
-          hasRestoredLocalCache &&
-          localSyncToken > 0 &&
-          remoteSyncToken > 0 &&
-          Math.abs(remoteSyncToken - localSyncToken) <= 2000
-        ) {
+        if (hasRestoredLocalCache && localSyncToken > 0) {
           restorePersistedTxPageCache(uid, localSyncToken);
           isSyncedWithFirestore.value = true;
-          isLoading.value = false;
-          return;
         }
 
+        // Always fetch fresh state from Cloud Firestore to guarantee up-to-date transactions and correct wallet balances
         await fetchAllCollectionsFromFirestore(uid, remoteSyncToken);
         isLoading.value = false;
       } catch (err) {
@@ -2200,6 +2186,43 @@ export const useFinanceStore = defineStore('finance', () => {
       }
     } else {
       isLoading.value = false;
+    }
+  }
+
+  /**
+   * Explicitly refresh data from Cloud Firestore:
+   * Clears local storage caches and memory caches, then forces a clean reload from Cloud Firestore.
+   */
+  async function refreshData(silent = false) {
+    const authStore = useAuthStore();
+    const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || '');
+    if (!uid || uid === 'guest') return;
+
+    try {
+      localStorage.removeItem(storageKey('cache_version', uid));
+      localStorage.removeItem(storageKey('wallets', uid));
+      localStorage.removeItem(storageKey('wallet_owners', uid));
+      localStorage.removeItem(storageKey('user_categories', uid));
+      localStorage.removeItem(storageKey('transactions', uid));
+      localStorage.removeItem(storageKey('budgets', uid));
+      localStorage.removeItem(storageKey('budget_periods', uid));
+      localStorage.removeItem(storageKey('annual_budget_meta', uid));
+      localStorage.removeItem(storageKey('sync_token_v4', uid));
+      localStorage.removeItem(storageKey('sync_token', uid));
+      localStorage.removeItem(storageKey('tx_page_cache_v1', uid));
+    } catch {
+      // Ignore
+    }
+
+    invalidateServerPaginationCaches(uid);
+    await initFinanceData(uid, true);
+    await fetchTransactionsServerPage(undefined, silent, true);
+
+    if (!silent) {
+      useNotificationStore().notifySuccess(
+        'Data Diperbarui',
+        'Riwayat transaksi dan saldo berhasil dimuat ulang langsung dari Firestore.'
+      );
     }
   }
 
@@ -5200,5 +5223,6 @@ export const useFinanceStore = defineStore('finance', () => {
     removeBudgetPeriod,
     saveBudget,
     removeBudget,
+    refreshData,
   };
 });
