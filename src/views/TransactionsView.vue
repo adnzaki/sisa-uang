@@ -267,42 +267,48 @@ function getDateBadge(dateStr: string) {
           </button>
         </div>
 
-        <!-- Unified Filter Modal Trigger Button (Harmonized across mobile & desktop) -->
-        <button
-          type="button"
-          class="w-full sm:w-auto h-[46px] min-h-[46px] px-4 rounded-xl border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 whitespace-nowrap"
-          :class="
-            activeFilterCount > 0
-              ? 'border-emerald-600/80 bg-emerald-50/80 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100/70'
-              : 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 hover:border-emerald-600 text-slate-700 dark:text-slate-200'
-          "
-          @click="showFilterModal = true"
-        >
-          <SlidersHorizontal class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-          <span>Filter Transaksi</span>
-          <span
-            class="px-2 py-0.5 rounded-md text-[11px] font-bold"
+        <!-- Action Row: Filter Transaksi & Segarkan Button (Icon Only di Sebelah Kanan Filter di Semua Ukuran Layar) -->
+        <div class="flex items-center gap-2 w-full sm:w-auto shrink-0">
+          <!-- Unified Filter Modal Trigger Button -->
+          <button
+            type="button"
+            class="flex-1 sm:flex-initial sm:w-auto h-[46px] min-h-[46px] px-3.5 sm:px-4 rounded-xl border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 whitespace-nowrap cursor-pointer"
             :class="
               activeFilterCount > 0
-                ? 'bg-emerald-600 text-white'
-                : 'bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                ? 'border-emerald-600/80 bg-emerald-50/80 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100/70'
+                : 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 hover:border-emerald-600 text-slate-700 dark:text-slate-200'
             "
+            @click="showFilterModal = true"
           >
-            {{ activeFilterCount > 0 ? `${activePeriodLabel} +${activeFilterCount}` : activePeriodLabel }}
-          </span>
-        </button>
+            <SlidersHorizontal class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <span>Filter Transaksi</span>
+            <span
+              class="px-2 py-0.5 rounded-md text-[11px] font-bold"
+              :class="
+                activeFilterCount > 0
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+              "
+            >
+              {{ activeFilterCount > 0 ? `${activePeriodLabel} +${activeFilterCount}` : activePeriodLabel }}
+            </span>
+          </button>
 
-        <!-- Segarkan Data dari Firestore Button -->
-        <button
-          type="button"
-          class="w-full sm:w-auto h-[46px] min-h-[46px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 hover:border-emerald-600 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 whitespace-nowrap"
-          :disabled="isRefreshing"
-          title="Muat data transaksi & saldo terbaru langsung dari Firestore"
-          @click="handleManualRefresh"
-        >
-          <RotateCcw class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" :class="{ 'animate-spin': isRefreshing }" />
-          <span>Segarkan</span>
-        </button>
+          <!-- Segarkan Data dari Firestore Button: Tampil ringkas hanya icon tanpa teks di sebelah kanan filter di semua ukuran layar -->
+          <button
+            type="button"
+            class="w-[46px] min-w-[46px] h-[46px] min-h-[46px] p-0 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-900 hover:border-emerald-600 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center justify-center transition-colors shrink-0 shadow-2xs cursor-pointer"
+            :disabled="isRefreshing"
+            aria-label="Segarkan Data Transaksi"
+            title="Muat data transaksi & saldo terbaru langsung dari Firestore"
+            @click="handleManualRefresh"
+          >
+            <RotateCcw
+              class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0"
+              :class="{ 'animate-spin': isRefreshing }"
+            />
+          </button>
+        </div>
       </div>
     </div>
 

@@ -94,7 +94,7 @@ function getDateBadge(dateStr: string) {
         </div>
       </div>
 
-      <div class="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2">
+      <div class="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
         <!-- Period Selector (CustomSelect synced with real Firestore transaction months) -->
         <div class="w-full sm:w-64">
           <CustomSelect
@@ -108,16 +108,17 @@ function getDateBadge(dateStr: string) {
           </CustomSelect>
         </div>
 
-        <!-- Segarkan Data Button -->
+        <!-- Segarkan Data Button: Icon reload di sebelah periode pada tablet & desktop, full width 100% lengkap teks pada mobile -->
         <button
           type="button"
-          class="w-full sm:w-auto min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-emerald-600 flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
+          class="w-full sm:w-11 h-11 min-h-[44px] px-3.5 sm:px-0 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-emerald-600 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center justify-center gap-2 transition-colors shrink-0 shadow-2xs cursor-pointer"
           :disabled="isRefreshing"
+          aria-label="Segarkan Data"
           title="Muat data transaksi & saldo terbaru langsung dari Firestore"
           @click="handleManualRefresh"
         >
           <RotateCcw class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" :class="{ 'animate-spin': isRefreshing }" />
-          <span>Segarkan Data</span>
+          <span class="sm:hidden">Segarkan Data</span>
         </button>
 
         <RouterLink

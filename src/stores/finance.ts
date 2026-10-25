@@ -2193,11 +2193,15 @@ export const useFinanceStore = defineStore('finance', () => {
    * Explicitly refresh data from Cloud Firestore:
    * Clears local storage caches and memory caches, then forces a clean reload from Cloud Firestore.
    */
+  let isRefreshingData = false;
+
   async function refreshData(silent = false) {
+    if (isRefreshingData) return;
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || '');
     if (!uid || uid === 'guest') return;
 
+    isRefreshingData = true;
     try {
       localStorage.removeItem(storageKey('cache_version', uid));
       localStorage.removeItem(storageKey('wallets', uid));
@@ -2210,19 +2214,19 @@ export const useFinanceStore = defineStore('finance', () => {
       localStorage.removeItem(storageKey('sync_token_v4', uid));
       localStorage.removeItem(storageKey('sync_token', uid));
       localStorage.removeItem(storageKey('tx_page_cache_v1', uid));
-    } catch {
-      // Ignore
-    }
 
-    invalidateServerPaginationCaches(uid);
-    await initFinanceData(uid, true);
-    await fetchTransactionsServerPage(undefined, silent, true);
+      invalidateServerPaginationCaches(uid);
+      await initFinanceData(uid, true);
+      await fetchTransactionsServerPage(undefined, silent, true);
 
-    if (!silent) {
-      useNotificationStore().notifySuccess(
-        'Data Diperbarui',
-        'Riwayat transaksi dan saldo berhasil dimuat ulang langsung dari Firestore.'
-      );
+      if (!silent) {
+        useNotificationStore().notifySuccess(
+          'Data Diperbarui',
+          'Riwayat transaksi dan saldo berhasil dimuat ulang langsung dari Firestore.'
+        );
+      }
+    } finally {
+      isRefreshingData = false;
     }
   }
 

@@ -39,6 +39,7 @@ import {
 } from '../firebase';
 import { apiClient, setApiAdminContext } from '../services/api';
 import { useNotificationStore } from './notification';
+import { useFinanceStore } from './finance';
 
 export interface AppUser {
   uid: string;
@@ -664,6 +665,16 @@ export const useAuthStore = defineStore('auth', () => {
     await syncSubscriptionFromFirestoreForUser(nextUser.uid, nextUser.email);
     await registerCurrentDeviceSession(nextUser, true);
     startUserStatusMonitor(nextUser);
+
+    // Automatically pull latest transactions and balances from Cloud Firestore for the switched user
+    if (!isTargetSuperAdmin) {
+      try {
+        const financeStore = useFinanceStore();
+        await financeStore.refreshData(true);
+      } catch (err) {
+        console.warn('Auto refresh data Firestore on switchAccount error:', err);
+      }
+    }
 
     notify.notifySuccess(
       'Berhasil Beralih Akun',

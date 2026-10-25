@@ -5,27 +5,26 @@ import {
   Rocket,
   Layers,
   Check,
-  FileSpreadsheet,
-  PieChart,
+  Zap,
+  CreditCard,
   Crown,
-  Smartphone,
 } from 'lucide-vue-next';
 import { useNotificationStore } from '../stores/notification';
 import { useAuthStore } from '../stores/auth';
 import AppModal from './AppModal.vue';
 
-const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0_rc_6';
-const RELEASE_VERSION = '1.0.0-rc.6';
+const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0_rc_7';
+const RELEASE_VERSION = '1.0.0-rc.7';
 const RELEASE_DATE = 'Oktober 2026';
 
 const notificationStore = useNotificationStore();
 const authStore = useAuthStore();
 
-const activeFilter = ref<'all' | 'report' | 'budget' | 'mobile'>('all');
+const activeFilter = ref<'all' | 'automation' | 'duitku'>('all');
 
 export interface ChangelogItem {
   id: string;
-  category: 'report' | 'budget' | 'mobile';
+  category: 'automation' | 'duitku';
   badge: string;
   badgeColor: 'emerald' | 'indigo' | 'amber' | 'rose' | 'sky';
   isProExclusive?: boolean;
@@ -37,72 +36,49 @@ export interface ChangelogItem {
 
 const changelogItems: ChangelogItem[] = [
   {
-    id: 'mobile-swipe-gestures',
-    category: 'mobile',
-    badge: 'GESTURE SMARTPHONE',
-    badgeColor: 'sky',
-    title: 'Menambahkan Gesture Swipe Khusus Pengguna Smartphone',
-    summary:
-      'Pengalaman navigasi natural ala aplikasi native Android & iOS untuk kenyamanan dan efisiensi pengoperasian satu tangan:',
-    details: [
-      'Swipe Horizontal Antar Menu Bottom Navbar: Geser layar ke kiri atau kanan untuk berpindah halaman bottom navbar secara mulus dilengkapi efek transisi halus.',
-      'Swipe Menutup Banner Notifikasi: Geser kartu notifikasi/peringatan ke kanan atau kiri untuk menyembunyikannya dengan cepat.',
-      'Swipe Menutup Sidebar Drawer: Geser panel menu sidebar drawer ke kiri untuk menutup menu secara intuitif pada layar sentuh.',
-    ],
-    icon: Smartphone,
-  },
-  {
-    id: 'pro-report-settings',
-    category: 'report',
-    badge: 'PENGATURAN LAPORAN PDF',
+    id: 'scheduled-transactions-automation',
+    category: 'automation',
+    badge: 'OTOMATISASI TRANSAKSI',
     badgeColor: 'emerald',
-    isProExclusive: true,
-    title: 'Menambahkan Pengaturan Laporan PDF Resmi (Khusus Pelanggan Pro)',
+    title: 'Menambahkan Fitur Otomatisasi Transaksi Terjadwal',
     summary:
-      'Halaman khusus Pengaturan Laporan (Pengaturan → Laporan) yang memberikan kendali penuh bagi pelanggan SisaUang Pro dalam menyesuaikan identitas dokumen resmi pada Laporan Kas Umum, Rekonsiliasi Kas & Kepemilikan, serta Realisasi Anggaran:',
+      'Kemudahan mencatat transaksi rutin tanpa perlu input berulang. Atur jadwal transaksi berkala untuk pemasukan, pengeluaran, maupun transfer dana secara otomatis dan terkontrol:',
     details: [
-      'Kop Laporan Institusi / Organisasi (Mode Teks & Gambar Banner): Mendukung pembuatan kop surat teks (Nama Masjid, Musholla, DKM, RT/RW, Yayasan, atau Organisasi beserta sub-judul dan alamat sekretariat) dilengkapi preset instan, maupun unggah gambar banner kop surat dengan resolusi proporsional asli.',
-      'Visibilitas Kop Fleksibel per Jenis Laporan: Opsi pemilihan laporan mana saja yang menampilkan Kop Surat karena tidak semua laporan resmi membutuhkan kop.',
-      'Kustomisasi Judul Dokumen Laporan: Ubah judul utama masing-masing jenis laporan PDF sesuai kebutuhan acara, kepanitiaan, atau periode pelaporan.',
-      'Manajemen Penandatangan & Tata Letak Tanda Tangan Formal: Tambahkan hingga 3 penandatangan laporan lengkap dengan Kota/Tempat penetapan, pengaturan urutan, penempatan Baris Atas / Baris Bawah, aktivasi penandatangan per laporan, serta tata letak formal otomatis (jika hanya 1 penandatangan otomatis ditempatkan di sisi kanan).',
+      'Penjadwalan Tanggal Fleksibel: Tentukan tanggal eksekusi bulanan (misalnya setiap tanggal 1, 15, atau 25) serta jam pelaksanaan transaksi sesuai rutinitas keuangan Anda.',
+      'Dua Mode Eksekusi (Otomatis & Konfirmasi): Pilihan mode "Tanpa Konfirmasi" untuk pencatatan otomatis di latar belakang, atau mode "Dengan Konfirmasi" untuk meninjau dan menyetujui transaksi sebelum dicatat ke buku kas.',
+      'Mendukung Seluruh Jenis Transaksi & Kepemilikan Dana: Catat pemasukan gaji, pengeluaran tagihan/kontrakan, hingga transfer antar sumber dana lengkap dengan alokasi kepemilikan dana (fund owner) dan biaya admin transfer.',
+      'Manajemen Kendali Penuh: Fitur aktif/non-aktifkan jadwal, tunda eksekusi (snooze), lewati periode berjalan (skip), serta pencatatan audit log otomatis setiap kali transaksi terjadwal berhasil dieksekusi.',
     ],
-    icon: FileSpreadsheet,
+    icon: Zap,
   },
   {
-    id: 'pro-annual-budget-mapping',
-    category: 'budget',
-    badge: 'ANGGARAN SETAHUN PENUH',
-    badgeColor: 'amber',
-    isProExclusive: true,
-    title: 'Menambahkan Opsi Anggaran Setahun Penuh & Mapping Bulanan (Khusus Pelanggan Pro)',
+    id: 'duitku-payment-gateway-trial',
+    category: 'duitku',
+    badge: 'INTEGRASI PEMBAYARAN',
+    badgeColor: 'indigo',
+    title: 'Menambahkan Uji Coba Pembayaran Melalui Payment Gateway Duitku',
     summary:
-      'Fitur penganggaran komprehensif untuk merencanakan anggaran satu tahun penuh sekaligus beserta pemetaan alokasi bulanan dan pengendalian disiplin belanja:',
+      'Integrasi gateway pembayaran resmi Duitku untuk menghadirkan proses aktivasi dan langganan SisaUang Pro yang instan, terverifikasi otomatis, dan aman:',
     details: [
-      'Mapping Bulanan Fleksibel Tanpa Selisih (Rp 0): Petakan total anggaran tahunan tiap kategori ke bulan-bulan yang direncanakan (tidak wajib diisi setiap bulan, misalnya hanya dialokasikan pada bulan Mei, Juli, dan Agustus) hingga selisih penganggaran Rp 0. Saat anggaran tahunan aktif, penambahan periode bulanan terpisah pada tahun tersebut otomatis dikunci.',
-      'Alur Status Draft, Finalisasi & Perubahan Anggaran: Anggaran yang baru disusun atau sedang diedit berstatus Draft hingga pengguna mengklik "Finalisasi Anggaran". Selama berstatus Draft atau dalam masa "Perubahan Anggaran", pencatatan transaksi untuk kategori di dalam anggaran dikunci sementara hingga anggaran difinalisasi kembali.',
-      'Opsi Mode Ketat (Disiplin Anggaran): Menolak pencatatan transaksi pengeluaran apabila belum memasuki bulan alokasi anggaran (wajib melakukan perubahan anggaran terlebih dahulu), tetap mengizinkan transaksi setelah melewati batas minimum bulan alokasi, serta membatasi revisi maksimal 5x setelah finalisasi.',
-      'Opsi Mode Fleksibel (Adaptif): Menampilkan konfirmasi pengingat apabila pengguna mencatat transaksi sebelum memasuki bulan alokasi yang direncanakan namun tetap mengizinkan penyimpanan transaksi, serta mendukung perubahan anggaran kapan saja tanpa batas jumlah revisi.',
+      'Kanal Pembayaran Digital Lengkap: Uji coba transaksi pembayaran dengan berbagai kanal modern, termasuk QRIS dinamis serta Virtual Account bank-bank nasional terkemuka.',
+      'Aktivasi Status Pro Otomatis: Sinkronisasi status akun secara real-time melalui webhook callback terenkripsi sehingga akses paket Pro langsung aktif seketika setelah pembayaran terverifikasi tanpa perlu konfirmasi manual.',
+      'Uji Coba Lingkungan Sandbox: Memastikan kestabilan, keamanan enkripsi signature SHA256, dan kenyamanan alur pembayaran checkout in-site sebelum dirilis ke lingkungan produksi penuh.',
     ],
-    icon: PieChart,
+    icon: CreditCard,
   },
 ];
 
 const filterTabs = [
   { id: 'all' as const, label: 'Semua Pembaruan', count: changelogItems.length },
   {
-    id: 'mobile' as const,
-    label: 'Gesture Smartphone',
-    count: changelogItems.filter((i) => i.category === 'mobile').length,
+    id: 'automation' as const,
+    label: 'Otomatisasi Transaksi',
+    count: changelogItems.filter((i) => i.category === 'automation').length,
   },
   {
-    id: 'report' as const,
-    label: 'Pengaturan Laporan (PRO)',
-    count: changelogItems.filter((i) => i.category === 'report').length,
-  },
-  {
-    id: 'budget' as const,
-    label: 'Anggaran Setahun (PRO)',
-    count: changelogItems.filter((i) => i.category === 'budget').length,
+    id: 'duitku' as const,
+    label: 'Payment Gateway Duitku',
+    count: changelogItems.filter((i) => i.category === 'duitku').length,
   },
 ];
 
@@ -120,7 +96,7 @@ function markChangelogSeenAndClose() {
   notificationStore.closeChangelogModal();
 }
 
-// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.0-rc.6 changelog yet
+// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.0-rc.7 changelog yet
 watch(
   () => [authStore.isReady, authStore.isAuthenticated, authStore.requiresOtp] as const,
   ([ready, authenticated, needOtp]) => {
@@ -164,7 +140,7 @@ watch(
             </span>
           </div>
           <p class="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-            Release Candidate 6 · {{ RELEASE_DATE }}
+            Release Candidate 7 · {{ RELEASE_DATE }}
           </p>
         </div>
       </div>
@@ -184,12 +160,6 @@ watch(
               <span>Rilis Baru · v{{ RELEASE_VERSION }}</span>
             </span>
             <span
-              class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/20 border border-amber-400/30 text-amber-300 text-[11px] font-bold uppercase tracking-wider"
-            >
-              <Crown class="w-3.5 h-3.5" />
-              <span>Eksklusif SisaUang Pro</span>
-            </span>
-            <span
               class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 text-slate-200 text-[11px] font-mono"
             >
               <Layers class="w-3.5 h-3.5 text-emerald-400" />
@@ -202,10 +172,7 @@ watch(
               Catatan Pembaruan Sisa Uang v{{ RELEASE_VERSION }}
             </h3>
             <p class="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Pembaruan versi <strong class="text-emerald-300 font-mono">{{ RELEASE_VERSION }}</strong> menghadirkan
-              dua fitur unggulan khusus pelanggan <strong class="text-amber-300">SisaUang Pro</strong>:
-              <strong>Pengaturan Laporan PDF Resmi</strong> (Kop Surat Teks/Gambar, Visibilitas Kop per Laporan, Judul Kustom &amp; Tata Letak Penandatangan Formal) serta
-              <strong>Opsi Anggaran Setahun Penuh</strong> dengan Mapping Bulanan, sistem Draft &amp; Finalisasi, dan pilihan Mode Ketat atau Fleksibel.
+              Pembaruan versi <strong class="text-emerald-300 font-mono">{{ RELEASE_VERSION }}</strong> menghadirkan fitur <strong>Otomatisasi Transaksi</strong> terjadwal untuk kemudahan pencatatan transaksi rutin berkala secara otomatis, serta integrasi <strong>Uji Coba Pembayaran Melalui Payment Gateway Duitku</strong> untuk proses aktivasi dan langganan SisaUang Pro yang instan dan terverifikasi otomatis.
             </p>
           </div>
         </div>
