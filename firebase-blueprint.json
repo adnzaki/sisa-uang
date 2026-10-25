@@ -102,6 +102,10 @@
           "type": "boolean",
           "description": "Whether the user has an active SisaUang Pro subscription"
         },
+        "isExplicitlyDeactivated": {
+          "type": "boolean",
+          "description": "Explicit deactivation flag by Super Admin preventing auto-reactivation from stale client/offline cache"
+        },
         "subscriptionPaymentMethod": {
           "type": "string",
           "description": "Payment method chosen (qris, bank_transfer)",

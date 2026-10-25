@@ -383,6 +383,9 @@ export const useFinanceStore = defineStore('finance', () => {
       }
       const activeUser = authStore.user;
       if (activeUser && activeUser.uid === uid) {
+        const isDeactivated = Boolean(activeUser.isExplicitlyDeactivated);
+        const subStatus = !isDeactivated && activeUser.subscriptionStatus === 'pro' ? 'pro' : 'free';
+        const isPro = !isDeactivated && Boolean(activeUser.isPro);
         await setDoc(uRef, {
           uid,
           username: sanitizeString(activeUser.username || activeUser.email.split('@')[0] || 'user', 60, 'user'),
@@ -392,8 +395,9 @@ export const useFinanceStore = defineStore('finance', () => {
           status: 'active',
           authProvider: activeUser.authProvider === 'google' ? 'google' : 'password',
           currency: activeUser.currency === 'USD' ? 'USD' : 'IDR',
-          subscriptionStatus: activeUser.subscriptionStatus === 'pro' ? 'pro' : 'free',
-          isPro: Boolean(activeUser.isPro),
+          subscriptionStatus: subStatus,
+          isPro: isPro,
+          isExplicitlyDeactivated: isDeactivated,
           deleted: false,
           deletedAt: null,
           createdAt: serverTimestamp(),
@@ -1710,16 +1714,20 @@ export const useFinanceStore = defineStore('finance', () => {
     if (proMarkerDocs.length > 0) {
       const authStore = useAuthStore();
       if (authStore.user?.uid === uid) {
-        if (authStore.user.subscriptionStatus === 'free' || authStore.user.isPro === false) {
-          authStore.setExternalSubscriptionStatus('free', null, null);
+        if (
+          authStore.user.isExplicitlyDeactivated === true ||
+          authStore.user.subscriptionStatus === 'free' ||
+          authStore.user.isPro === false
+        ) {
+          authStore.setExternalSubscriptionStatus('free', null, null, true);
         } else {
           // Find if there is an active (not deleted and not pro-inactive) marker
           const activeMarker = proMarkerDocs.find(
             (b: BudgetItem) => !b.deleted && String(b.period || '') !== 'pro-inactive'
           );
 
-          if (!activeMarker) {
-            authStore.setExternalSubscriptionStatus('free', null, null);
+          if (!activeMarker || authStore.user.isExplicitlyDeactivated) {
+            authStore.setExternalSubscriptionStatus('free', null, null, true);
           } else {
             const rawPeriod = String(activeMarker.period || '');
             if (rawPeriod.startsWith('P:')) {
@@ -1879,9 +1887,13 @@ export const useFinanceStore = defineStore('finance', () => {
         const res = await fetch(`/api/users/${encodeURIComponent(uid)}/status`);
         if (res.ok) {
           const statusData = await res.json();
-          if (statusData.subscriptionStatus === 'free' || statusData.isPro === false) {
+          if (
+            statusData.subscriptionStatus === 'free' ||
+            statusData.isPro === false ||
+            statusData.isExplicitlyDeactivated === true
+          ) {
             serverSaysFree = true;
-            authStore.setExternalSubscriptionStatus('free', null, null);
+            authStore.setExternalSubscriptionStatus('free', null, null, true);
           } else if (statusData.subscriptionStatus === 'pro' || statusData.isPro === true) {
             serverReportedProOrPending = true;
             authStore.setExternalSubscriptionStatus(
@@ -1915,9 +1927,9 @@ export const useFinanceStore = defineStore('finance', () => {
       const remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
 
       // Sync subscription directly from the already-read `/users/{uid}` document (0 extra Firestore reads!)
-      if (serverSaysFree) {
-        // Authoritative server status is Free: do NOT let stale IndexedDB/Firestore snapshot revive PRO!
-        authStore.setExternalSubscriptionStatus('free', null, null);
+      if (serverSaysFree || uData?.isExplicitlyDeactivated === true || authStore.user?.isExplicitlyDeactivated === true) {
+        // Authoritative server status is Free or explicitly deactivated: do NOT let stale IndexedDB/Firestore snapshot revive PRO!
+        authStore.setExternalSubscriptionStatus('free', null, null, true);
       } else if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
         authStore.setExternalSubscriptionStatus(
           'pro',
@@ -2093,9 +2105,13 @@ export const useFinanceStore = defineStore('finance', () => {
       if (res.ok) {
         const statusData = await res.json();
         const authStore = useAuthStore();
-        if (statusData.subscriptionStatus === 'free' || statusData.isPro === false) {
+        if (
+          statusData.subscriptionStatus === 'free' ||
+          statusData.isPro === false ||
+          statusData.isExplicitlyDeactivated === true
+        ) {
           serverSaysFree = true;
-          authStore.setExternalSubscriptionStatus('free', null, null);
+          authStore.setExternalSubscriptionStatus('free', null, null, true);
         } else if (statusData.subscriptionStatus === 'pro' || statusData.isPro === true) {
           localServerHasProOrPending = true;
           authStore.setExternalSubscriptionStatus(
@@ -2133,8 +2149,8 @@ export const useFinanceStore = defineStore('finance', () => {
             confirmedUserDocsInFirestore.add(uid);
             const uData = userSnap.data();
             remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
-            if (serverSaysFree) {
-              authStore.setExternalSubscriptionStatus('free', null, null);
+            if (serverSaysFree || uData?.isExplicitlyDeactivated === true || authStore.user?.isExplicitlyDeactivated === true) {
+              authStore.setExternalSubscriptionStatus('free', null, null, true);
             } else if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
               authStore.setExternalSubscriptionStatus(
                 'pro',

@@ -84,6 +84,7 @@ service cloud.firestore {
           'subscriptionPlan',
           'subscriptionExpiresAt',
           'isPro',
+          'isExplicitlyDeactivated',
           'subscriptionPaymentMethod',
           'subscriptionProofDataUrl',
           'subscriptionProofFileName',
@@ -108,6 +109,7 @@ service cloud.firestore {
         (!('subscriptionPlan' in data) || data.subscriptionPlan == null || (data.subscriptionPlan is string && (data.subscriptionPlan == 'monthly' || data.subscriptionPlan == 'yearly'))) &&
         (!('subscriptionExpiresAt' in data) || data.subscriptionExpiresAt == null || (data.subscriptionExpiresAt is string && data.subscriptionExpiresAt.size() <= 40)) &&
         (!('isPro' in data) || data.isPro is bool) &&
+        (!('isExplicitlyDeactivated' in data) || data.isExplicitlyDeactivated is bool) &&
         (!('subscriptionPaymentMethod' in data) || data.subscriptionPaymentMethod == null || (data.subscriptionPaymentMethod is string && data.subscriptionPaymentMethod.size() <= 40)) &&
         (!('subscriptionProofDataUrl' in data) || data.subscriptionProofDataUrl == null || (data.subscriptionProofDataUrl is string && data.subscriptionProofDataUrl.size() <= 2000000)) &&
         (!('subscriptionProofFileName' in data) || data.subscriptionProofFileName == null || (data.subscriptionProofFileName is string && data.subscriptionProofFileName.size() <= 120)) &&
@@ -351,7 +353,8 @@ service cloud.firestore {
             incoming().status == 'active' &&
             incoming().role == 'user' &&
             (!('subscriptionStatus' in incoming()) || incoming().subscriptionStatus == 'free') &&
-            (!('isPro' in incoming()) || incoming().isPro == false)
+            (!('isPro' in incoming()) || incoming().isPro == false) &&
+            (!('isExplicitlyDeactivated' in incoming()) || incoming().isExplicitlyDeactivated == false)
           ) ||
           isAdmin()
         );

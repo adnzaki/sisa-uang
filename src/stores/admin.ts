@@ -51,6 +51,7 @@ export interface AdminUserItem {
   currency: 'IDR' | 'USD';
   subscriptionStatus?: 'free' | 'pending' | 'pro';
   isPro?: boolean;
+  isExplicitlyDeactivated?: boolean;
   subscriptionPlan?: 'monthly' | 'yearly' | null;
   subscriptionExpiresAt?: string | null;
   subscriptionPaymentMethod?: 'qris' | 'bank_transfer' | null;
@@ -68,8 +69,11 @@ export function isAdminUserProActive(u: {
   subscriptionStatus?: 'free' | 'pending' | 'pro' | string;
   isPro?: boolean;
   subscriptionExpiresAt?: string | null;
+  isExplicitlyDeactivated?: boolean;
   [key: string]: any;
 }): boolean {
+  if (u.isExplicitlyDeactivated === true) return false;
+  if (u.subscriptionStatus === 'free' || u.isPro === false) return false;
   if (u.subscriptionStatus === 'pending') return false;
   const markedPro = u.subscriptionStatus === 'pro' || u.isPro === true;
   if (!markedPro) return false;
@@ -583,8 +587,23 @@ export const useAdminStore = defineStore('admin', () => {
       snap.docs.forEach((d) => {
         const fbUser = d.data();
         const markerInfo = proMarkersMap.get(d.id);
+        const existingLocalUser =
+          users.value.find(
+            (u) =>
+              u.uid === d.id ||
+              (u.email && fbUser.email && u.email.toLowerCase() === fbUser.email.toLowerCase())
+          ) ||
+          paginatedUsers.value.find(
+            (u) =>
+              u.uid === d.id ||
+              (u.email && fbUser.email && u.email.toLowerCase() === fbUser.email.toLowerCase())
+          );
+
         const isExplicitlyDeactivated =
           explicitlyDeactivatedOwners.has(d.id) ||
+          fbUser.isExplicitlyDeactivated === true ||
+          existingLocalUser?.isExplicitlyDeactivated === true ||
+          (existingLocalUser && existingLocalUser.subscriptionStatus === 'free' && !existingLocalUser.isPro) ||
           fbUser.subscriptionStatus === 'free' ||
           fbUser.isPro === false;
 
@@ -596,6 +615,7 @@ export const useAdminStore = defineStore('admin', () => {
               await updateDoc(doc(targetDb, 'users', d.id), {
                 subscriptionStatus: 'free',
                 isPro: false,
+                isExplicitlyDeactivated: true,
                 subscriptionPlan: null,
                 subscriptionExpiresAt: null,
                 updatedAt: serverTimestamp(),
@@ -613,6 +633,7 @@ export const useAdminStore = defineStore('admin', () => {
                   currency: fbUser.currency === 'USD' ? 'USD' : 'IDR',
                   subscriptionStatus: 'free',
                   isPro: false,
+                  isExplicitlyDeactivated: true,
                   subscriptionPlan: null,
                   subscriptionExpiresAt: null,
                   updatedAt: serverTimestamp(),
@@ -646,6 +667,7 @@ export const useAdminStore = defineStore('admin', () => {
             authProvider: fbUser.authProvider,
             subscriptionStatus: markerInfo?.status === 'pro' ? 'pro' : fbUser.subscriptionStatus,
             isPro: true,
+            isExplicitlyDeactivated,
             subscriptionExpiresAt: markerInfo?.expiresAt || fbUser.subscriptionExpiresAt,
           });
 
@@ -667,6 +689,7 @@ export const useAdminStore = defineStore('admin', () => {
           currency: fbUser.currency === 'USD' ? 'USD' : 'IDR',
           subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
           isPro,
+          isExplicitlyDeactivated: isExplicitlyDeactivated || !isPro,
           subscriptionPlan,
           subscriptionExpiresAt,
           passwordHash: fbUser.passwordHash,
@@ -879,6 +902,7 @@ export const useAdminStore = defineStore('admin', () => {
         {
           subscriptionStatus: nextSubStatus,
           isPro: nextIsPro,
+          isExplicitlyDeactivated: !nextIsPro,
           subscriptionPlan: nextPlan,
           subscriptionExpiresAt: nextExpiresAt,
         }
@@ -965,6 +989,7 @@ export const useAdminStore = defineStore('admin', () => {
           'subscriptionPlan',
           'subscriptionExpiresAt',
           'isPro',
+          'isExplicitlyDeactivated',
           'deleted',
           'deletedAt',
           'createdAt',
@@ -982,6 +1007,7 @@ export const useAdminStore = defineStore('admin', () => {
           currency: existingUserData?.currency === 'USD' || targetUser.currency === 'USD' ? 'USD' : 'IDR',
           subscriptionStatus: nextSubStatus,
           isPro: nextIsPro,
+          isExplicitlyDeactivated: !nextIsPro,
           subscriptionPlan: nextPlan,
           subscriptionExpiresAt: nextExpiresAt,
           updatedAt: serverTimestamp(),
@@ -1007,6 +1033,7 @@ export const useAdminStore = defineStore('admin', () => {
               await updateDoc(doc(instDb, 'users', safeTargetUid), {
                 subscriptionStatus: nextSubStatus,
                 isPro: nextIsPro,
+                isExplicitlyDeactivated: !nextIsPro,
                 subscriptionPlan: nextPlan,
                 subscriptionExpiresAt: nextExpiresAt,
                 updatedAt: serverTimestamp(),
@@ -1083,6 +1110,7 @@ export const useAdminStore = defineStore('admin', () => {
                   await updateDoc(doc(instDb, 'users', matchedDoc.id), {
                     subscriptionStatus: nextSubStatus,
                     isPro: nextIsPro,
+                    isExplicitlyDeactivated: !nextIsPro,
                     subscriptionPlan: nextPlan,
                     subscriptionExpiresAt: nextExpiresAt,
                     updatedAt: serverTimestamp(),
@@ -1129,6 +1157,7 @@ export const useAdminStore = defineStore('admin', () => {
               ) {
                 activeParsed.subscriptionStatus = 'free';
                 activeParsed.isPro = false;
+                activeParsed.isExplicitlyDeactivated = true;
                 activeParsed.subscriptionPlan = null;
                 activeParsed.subscriptionExpiresAt = null;
                 localStorage.setItem('sisa_uang_active_user', JSON.stringify(activeParsed));
@@ -1147,6 +1176,7 @@ export const useAdminStore = defineStore('admin', () => {
                   ) {
                     acc.subscriptionStatus = 'free';
                     acc.isPro = false;
+                    acc.isExplicitlyDeactivated = true;
                     acc.subscriptionPlan = null;
                     acc.subscriptionExpiresAt = null;
                   }
@@ -1169,6 +1199,21 @@ export const useAdminStore = defineStore('admin', () => {
                 }
               }
             });
+
+            // 4. Broadcast deactivation event across tabs/windows
+            if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+              try {
+                const subChannel = new BroadcastChannel('sisauang_subscription_channel');
+                subChannel.postMessage({
+                  type: 'DEACTIVATE_USER_PRO',
+                  uid: safeTargetUid,
+                  email: cleanTargetEmail,
+                });
+                subChannel.close();
+              } catch {
+                // Ignore channel error
+              }
+            }
           } catch {
             // Ignore localStorage errors
           }

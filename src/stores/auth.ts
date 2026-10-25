@@ -51,6 +51,7 @@ export interface AppUser {
   currency: 'IDR' | 'USD';
   subscriptionStatus?: 'free' | 'pending' | 'pro';
   isPro?: boolean;
+  isExplicitlyDeactivated?: boolean;
   subscriptionPlan?: 'monthly' | 'yearly' | null;
   subscriptionExpiresAt?: string | null;
   subscriptionPaymentMethod?: 'qris' | 'bank_transfer' | null;
@@ -61,8 +62,11 @@ export interface AppUser {
 export function isSubscriptionActiveByDate(
   status?: 'free' | 'pending' | 'pro',
   isProFlag?: boolean,
-  expiresAt?: string | null
+  expiresAt?: string | null,
+  isExplicitlyDeactivated?: boolean
 ): boolean {
+  if (isExplicitlyDeactivated === true) return false;
+  if (status === 'free' || isProFlag === false) return false;
   if (status === 'pending') return false;
   const markedPro = status === 'pro' || isProFlag === true;
   if (!markedPro) return false;
@@ -213,6 +217,52 @@ export const useAuthStore = defineStore('auth', () => {
   let statusPollTimer: ReturnType<typeof setInterval> | null = null;
   let isRegisteringInProgress = false;
 
+  // Cross-tab / cross-device synchronization channel for instantaneous Pro deactivation
+  if (typeof window !== 'undefined' && !(window as any).__sisauang_sub_channel_bound) {
+    (window as any).__sisauang_sub_channel_bound = true;
+    if ('BroadcastChannel' in window) {
+      try {
+        const subChannel = new BroadcastChannel('sisauang_subscription_channel');
+        subChannel.onmessage = (event) => {
+          try {
+            const { type, uid, email } = event.data || {};
+            if (type === 'DEACTIVATE_USER_PRO' && user.value) {
+              const currentUid = user.value.uid;
+              const currentEmail = (user.value.email || '').toLowerCase();
+              const targetEmail = (email || '').toLowerCase();
+              const isMatch =
+                (uid && currentUid === uid) ||
+                (targetEmail && currentEmail === targetEmail) ||
+                (currentEmail && targetEmail && (currentEmail.includes('adnzaki') || currentEmail.includes('adnanzaki')) && (targetEmail.includes('adnzaki') || targetEmail.includes('adnanzaki')));
+              if (isMatch) {
+                setExternalSubscriptionStatus('free', null, null, true);
+              }
+            }
+          } catch {
+            // Ignore channel error
+          }
+        };
+      } catch {
+        // Ignore BroadcastChannel error
+      }
+    }
+
+    window.addEventListener('storage', (e) => {
+      if (e.key === SESSION_STORAGE_KEY && e.newValue && user.value) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && (parsed.uid === user.value.uid || parsed.email?.toLowerCase() === user.value.email?.toLowerCase())) {
+            if (parsed.isExplicitlyDeactivated === true && (user.value.isPro || !user.value.isExplicitlyDeactivated)) {
+              setExternalSubscriptionStatus('free', null, null, true);
+            }
+          }
+        } catch {
+          // Ignore
+        }
+      }
+    });
+  }
+
   const isAuthenticated = computed(() => !!user.value && user.value.status === 'active');
   const isSuperAdmin = computed(
     () =>
@@ -229,7 +279,8 @@ export const useAuthStore = defineStore('auth', () => {
         isSubscriptionActiveByDate(
           user.value.subscriptionStatus,
           user.value.isPro,
-          user.value.subscriptionExpiresAt
+          user.value.subscriptionExpiresAt,
+          user.value.isExplicitlyDeactivated
         ))
   );
   const isPendingProUser = computed(
@@ -668,12 +719,12 @@ export const useAuthStore = defineStore('auth', () => {
         candidateUids.add('ci4_user_1');
       }
 
-      // Authoritative check: If lightweight server already marked user as 'free', enforce it immediately!
+      // Authoritative check: If lightweight server already marked user as 'free' or explicitly deactivated, enforce it immediately and STOP!
       try {
         const { data: sData } = await apiClient.get(`/users/${encodeURIComponent(safeUid)}/status`, {
           params: { email: rawEmail },
         });
-        if (sData?.subscriptionStatus === 'free' || sData?.isPro === false) {
+        if (sData?.subscriptionStatus === 'free' || sData?.isPro === false || sData?.isExplicitlyDeactivated === true) {
           setExternalSubscriptionStatus('free', null, null);
           return true;
         }
@@ -685,14 +736,12 @@ export const useAuthStore = defineStore('auth', () => {
       let resolvedPlan: 'monthly' | 'yearly' | null = null;
       let resolvedExpiresAt: string | null = null;
       let foundFirestoreProRecord = false;
-      const localServerIsPro =
-        Boolean(activeUser) &&
-        activeUser?.uid === rawUid &&
-        isSubscriptionActiveByDate(
-          activeUser?.subscriptionStatus,
-          activeUser?.isPro,
-          activeUser?.subscriptionExpiresAt
-        );
+      const userIsExplicitlyDeactivated = Boolean(activeUser?.isExplicitlyDeactivated);
+
+      if (userIsExplicitlyDeactivated) {
+        setExternalSubscriptionStatus('free', null, null);
+        return true;
+      }
 
       // 1. Check `/budgets/su_sub_pro_{uid}` marker and `/users/{uid}` document for candidate UIDs
       for (const candUid of candidateUids) {
@@ -729,7 +778,7 @@ export const useAuthStore = defineStore('auth', () => {
                 plan = 'monthly';
                 exp = rawPeriod.slice(2) || null;
               }
-              if (isSubscriptionActiveByDate('pro', true, exp)) {
+              if (isSubscriptionActiveByDate('pro', true, exp, userIsExplicitlyDeactivated)) {
                 resolvedStatus = 'pro';
                 resolvedPlan = plan;
                 resolvedExpiresAt = exp;
@@ -741,7 +790,7 @@ export const useAuthStore = defineStore('auth', () => {
 
           if (userDocSnap && userDocSnap.exists()) {
             const uData = userDocSnap.data();
-            if (uData?.subscriptionStatus === 'free' || uData?.isPro === false) {
+            if (uData?.isExplicitlyDeactivated === true || uData?.subscriptionStatus === 'free' || uData?.isPro === false) {
               resolvedStatus = 'free';
               resolvedPlan = null;
               resolvedExpiresAt = null;
@@ -751,7 +800,7 @@ export const useAuthStore = defineStore('auth', () => {
               const plan: 'monthly' | 'yearly' =
                 uData?.subscriptionPlan === 'yearly' ? 'yearly' : resolvedPlan || 'monthly';
               const exp: string | null = uData?.subscriptionExpiresAt || resolvedExpiresAt || null;
-              if (isSubscriptionActiveByDate('pro', true, exp)) {
+              if (isSubscriptionActiveByDate('pro', true, exp, userIsExplicitlyDeactivated)) {
                 resolvedStatus = 'pro';
                 resolvedPlan = plan;
                 resolvedExpiresAt = exp;
@@ -781,7 +830,7 @@ export const useAuthStore = defineStore('auth', () => {
           const emailSnap = await getDocs(emailQ);
           for (const d of emailSnap.docs) {
             const uData = d.data();
-            if (uData?.subscriptionStatus === 'free' || uData?.isPro === false) {
+            if (uData?.isExplicitlyDeactivated === true || uData?.subscriptionStatus === 'free' || uData?.isPro === false) {
               resolvedStatus = 'free';
               resolvedPlan = null;
               resolvedExpiresAt = null;
@@ -909,22 +958,25 @@ export const useAuthStore = defineStore('auth', () => {
           data.subscriptionStatus === 'pending' ||
           data.subscriptionStatus === 'free'
         ) {
-          const nextIsPro = isSubscriptionActiveByDate(
+          const isDeactivated = Boolean(data.isExplicitlyDeactivated || user.value.isExplicitlyDeactivated);
+          const nextIsPro = !isDeactivated && isSubscriptionActiveByDate(
             data.subscriptionStatus,
             data.isPro,
-            data.subscriptionExpiresAt
+            data.subscriptionExpiresAt,
+            isDeactivated
           );
-          const nextIsPending = !nextIsPro && data.subscriptionStatus === 'pending';
+          const nextIsPending = !isDeactivated && !nextIsPro && data.subscriptionStatus === 'pending';
           const prevIsPro = isSubscriptionActiveByDate(
             user.value.subscriptionStatus,
             user.value.isPro,
-            user.value.subscriptionExpiresAt
+            user.value.subscriptionExpiresAt,
+            user.value.isExplicitlyDeactivated
           );
 
-          // If local server instance reports 'free', Super Admin deactivated the user! Update local state immediately!
-          if (!nextIsPro && !nextIsPending && (prevIsPro || user.value.subscriptionStatus !== 'free')) {
+          // If local server instance reports 'free' or is explicitly deactivated, enforce Free immediately!
+          if (isDeactivated || (!nextIsPro && !nextIsPending && (prevIsPro || user.value.subscriptionStatus !== 'free'))) {
             if (user.value) {
-              setExternalSubscriptionStatus('free', null, null);
+              setExternalSubscriptionStatus('free', null, null, isDeactivated);
             }
             return;
           }
@@ -950,6 +1002,7 @@ export const useAuthStore = defineStore('auth', () => {
               isPro: nextIsPro,
               subscriptionPlan: nextPlan,
               subscriptionExpiresAt: nextExp,
+              isExplicitlyDeactivated: isDeactivated,
               subscriptionPaymentMethod: data.subscriptionPaymentMethod || user.value.subscriptionPaymentMethod || null,
               subscriptionRequestedAt: data.subscriptionRequestedAt || user.value.subscriptionRequestedAt || null,
             };
@@ -972,11 +1025,25 @@ export const useAuthStore = defineStore('auth', () => {
   function setExternalSubscriptionStatus(
     nextStatus: 'free' | 'pending' | 'pro',
     plan?: 'monthly' | 'yearly' | null,
-    expiresAt?: string | null
+    expiresAt?: string | null,
+    explicitlyDeactivated?: boolean
   ) {
     if (!user.value) return;
-    const isPro = isSubscriptionActiveByDate(nextStatus, nextStatus === 'pro', expiresAt);
-    const isPending = !isPro && nextStatus === 'pending';
+
+    const isExplicitlyDeactivated =
+      explicitlyDeactivated !== undefined
+        ? explicitlyDeactivated
+        : Boolean(user.value.isExplicitlyDeactivated && nextStatus === 'free');
+
+    // If marked explicitly deactivated, never allow Pro activation
+    if (isExplicitlyDeactivated && nextStatus === 'pro') {
+      nextStatus = 'free';
+    }
+
+    const isPro =
+      !isExplicitlyDeactivated &&
+      isSubscriptionActiveByDate(nextStatus, nextStatus === 'pro', expiresAt, isExplicitlyDeactivated);
+    const isPending = !isPro && !isExplicitlyDeactivated && nextStatus === 'pending';
     const resolvedStatus: 'free' | 'pending' | 'pro' = isPro
       ? 'pro'
       : isPending
@@ -985,12 +1052,16 @@ export const useAuthStore = defineStore('auth', () => {
     const resolvedPlan =
       isPro || isPending ? plan || user.value.subscriptionPlan || 'monthly' : null;
     const resolvedExpires = isPro ? expiresAt ?? user.value.subscriptionExpiresAt ?? null : null;
+    const resolvedDeactivated = !isPro
+      ? Boolean(isExplicitlyDeactivated || user.value.isExplicitlyDeactivated)
+      : false;
 
     if (
       user.value.subscriptionStatus !== resolvedStatus ||
       user.value.isPro !== isPro ||
       user.value.subscriptionPlan !== resolvedPlan ||
-      user.value.subscriptionExpiresAt !== resolvedExpires
+      user.value.subscriptionExpiresAt !== resolvedExpires ||
+      user.value.isExplicitlyDeactivated !== resolvedDeactivated
     ) {
       const wasPending = user.value.subscriptionStatus === 'pending';
       user.value = {
@@ -999,6 +1070,7 @@ export const useAuthStore = defineStore('auth', () => {
         isPro,
         subscriptionPlan: resolvedPlan,
         subscriptionExpiresAt: resolvedExpires,
+        isExplicitlyDeactivated: resolvedDeactivated,
       };
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
       upsertSavedAccount(user.value);
@@ -1133,8 +1205,10 @@ export const useAuthStore = defineStore('auth', () => {
 
         if (migratedSnapDoc) {
           const existingData = migratedSnapDoc.data();
+          const isDeactivated = existingData.isExplicitlyDeactivated === true;
           const isPro =
-            existingData.subscriptionStatus === 'pro' || existingData.isPro === true;
+            !isDeactivated &&
+            (existingData.subscriptionStatus === 'pro' || existingData.isPro === true);
           profile = {
             uid: migratedSnapDoc.id,
             username: existingData.username || defaultUsername,
@@ -1146,6 +1220,7 @@ export const useAuthStore = defineStore('auth', () => {
             currency: existingData.currency === 'USD' ? 'USD' : 'IDR',
             subscriptionStatus: isPro ? 'pro' : 'free',
             isPro,
+            isExplicitlyDeactivated: isDeactivated,
             isFirebaseBacked: true,
           };
         } else {
@@ -1184,8 +1259,10 @@ export const useAuthStore = defineStore('auth', () => {
         }
       } else {
         const existingData = snap.data();
+        const isDeactivated = existingData.isExplicitlyDeactivated === true;
         const isPro =
-          existingData.subscriptionStatus === 'pro' || existingData.isPro === true;
+          !isDeactivated &&
+          (existingData.subscriptionStatus === 'pro' || existingData.isPro === true);
         profile = {
           uid: safeUid,
           username: existingData.username || defaultUsername,
@@ -1197,6 +1274,7 @@ export const useAuthStore = defineStore('auth', () => {
           currency: existingData.currency === 'USD' ? 'USD' : 'IDR',
           subscriptionStatus: isPro ? 'pro' : 'free',
           isPro,
+          isExplicitlyDeactivated: isDeactivated,
           isFirebaseBacked: true,
         };
       }
@@ -1214,6 +1292,7 @@ export const useAuthStore = defineStore('auth', () => {
         authProvider: profile.authProvider,
         subscriptionStatus: profile.subscriptionStatus,
         isPro: profile.isPro,
+        isExplicitlyDeactivated: profile.isExplicitlyDeactivated,
         subscriptionPlan: profile.subscriptionPlan,
         subscriptionExpiresAt: profile.subscriptionExpiresAt,
       });
@@ -1221,12 +1300,20 @@ export const useAuthStore = defineStore('auth', () => {
         if (data.user.status) {
           profile.status = data.user.status;
         }
-        if (data.user.subscriptionStatus === 'free' || data.user.isPro === false) {
+        if (
+          data.user.subscriptionStatus === 'free' ||
+          data.user.isPro === false ||
+          data.user.isExplicitlyDeactivated === true
+        ) {
           profile.subscriptionStatus = 'free';
           profile.isPro = false;
+          profile.isExplicitlyDeactivated = true;
           profile.subscriptionPlan = null;
           profile.subscriptionExpiresAt = null;
-        } else if (data.user.subscriptionStatus === 'pro' || data.user.isPro === true) {
+        } else if (
+          !profile.isExplicitlyDeactivated &&
+          (data.user.subscriptionStatus === 'pro' || data.user.isPro === true)
+        ) {
           profile.subscriptionStatus = 'pro';
           profile.isPro = true;
           profile.subscriptionPlan = data.user.subscriptionPlan || profile.subscriptionPlan || 'monthly';
@@ -1261,6 +1348,12 @@ export const useAuthStore = defineStore('auth', () => {
           const parsed = JSON.parse(savedRaw) as AppUser;
           if (!parsed.username) {
             parsed.username = parsed.email?.split('@')[0] || 'user';
+          }
+          if (parsed.isExplicitlyDeactivated === true) {
+            parsed.subscriptionStatus = 'free';
+            parsed.isPro = false;
+            parsed.subscriptionPlan = null;
+            parsed.subscriptionExpiresAt = null;
           }
           user.value = parsed;
           localStorage.removeItem(EXPLICIT_LOGOUT_KEY);

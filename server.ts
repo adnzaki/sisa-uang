@@ -646,7 +646,12 @@ async function sendProSubscriptionPaymentEmail(payload: {
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
-  const PORT = Number(process.env.PORT) || 3000
+  let portFromArg = 3000;
+  const portArgIdx = process.argv.indexOf('--port');
+  if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
+    portFromArg = Number(process.argv[portArgIdx + 1]) || 3000;
+  }
+  const PORT = Number(process.env.PORT) || portFromArg || 3000;
 
   app.use(express.json({ limit: '100mb' }));
   app.use(express.urlencoded({ limit: '100mb', extended: true }));
@@ -1342,13 +1347,14 @@ async function startServer() {
       return;
     }
 
-    // Check if an existing entry has the same email or uid
+    // Check if an existing entry has the same email or uid, and verify if any entry with this email was explicitly deactivated
     let existing = usersStore.get(uid);
-    if (!existing) {
-      for (const u of usersStore.values()) {
-        if (u.email.toLowerCase() === email) {
-          existing = u;
-          break;
+    let isEmailDeactivated = false;
+    for (const u of usersStore.values()) {
+      if (u.email.toLowerCase() === email) {
+        if (!existing) existing = u;
+        if (u.isExplicitlyDeactivated === true || u.subscriptionStatus === 'free') {
+          isEmailDeactivated = true;
         }
       }
     }
@@ -1379,17 +1385,19 @@ async function startServer() {
       if (rawUsername && (!existing.username || rawUsername !== emailPrefix || existing.username === emailPrefix)) {
         existing.username = username;
       }
-      if (existing.isExplicitlyDeactivated === true || existing.subscriptionStatus === 'free') {
+      if (existing.isExplicitlyDeactivated === true || isEmailDeactivated || existing.subscriptionStatus === 'free') {
         // Super Admin explicitly deactivated this user or marked them free.
         // Client device background activity/auto-sync CANNOT revive PRO status!
         existing.subscriptionStatus = 'free';
         existing.isPro = false;
+        existing.isExplicitlyDeactivated = true;
         existing.subscriptionPlan = null;
         existing.subscriptionExpiresAt = null;
       } else if (incomingSubStatus === 'pro' && existing.subscriptionStatus !== 'pending') {
         if (existing.subscriptionStatus === 'pro' || isSuperAdmin) {
           existing.subscriptionStatus = 'pro';
           existing.isPro = true;
+          existing.isExplicitlyDeactivated = false;
           if (incomingPlan) existing.subscriptionPlan = incomingPlan;
           if (incomingExpiresAt) existing.subscriptionExpiresAt = incomingExpiresAt;
         }
@@ -1400,6 +1408,7 @@ async function startServer() {
       } else if (incomingSubStatus === 'free') {
         existing.subscriptionStatus = 'free';
         existing.isPro = false;
+        existing.isExplicitlyDeactivated = true;
         existing.subscriptionPlan = null;
         existing.subscriptionExpiresAt = null;
       }
@@ -1427,10 +1436,11 @@ async function startServer() {
       status: 'active',
       authProvider,
       currency: 'IDR',
-      subscriptionStatus: isSuperAdmin ? (incomingSubStatus || 'free') : 'free',
-      isPro: isSuperAdmin && incomingSubStatus === 'pro',
-      subscriptionPlan: isSuperAdmin ? incomingPlan : null,
-      subscriptionExpiresAt: isSuperAdmin && incomingSubStatus === 'pro' ? incomingExpiresAt : null,
+      subscriptionStatus: isSuperAdmin ? (incomingSubStatus || 'free') : isEmailDeactivated ? 'free' : (incomingSubStatus || 'free'),
+      isPro: !isEmailDeactivated && isSuperAdmin && incomingSubStatus === 'pro',
+      isExplicitlyDeactivated: isEmailDeactivated,
+      subscriptionPlan: isSuperAdmin && !isEmailDeactivated ? incomingPlan : null,
+      subscriptionExpiresAt: isSuperAdmin && !isEmailDeactivated && incomingSubStatus === 'pro' ? incomingExpiresAt : null,
       passwordHash,
       createdAt: nowIso(),
       updatedAt: nowIso(),
@@ -1725,6 +1735,7 @@ async function startServer() {
         role: 'user',
         subscriptionStatus: 'free',
         isPro: false,
+        isExplicitlyDeactivated: false,
         subscriptionPlan: null,
         subscriptionExpiresAt: null,
         sessionRevoked,
@@ -1741,6 +1752,7 @@ async function startServer() {
       role: user.role,
       subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
       isPro,
+      isExplicitlyDeactivated: Boolean(user.isExplicitlyDeactivated),
       subscriptionPlan: isPro || isPending ? user.subscriptionPlan || 'monthly' : null,
       subscriptionExpiresAt: isPro ? user.subscriptionExpiresAt || null : null,
       subscriptionPaymentMethod: user.subscriptionPaymentMethod || null,
@@ -3617,7 +3629,24 @@ async function startServer() {
       if (!uid || !email) continue;
 
       const isSuper = email === SUPER_ADMIN_EMAIL;
-      const existing = usersStore.get(uid);
+      let existing = usersStore.get(uid);
+      if (!existing && email) {
+        for (const uRec of usersStore.values()) {
+          if (uRec.email.toLowerCase() === email) {
+            existing = uRec;
+            break;
+          }
+        }
+      }
+
+      let isEmailDeactivated = false;
+      for (const uRec of usersStore.values()) {
+        if (uRec.email.toLowerCase() === email && (uRec.isExplicitlyDeactivated === true || uRec.subscriptionStatus === 'free')) {
+          isEmailDeactivated = true;
+          break;
+        }
+      }
+
       const username = String(u.username || email.split('@')[0] || uid)
         .trim()
         .toLowerCase()
@@ -3625,27 +3654,25 @@ async function startServer() {
         .slice(0, 60);
 
       // Subscription resolution:
-      // 1. If incoming u is explicitly 'free' or has isPro === false, it MUST be 'free'
-      // 2. If existing user in server registry was deactivated to 'free' by Super Admin, DO NOT revive it back to pro during auto-sync
-      // 3. Only mark as 'pro' if incoming u is active pro and server has not deactivated it
+      // 1. If incoming u is explicitly 'free', isPro === false, or user was deactivated by Super Admin, it MUST be 'free'
+      // 2. Never let auto-sync revive a deactivated user back to pro
       let isPro = false;
       let isPending = false;
 
-      if (u.subscriptionStatus === 'pending') {
+      if (isEmailDeactivated || existing?.isExplicitlyDeactivated === true || existing?.subscriptionStatus === 'free' || u.isExplicitlyDeactivated === true) {
+        isPro = false;
+        isPending = false;
+      } else if (u.subscriptionStatus === 'pending') {
         isPending = true;
       } else if (u.subscriptionStatus === 'free' || u.isPro === false) {
         isPro = false;
         isPending = false;
       } else if (u.subscriptionStatus === 'pro' || u.isPro === true) {
-        if (existing && (existing.isExplicitlyDeactivated === true || existing.subscriptionStatus === 'free')) {
-          isPro = false;
-        } else {
-          isPro = isUserSubscriptionActive({
-            subscriptionStatus: 'pro',
-            isPro: true,
-            subscriptionExpiresAt: u.subscriptionExpiresAt || existing?.subscriptionExpiresAt,
-          });
-        }
+        isPro = isUserSubscriptionActive({
+          subscriptionStatus: 'pro',
+          isPro: true,
+          subscriptionExpiresAt: u.subscriptionExpiresAt || existing?.subscriptionExpiresAt,
+        });
       } else if (existing) {
         isPro = isUserSubscriptionActive(existing);
         isPending = !isPro && existing.subscriptionStatus === 'pending';
@@ -3672,6 +3699,7 @@ async function startServer() {
         currency: u.currency === 'USD' ? 'USD' : 'IDR',
         subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
         isPro,
+        isExplicitlyDeactivated: isEmailDeactivated || existing?.isExplicitlyDeactivated === true || u.isExplicitlyDeactivated === true,
         subscriptionPlan,
         subscriptionExpiresAt,
         subscriptionPaymentMethod: existing?.subscriptionPaymentMethod || u.subscriptionPaymentMethod || null,
@@ -3797,7 +3825,7 @@ async function startServer() {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: {
+        hmr: process.env.DISABLE_HMR === 'true' ? false : {
           server: httpServer,
         },
       },
