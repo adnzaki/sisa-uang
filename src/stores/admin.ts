@@ -270,8 +270,7 @@ export const useAdminStore = defineStore('admin', () => {
       const isAlreadyAdminEmail =
         currentEmail === 'vuedevo@gmail.com' ||
         currentEmail === 'adnanzaki65@admin.sd.belajar.id' ||
-        currentEmail === 'sdnpengasinantujuh@gmail.com' ||
-        currentEmail === 'dienhazizahhati@gmail.com';
+        currentEmail === 'sdnpengasinantujuh@gmail.com';
 
       if (!targetAuth.currentUser || targetAuth.currentUser.isAnonymous || !isAlreadyAdminEmail) {
         try {
@@ -314,7 +313,7 @@ export const useAdminStore = defineStore('admin', () => {
           if (!snap.exists()) {
             await setDoc(adminDocRef, {
               uid: safeAdminUid,
-              email: targetAuth.currentUser.email || 'dienhazizahhati@gmail.com',
+              email: targetAuth.currentUser.email || 'vuedevo@gmail.com',
               createdAt: serverTimestamp(),
             });
           }
@@ -616,7 +615,6 @@ export const useAdminStore = defineStore('admin', () => {
               await updateDoc(doc(targetDb, 'users', d.id), {
                 subscriptionStatus: 'free',
                 isPro: false,
-                isExplicitlyDeactivated: true,
                 subscriptionPlan: null,
                 subscriptionExpiresAt: null,
                 updatedAt: serverTimestamp(),
@@ -634,7 +632,6 @@ export const useAdminStore = defineStore('admin', () => {
                   currency: fbUser.currency === 'USD' ? 'USD' : 'IDR',
                   subscriptionStatus: 'free',
                   isPro: false,
-                  isExplicitlyDeactivated: true,
                   subscriptionPlan: null,
                   subscriptionExpiresAt: null,
                   updatedAt: serverTimestamp(),
@@ -990,7 +987,6 @@ export const useAdminStore = defineStore('admin', () => {
           'subscriptionPlan',
           'subscriptionExpiresAt',
           'isPro',
-          'isExplicitlyDeactivated',
           'deleted',
           'deletedAt',
           'createdAt',
@@ -1008,7 +1004,6 @@ export const useAdminStore = defineStore('admin', () => {
           currency: existingUserData?.currency === 'USD' || targetUser.currency === 'USD' ? 'USD' : 'IDR',
           subscriptionStatus: nextSubStatus,
           isPro: nextIsPro,
-          isExplicitlyDeactivated: !nextIsPro,
           subscriptionPlan: nextPlan,
           subscriptionExpiresAt: nextExpiresAt,
           updatedAt: serverTimestamp(),
@@ -1049,7 +1044,6 @@ export const useAdminStore = defineStore('admin', () => {
                 await updateDoc(doc(instDb, 'users', candUid), {
                   subscriptionStatus: nextSubStatus,
                   isPro: nextIsPro,
-                  isExplicitlyDeactivated: !nextIsPro,
                   subscriptionPlan: nextPlan,
                   subscriptionExpiresAt: nextExpiresAt,
                   updatedAt: serverTimestamp(),
@@ -1059,7 +1053,7 @@ export const useAdminStore = defineStore('admin', () => {
                 // Priority 2: If document did not exist yet, fallback to strictly sanitized setDoc
                 const sanitizedDoc: Record<string, any> = {};
                 for (const k of ALLOWED_USER_KEYS) {
-                  if (k in fullUserDoc && fullUserDoc[k] !== undefined) {
+                  if (k in fullUserDoc && fullUserDoc[k] !== undefined && k !== 'isExplicitlyDeactivated') {
                     sanitizedDoc[k] = fullUserDoc[k];
                   }
                 }
@@ -1069,22 +1063,34 @@ export const useAdminStore = defineStore('admin', () => {
               }
 
               // Priority 3: Write / update budget marker for rapid offline sync & reactivity
-              await setDoc(
-                doc(instDb, 'budgets', cProMarkerId),
-                {
-                  ownerId: candUid,
-                  category: '__SISAUANG_PRO__',
-                  limitAmount: 1,
-                  spentAmount: 0,
+              const bRef = doc(instDb, 'budgets', cProMarkerId);
+              const bSnap = await getDoc(bRef).catch(() => null);
+              if (bSnap && bSnap.exists()) {
+                await updateDoc(bRef, {
                   period: markerPeriod,
                   deleted: !nextIsPro,
                   deletedAt: nextIsPro ? null : serverTimestamp(),
-                  createdAt: serverTimestamp(),
                   updatedAt: serverTimestamp(),
-                },
-                { merge: true }
-              );
-              firestoreWriteSucceeded = true;
+                });
+                firestoreWriteSucceeded = true;
+              } else {
+                await setDoc(
+                  bRef,
+                  {
+                    ownerId: candUid,
+                    category: '__SISAUANG_PRO__',
+                    limitAmount: 1,
+                    spentAmount: 0,
+                    period: markerPeriod,
+                    deleted: !nextIsPro,
+                    deletedAt: nextIsPro ? null : serverTimestamp(),
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                  },
+                  { merge: true }
+                );
+                firestoreWriteSucceeded = true;
+              }
 
               // Also find and clear any other __SISAUANG_PRO__ markers owned by this UID
               const existingMarkers = await getDocs(
@@ -1097,16 +1103,12 @@ export const useAdminStore = defineStore('admin', () => {
 
               if (existingMarkers && !existingMarkers.empty) {
                 for (const mDoc of existingMarkers.docs) {
-                  await setDoc(
-                    doc(instDb, 'budgets', mDoc.id),
-                    {
-                      period: markerPeriod,
-                      deleted: !nextIsPro,
-                      deletedAt: nextIsPro ? null : serverTimestamp(),
-                      updatedAt: serverTimestamp(),
-                    },
-                    { merge: true }
-                  ).catch(() => {});
+                  await updateDoc(doc(instDb, 'budgets', mDoc.id), {
+                    period: markerPeriod,
+                    deleted: !nextIsPro,
+                    deletedAt: nextIsPro ? null : serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                  }).catch(() => {});
                 }
               }
             } catch (writeErr) {
@@ -1127,7 +1129,6 @@ export const useAdminStore = defineStore('admin', () => {
                     await updateDoc(doc(instDb, 'users', matchedDoc.id), {
                       subscriptionStatus: nextSubStatus,
                       isPro: nextIsPro,
-                      isExplicitlyDeactivated: !nextIsPro,
                       subscriptionPlan: nextPlan,
                       subscriptionExpiresAt: nextExpiresAt,
                       updatedAt: serverTimestamp(),
@@ -1135,20 +1136,32 @@ export const useAdminStore = defineStore('admin', () => {
                     firestoreWriteSucceeded = true;
 
                     const altMarkerId = sanitizeId(`su_sub_pro_${matchedDoc.id}`);
-                    await setDoc(
-                      doc(instDb, 'budgets', altMarkerId),
-                      {
-                        ownerId: matchedDoc.id,
-                        category: '__SISAUANG_PRO__',
-                        limitAmount: 1,
-                        spentAmount: 0,
+                    const altRef = doc(instDb, 'budgets', altMarkerId);
+                    const altSnap = await getDoc(altRef).catch(() => null);
+                    if (altSnap && altSnap.exists()) {
+                      await updateDoc(altRef, {
                         period: markerPeriod,
                         deleted: !nextIsPro,
                         deletedAt: nextIsPro ? null : serverTimestamp(),
                         updatedAt: serverTimestamp(),
-                      },
-                      { merge: true }
-                    );
+                      });
+                    } else {
+                      await setDoc(
+                        altRef,
+                        {
+                          ownerId: matchedDoc.id,
+                          category: '__SISAUANG_PRO__',
+                          limitAmount: 1,
+                          spentAmount: 0,
+                          period: markerPeriod,
+                          deleted: !nextIsPro,
+                          deletedAt: nextIsPro ? null : serverTimestamp(),
+                          createdAt: serverTimestamp(),
+                          updatedAt: serverTimestamp(),
+                        },
+                        { merge: true }
+                      );
+                    }
                   } catch (mErr) {
                     console.warn('[Admin] Email matched doc update warning:', mErr);
                   }

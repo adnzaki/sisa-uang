@@ -1167,7 +1167,6 @@ export const useAuthStore = defineStore('auth', () => {
     const authProvider: 'google' | 'password' = isGoogle ? 'google' : 'password';
     const isAdminEmail =
       safeEmail === SUPER_ADMIN_EMAIL ||
-      safeEmail === 'dienhazizahhati@gmail.com' ||
       safeEmail === WORKSPACE_ADMIN_EMAIL ||
       safeEmail === 'sdnpengasinantujuh@gmail.com';
 
@@ -1364,7 +1363,6 @@ export const useAuthStore = defineStore('auth', () => {
           const isAdminAccount =
             parsed.role === 'admin' ||
             parsed.email?.toLowerCase() === SUPER_ADMIN_EMAIL ||
-            parsed.email?.toLowerCase() === 'dienhazizahhati@gmail.com' ||
             parsed.email?.toLowerCase() === WORKSPACE_ADMIN_EMAIL ||
             parsed.username?.toLowerCase() === SUPER_ADMIN_USERNAME ||
             parsed.username?.toLowerCase() === 'dark.notes';
@@ -1420,7 +1418,6 @@ export const useAuthStore = defineStore('auth', () => {
             const isAdminAccount =
               profile.role === 'admin' ||
               profile.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
-              profile.email.toLowerCase() === 'dienhazizahhati@gmail.com' ||
               profile.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL;
             const storedToken =
               localStorage.getItem('sisa_uang_admin_token') ||
