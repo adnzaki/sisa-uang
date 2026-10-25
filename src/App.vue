@@ -465,8 +465,7 @@ watch(mobileDrawerOpen, (isOpen) => {
 });
 
 function isCurrentSuperAdmin(): boolean {
-  const currentEmail = String(auth.currentUser?.email || authStore.user?.email || '').trim().toLowerCase();
-  return currentEmail === 'vuedevo@gmail.com';
+  return authStore.isSuperAdmin;
 }
 
 function handleAppVisibilityOrFocus() {
@@ -495,6 +494,20 @@ function handleUserActivity() {
 onMounted(() => {
   themeStore.initThemeListener();
   authStore.initAuth();
+
+  try {
+    const switchedName = sessionStorage.getItem('sisauang_switched_notice');
+    if (switchedName) {
+      sessionStorage.removeItem('sisauang_switched_notice');
+      notificationStore.notifySuccess(
+        'Berhasil Beralih Akun',
+        `Sesi aktif kini beralih ke ${switchedName}.`
+      );
+    }
+  } catch {
+    // Ignore
+  }
+
   window.addEventListener('popstate', handleDrawerPopState);
   window.addEventListener('focus', handleAppVisibilityOrFocus);
   window.addEventListener('pointerdown', handleUserActivity, { passive: true });

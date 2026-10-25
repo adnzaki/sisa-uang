@@ -269,6 +269,8 @@ export const useAuthStore = defineStore('auth', () => {
       !!user.value &&
       (user.value.role === 'admin' ||
         user.value.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+        user.value.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL ||
+        user.value.email.toLowerCase() === 'sdnpengasinantujuh@gmail.com' ||
         user.value.username?.toLowerCase() === SUPER_ADMIN_USERNAME ||
         user.value.username?.toLowerCase() === 'dark.notes')
   );
@@ -631,6 +633,8 @@ export const useAuthStore = defineStore('auth', () => {
     const isTargetSuperAdmin =
       nextUser.role === 'admin' ||
       nextUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+      nextUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL ||
+      nextUser.email.toLowerCase() === 'sdnpengasinantujuh@gmail.com' ||
       nextUser.username?.toLowerCase() === SUPER_ADMIN_USERNAME ||
       nextUser.username?.toLowerCase() === 'dark.notes';
 
@@ -661,14 +665,39 @@ export const useAuthStore = defineStore('auth', () => {
       }
     }
 
-    await syncSubscriptionFromFirestoreForUser(nextUser.uid, nextUser.email);
-    await registerCurrentDeviceSession(nextUser, true);
-    startUserStatusMonitor(nextUser);
+    try {
+      await syncSubscriptionFromFirestoreForUser(nextUser.uid, nextUser.email);
+    } catch {
+      // Ignore
+    }
+    try {
+      await registerCurrentDeviceSession(nextUser, true);
+    } catch {
+      // Ignore
+    }
 
-    notify.notifySuccess(
-      'Berhasil Beralih Akun',
-      `Sesi aktif kini beralih ke ${nextUser.displayName} (@${nextUser.username}).`
-    );
+    // Save switch notification message for display immediately after full page reload
+    try {
+      sessionStorage.setItem(
+        'sisauang_switched_notice',
+        nextUser.displayName || nextUser.username || nextUser.email
+      );
+    } catch {
+      // Ignore
+    }
+
+    const targetPath = isTargetSuperAdmin ? '/control-panel' : '/dashboard';
+
+    // Full hard reload so all stores (Finance, Automation, Admin, Theme) and views
+    // initialize cleanly without leftover memory/cache from the previous user
+    if (typeof window !== 'undefined') {
+      if (window.location.pathname === targetPath) {
+        window.location.reload();
+      } else {
+        window.location.href = targetPath;
+      }
+    }
+
     return true;
   }
 
