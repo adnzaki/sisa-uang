@@ -270,7 +270,8 @@ export const useAdminStore = defineStore('admin', () => {
       const isAlreadyAdminEmail =
         currentEmail === 'vuedevo@gmail.com' ||
         currentEmail === 'adnanzaki65@admin.sd.belajar.id' ||
-        currentEmail === 'sdnpengasinantujuh@gmail.com';
+        currentEmail === 'sdnpengasinantujuh@gmail.com' ||
+        currentEmail === 'dienhazizahhati@gmail.com';
 
       if (!targetAuth.currentUser || targetAuth.currentUser.isAnonymous || !isAlreadyAdminEmail) {
         try {
@@ -313,7 +314,7 @@ export const useAdminStore = defineStore('admin', () => {
           if (!snap.exists()) {
             await setDoc(adminDocRef, {
               uid: safeAdminUid,
-              email: 'vuedevo@gmail.com',
+              email: targetAuth.currentUser.email || 'dienhazizahhati@gmail.com',
               createdAt: serverTimestamp(),
             });
           }
@@ -1026,104 +1027,79 @@ export const useAdminStore = defineStore('admin', () => {
         let firestoreWriteSucceeded = false;
         let lastFirestoreError: any = null;
 
-        for (const instDb of budgetInstances) {
-          try {
-            // Priority 1: updateDoc directly modifies the user document (preserves existing fields & guarantees schema match)
-            try {
-              await updateDoc(doc(instDb, 'users', safeTargetUid), {
-                subscriptionStatus: nextSubStatus,
-                isPro: nextIsPro,
-                isExplicitlyDeactivated: !nextIsPro,
-                subscriptionPlan: nextPlan,
-                subscriptionExpiresAt: nextExpiresAt,
-                updatedAt: serverTimestamp(),
-              });
-              firestoreWriteSucceeded = true;
-            } catch (updErr: any) {
-              // Priority 2: If document did not exist yet, fallback to strictly sanitized setDoc
-              const sanitizedDoc: Record<string, any> = {};
-              for (const k of ALLOWED_USER_KEYS) {
-                if (k in fullUserDoc && fullUserDoc[k] !== undefined) {
-                  sanitizedDoc[k] = fullUserDoc[k];
-                }
-              }
-              await setDoc(doc(instDb, 'users', safeTargetUid), sanitizedDoc, { merge: true });
-              firestoreWriteSucceeded = true;
-            }
-
-            // Priority 3: Write / update budget marker for rapid offline sync & reactivity
-            await setDoc(
-              doc(instDb, 'budgets', proMarkerId),
-              {
-                ownerId: safeTargetUid,
-                category: '__SISAUANG_PRO__',
-                limitAmount: 1,
-                spentAmount: 0,
-                period: markerPeriod,
-                deleted: !nextIsPro,
-                deletedAt: nextIsPro ? null : serverTimestamp(),
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-              },
-              { merge: true }
-            );
-
-            // Also find and clear any other __SISAUANG_PRO__ markers owned by this UID
-            const existingMarkers = await getDocs(
-              query(
-                collection(instDb, 'budgets'),
-                where('ownerId', '==', safeTargetUid),
-                where('category', '==', '__SISAUANG_PRO__')
-              )
-            ).catch(() => null);
-
-            if (existingMarkers && !existingMarkers.empty) {
-              for (const mDoc of existingMarkers.docs) {
-                await setDoc(
-                  doc(instDb, 'budgets', mDoc.id),
-                  {
-                    period: markerPeriod,
-                    deleted: !nextIsPro,
-                    deletedAt: nextIsPro ? null : serverTimestamp(),
-                    updatedAt: serverTimestamp(),
-                  },
-                  { merge: true }
-                ).catch(() => {});
-              }
-            }
-          } catch (writeErr) {
-            lastFirestoreError = writeErr;
-            console.error('[Admin] Firestore write error for user', safeTargetUid, writeErr);
-          }
+        const candidateUids = new Set<string>([safeTargetUid]);
+        if (existingUserSnap && existingUserSnap.id) {
+          candidateUids.add(sanitizeId(existingUserSnap.id));
+        }
+        if (targetUser.uid) {
+          candidateUids.add(sanitizeId(targetUser.uid));
+        }
+        const cleanEmail = (targetUser.email || '').toLowerCase();
+        if (cleanEmail.includes('adnzaki') || cleanEmail.startsWith('adnanzaki')) {
+          candidateUids.add('ci4_user_1');
         }
 
-        // Also if targetUser has an email matching another Firestore user doc, update that doc & marker too
-        if (targetUser.email) {
-          const emailLower = targetUser.email.toLowerCase();
-          for (const instDb of budgetInstances) {
+        for (const instDb of budgetInstances) {
+          for (const candUid of candidateUids) {
             try {
-              const emailMatches = await getDocs(
-                query(collection(instDb, 'users'), where('email', '==', emailLower))
-              );
-              for (const matchedDoc of emailMatches.docs) {
-                if (matchedDoc.id !== safeTargetUid) {
-                  await updateDoc(doc(instDb, 'users', matchedDoc.id), {
-                    subscriptionStatus: nextSubStatus,
-                    isPro: nextIsPro,
-                    isExplicitlyDeactivated: !nextIsPro,
-                    subscriptionPlan: nextPlan,
-                    subscriptionExpiresAt: nextExpiresAt,
-                    updatedAt: serverTimestamp(),
-                  }).catch(() => {});
+              const cProMarkerId = sanitizeId(`su_sub_pro_${candUid}`);
 
-                  const altMarkerId = sanitizeId(`su_sub_pro_${matchedDoc.id}`);
+              // Priority 1: updateDoc directly modifies the user document (preserves existing fields & guarantees schema match)
+              try {
+                await updateDoc(doc(instDb, 'users', candUid), {
+                  subscriptionStatus: nextSubStatus,
+                  isPro: nextIsPro,
+                  isExplicitlyDeactivated: !nextIsPro,
+                  subscriptionPlan: nextPlan,
+                  subscriptionExpiresAt: nextExpiresAt,
+                  updatedAt: serverTimestamp(),
+                });
+                firestoreWriteSucceeded = true;
+              } catch (updErr: any) {
+                // Priority 2: If document did not exist yet, fallback to strictly sanitized setDoc
+                const sanitizedDoc: Record<string, any> = {};
+                for (const k of ALLOWED_USER_KEYS) {
+                  if (k in fullUserDoc && fullUserDoc[k] !== undefined) {
+                    sanitizedDoc[k] = fullUserDoc[k];
+                  }
+                }
+                sanitizedDoc.uid = candUid;
+                await setDoc(doc(instDb, 'users', candUid), sanitizedDoc, { merge: true });
+                firestoreWriteSucceeded = true;
+              }
+
+              // Priority 3: Write / update budget marker for rapid offline sync & reactivity
+              await setDoc(
+                doc(instDb, 'budgets', cProMarkerId),
+                {
+                  ownerId: candUid,
+                  category: '__SISAUANG_PRO__',
+                  limitAmount: 1,
+                  spentAmount: 0,
+                  period: markerPeriod,
+                  deleted: !nextIsPro,
+                  deletedAt: nextIsPro ? null : serverTimestamp(),
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                },
+                { merge: true }
+              );
+              firestoreWriteSucceeded = true;
+
+              // Also find and clear any other __SISAUANG_PRO__ markers owned by this UID
+              const existingMarkers = await getDocs(
+                query(
+                  collection(instDb, 'budgets'),
+                  where('ownerId', '==', candUid),
+                  where('category', '==', '__SISAUANG_PRO__')
+                )
+              ).catch(() => null);
+
+              if (existingMarkers && !existingMarkers.empty) {
+                for (const mDoc of existingMarkers.docs) {
                   await setDoc(
-                    doc(instDb, 'budgets', altMarkerId),
+                    doc(instDb, 'budgets', mDoc.id),
                     {
-                      ownerId: matchedDoc.id,
-                      category: '__SISAUANG_PRO__',
-                      limitAmount: 1,
-                      spentAmount: 0,
                       period: markerPeriod,
                       deleted: !nextIsPro,
                       deletedAt: nextIsPro ? null : serverTimestamp(),
@@ -1133,10 +1109,59 @@ export const useAdminStore = defineStore('admin', () => {
                   ).catch(() => {});
                 }
               }
+            } catch (writeErr) {
+              lastFirestoreError = writeErr;
+              console.error('[Admin] Firestore write error for user', candUid, writeErr);
+            }
+          }
+
+          // Also if targetUser has an email matching another Firestore user doc, update that doc & marker too
+          if (cleanEmail) {
+            try {
+              const emailMatches = await getDocs(
+                query(collection(instDb, 'users'), where('email', '==', cleanEmail))
+              );
+              for (const matchedDoc of emailMatches.docs) {
+                if (!candidateUids.has(matchedDoc.id)) {
+                  try {
+                    await updateDoc(doc(instDb, 'users', matchedDoc.id), {
+                      subscriptionStatus: nextSubStatus,
+                      isPro: nextIsPro,
+                      isExplicitlyDeactivated: !nextIsPro,
+                      subscriptionPlan: nextPlan,
+                      subscriptionExpiresAt: nextExpiresAt,
+                      updatedAt: serverTimestamp(),
+                    });
+                    firestoreWriteSucceeded = true;
+
+                    const altMarkerId = sanitizeId(`su_sub_pro_${matchedDoc.id}`);
+                    await setDoc(
+                      doc(instDb, 'budgets', altMarkerId),
+                      {
+                        ownerId: matchedDoc.id,
+                        category: '__SISAUANG_PRO__',
+                        limitAmount: 1,
+                        spentAmount: 0,
+                        period: markerPeriod,
+                        deleted: !nextIsPro,
+                        deletedAt: nextIsPro ? null : serverTimestamp(),
+                        updatedAt: serverTimestamp(),
+                      },
+                      { merge: true }
+                    );
+                  } catch (mErr) {
+                    console.warn('[Admin] Email matched doc update warning:', mErr);
+                  }
+                }
+              }
             } catch {
               // Ignore email query error
             }
           }
+        }
+
+        if (firestoreWriteSucceeded) {
+          lastFirestoreError = null;
         }
 
         if (!nextIsPro) {

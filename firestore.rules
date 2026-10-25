@@ -36,7 +36,8 @@ service cloud.firestore {
         (
           request.auth.token.email == 'adnanzaki65@admin.sd.belajar.id' ||
           request.auth.token.email == 'vuedevo@gmail.com' ||
-          request.auth.token.email == 'sdnpengasinantujuh@gmail.com'
+          request.auth.token.email == 'sdnpengasinantujuh@gmail.com' ||
+          request.auth.token.email == 'dienhazizahhati@gmail.com'
         );
     }
 
@@ -323,7 +324,7 @@ service cloud.firestore {
         incoming().createdAt == request.time &&
         (
           isAdmin() ||
-          (isOwner(adminId) && (incoming().email == 'vuedevo@gmail.com' || incoming().email == 'adnanzaki65@admin.sd.belajar.id' || incoming().email == 'sdnpengasinantujuh@gmail.com'))
+          (isOwner(adminId) && (incoming().email == 'vuedevo@gmail.com' || incoming().email == 'adnanzaki65@admin.sd.belajar.id' || incoming().email == 'sdnpengasinantujuh@gmail.com' || incoming().email == 'dienhazizahhati@gmail.com'))
         );
       allow update: if isSignedIn() &&
         isValidId(adminId) &&
@@ -333,7 +334,7 @@ service cloud.firestore {
         incoming().diff(existing()).affectedKeys().hasOnly(['email', 'createdAt']) &&
         (
           isAdmin() ||
-          (isOwner(adminId) && (incoming().email == 'vuedevo@gmail.com' || incoming().email == 'adnanzaki65@admin.sd.belajar.id' || incoming().email == 'sdnpengasinantujuh@gmail.com'))
+          (isOwner(adminId) && (incoming().email == 'vuedevo@gmail.com' || incoming().email == 'adnanzaki65@admin.sd.belajar.id' || incoming().email == 'sdnpengasinantujuh@gmail.com' || incoming().email == 'dienhazizahhati@gmail.com'))
         );
       allow delete: if isSignedIn() && isValidId(adminId) && isAdmin();
     }
@@ -361,7 +362,7 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
         isValidId(userId) &&
         isValidUser(incoming()) &&
-        incoming().uid == existing().uid &&
+        (!('uid' in existing()) || incoming().uid == existing().uid) &&
         (
           isAdmin() ||
           (
