@@ -1424,7 +1424,8 @@ export const useFinanceStore = defineStore('finance', () => {
           ) {
             constraints.push(where('walletId', '==', currentTxServerFilter.walletId));
           }
-
+          // Strict quota protection: bound query with limit(100) when fetching all-periods pool
+          constraints.push(limit(100));
           const snap = await getDocs(query(collection(db, 'transactions'), ...constraints));
           matchedDocs = snap.docs
             .map((d: any) => ({
@@ -1563,13 +1564,28 @@ export const useFinanceStore = defineStore('finance', () => {
 
   let isCheckingSyncToken = false;
   let lastTokenCheckAt = 0;
-  const TOKEN_CHECK_COOLDOWN_MS = 1500; // 1.5s dedup window so simultaneous watchers on the same click share 1 read
+  const TOKEN_CHECK_COOLDOWN_MS = 60000; // 60s dedup window to strictly avoid Firestore read quota spikes
 
   async function fetchAllCollectionsFromFirestore(uid: string, remoteSyncToken = 0) {
     const currentMonth = getCurrentMonthPeriod();
     const monthStartIso = `${currentMonth}-01`;
     const monthEndIso = `${currentMonth}-31`;
     const effectiveSyncToken = remoteSyncToken > 0 ? remoteSyncToken : Date.now();
+
+    // Hydrate default categories from localStorage if memory is currently empty
+    if (defaultCategories.value.length === 0 && typeof window !== 'undefined') {
+      try {
+        const savedDefaultCats = localStorage.getItem('sisa_uang_real_default_categories');
+        if (savedDefaultCats) {
+          const parsed = JSON.parse(savedDefaultCats);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            defaultCategories.value = parsed;
+          }
+        }
+      } catch {
+        // Ignore JSON error
+      }
+    }
 
     // Clear stale pagination caches before loading fresh server state
     invalidateServerPaginationCaches(uid);
@@ -1637,7 +1653,7 @@ export const useFinanceStore = defineStore('finance', () => {
       getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid))),
     ];
 
-    // Only fetch global default categories if not already cached in localStorage
+    // Only fetch global default categories if not already cached in memory or localStorage
     const shouldFetchDefaultCats =
       uid !== DEFAULT_CATEGORY_OWNER_ID && defaultCategories.value.length === 0;
     if (shouldFetchDefaultCats) {

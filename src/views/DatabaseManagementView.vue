@@ -168,20 +168,31 @@ const explorerWhereLogic = ref<'AND' | 'OR'>('AND');
 const explorerWhereConditions = ref<ExplorerWhereCondition[]>([]);
 const explorerSortField = ref<string>('__docId');
 const explorerSortOrder = ref<'asc' | 'desc'>('asc');
-const explorerLimitPerPage = ref<number>(25);
+const explorerLimitPerPage = ref<number>(50);
 const explorerCurrentPage = ref<number>(1);
+const explorerHasMore = ref<boolean>(false);
 const explorerViewMode = ref<'table' | 'json'>('table');
 const inspectingRawDoc = ref<Record<string, any> | null>(null);
 const inspectingDocCopied = ref<boolean>(false);
 
-async function loadExplorerCollectionDocs(colName: string, forceRefresh = false) {
+async function loadExplorerCollectionDocs(
+  colName: string,
+  forceRefresh = false,
+  targetPage = 1
+) {
   if (!authStore.isSuperAdmin) return;
   explorerSelectedCollection.value = colName;
   isLoadingExplorerDocs.value = true;
   try {
-    const docs = await adminStore.fetchFirestoreRawCollectionDocs(colName, forceRefresh);
-    explorerRawDocs.value = docs;
-    explorerCurrentPage.value = 1;
+    const pageRes = await adminStore.fetchFirestoreRawCollectionPage(
+      colName,
+      targetPage,
+      50,
+      forceRefresh
+    );
+    explorerRawDocs.value = pageRes.docs;
+    explorerCurrentPage.value = pageRes.page;
+    explorerHasMore.value = pageRes.hasMore;
     // If current sort field does not exist in new collection, reset to __docId
     const availableCols = explorerAvailableFields.value;
     if (explorerSortField.value !== '__docId' && !availableCols.includes(explorerSortField.value)) {
@@ -196,6 +207,11 @@ async function loadExplorerCollectionDocs(colName: string, forceRefresh = false)
   } finally {
     isLoadingExplorerDocs.value = false;
   }
+}
+
+async function goToExplorerPage(newPage: number) {
+  if (newPage < 1 || (newPage > explorerCurrentPage.value && !explorerHasMore.value)) return;
+  await loadExplorerCollectionDocs(explorerSelectedCollection.value, false, newPage);
 }
 
 const explorerAvailableFields = computed<string[]>(() => {
@@ -431,13 +447,11 @@ const explorerFilteredAndSortedDocs = computed<Record<string, any>[]>(() => {
 });
 
 const explorerTotalPages = computed(() =>
-  Math.max(1, Math.ceil(explorerFilteredAndSortedDocs.value.length / explorerLimitPerPage.value))
+  explorerHasMore.value ? explorerCurrentPage.value + 1 : explorerCurrentPage.value
 );
 
 const explorerPaginatedDocs = computed<Record<string, any>[]>(() => {
-  const page = Math.min(explorerCurrentPage.value, explorerTotalPages.value);
-  const start = (page - 1) * explorerLimitPerPage.value;
-  return explorerFilteredAndSortedDocs.value.slice(start, start + explorerLimitPerPage.value);
+  return explorerFilteredAndSortedDocs.value;
 });
 
 const explorerQuerySummarySql = computed<string>(() => {
@@ -507,11 +521,7 @@ const explorerOperatorSelectOptions = computed<SelectOptionItem[]>(() =>
 );
 
 const explorerLimitSelectOptions: SelectOptionItem[] = [
-  { value: 10, label: '10 baris' },
-  { value: 25, label: '25 baris' },
-  { value: 50, label: '50 baris' },
-  { value: 100, label: '100 baris' },
-  { value: 500, label: '500 baris' },
+  { value: 50, label: '50 dok / hal (Hemat Kuota)' },
 ];
 
 const tablePageSizeSelectOptions: SelectOptionItem[] = [
@@ -1690,12 +1700,12 @@ async function confirmAndExecuteImport() {
         <div class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
           1. Pilih Tabel / Koleksi Firestore
         </div>
-        <div class="flex flex-wrap gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <button
             v-for="col in EXPLORER_COLLECTIONS"
             :key="col.name"
             type="button"
-            class="min-h-[38px] px-3.5 py-1.5 rounded-xl border text-xs font-mono font-semibold flex items-center gap-2 transition-all"
+            class="min-h-[38px] px-3.5 py-1.5 rounded-xl border text-xs font-mono font-semibold flex items-center gap-2 transition-all cursor-pointer"
             :class="
               explorerSelectedCollection === col.name
                 ? 'border-emerald-600 bg-emerald-600 text-white shadow-2xs'
@@ -1719,6 +1729,18 @@ async function confirmAndExecuteImport() {
                   ?.docCount.toLocaleString('id-ID')
               }}
             </span>
+          </button>
+
+          <!-- Refresh Active Collection Button (Strict 50 reads) -->
+          <button
+            type="button"
+            :disabled="isLoadingExplorerDocs"
+            class="min-h-[38px] px-3.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:border-emerald-500 flex items-center gap-1.5 transition-colors disabled:opacity-40 cursor-pointer sm:ml-auto"
+            title="Segarkan data koleksi saat ini dari Firestore (hanya 50 dokumen)"
+            @click="loadExplorerCollectionDocs(explorerSelectedCollection, true, 1)"
+          >
+            <RefreshCw class="w-3.5 h-3.5 text-emerald-600" :class="{ 'animate-spin': isLoadingExplorerDocs }" />
+            <span>Segarkan Koleksi</span>
           </button>
         </div>
       </div>
@@ -1802,15 +1824,14 @@ async function confirmAndExecuteImport() {
             </button>
           </div>
 
-          <!-- Page Size (LIMIT) -->
+          <!-- Page Size (LIMIT: Strict 50 Documents) -->
           <div class="sm:col-span-2 xl:col-span-1 min-w-0">
-            <CustomSelect
-              v-model="explorerLimitPerPage"
-              :options="explorerLimitSelectOptions"
-              placeholder="Limit"
-              size="sm"
-              @change="explorerCurrentPage = 1"
-            />
+            <div
+              class="w-full min-h-[44px] sm:min-h-[40px] px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-900 text-[11px] font-mono font-bold text-slate-700 dark:text-slate-300 flex items-center justify-center whitespace-nowrap"
+              title="Koleksi dibatasi maksimal 50 dokumen per halaman untuk menghemat kuota Firestore"
+            >
+              50 dok/hal
+            </div>
           </div>
         </div>
 
@@ -1991,22 +2012,27 @@ async function confirmAndExecuteImport() {
         <!-- Pagination Controls -->
         <div class="flex items-center justify-between sm:justify-end gap-2">
           <span class="text-xs font-mono text-slate-500 dark:text-slate-400">
-            Hal {{ explorerCurrentPage }} dari {{ explorerTotalPages }}
+            Hal {{ explorerCurrentPage }} ({{ explorerFilteredAndSortedDocs.length }} dok · maks 50/hal)
           </span>
           <div class="flex items-center gap-1">
             <button
               type="button"
-              :disabled="explorerCurrentPage <= 1"
-              class="min-h-[36px] min-w-[36px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-center text-slate-700 dark:text-slate-200 disabled:opacity-40"
-              @click="explorerCurrentPage = Math.max(1, explorerCurrentPage - 1)"
+              :disabled="explorerCurrentPage <= 1 || isLoadingExplorerDocs"
+              class="min-h-[36px] min-w-[36px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-center text-slate-700 dark:text-slate-200 disabled:opacity-40 cursor-pointer"
+              title="Halaman Sebelumnya"
+              @click="goToExplorerPage(explorerCurrentPage - 1)"
             >
               <ChevronLeft class="w-4 h-4" />
             </button>
+            <span class="px-2 text-xs font-mono font-bold text-slate-700 dark:text-slate-300">
+              {{ explorerCurrentPage }}
+            </span>
             <button
               type="button"
-              :disabled="explorerCurrentPage >= explorerTotalPages"
-              class="min-h-[36px] min-w-[36px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-center text-slate-700 dark:text-slate-200 disabled:opacity-40"
-              @click="explorerCurrentPage = Math.min(explorerTotalPages, explorerCurrentPage + 1)"
+              :disabled="!explorerHasMore || isLoadingExplorerDocs"
+              class="min-h-[36px] min-w-[36px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-center text-slate-700 dark:text-slate-200 disabled:opacity-40 cursor-pointer"
+              title="Halaman Selanjutnya"
+              @click="goToExplorerPage(explorerCurrentPage + 1)"
             >
               <ChevronRight class="w-4 h-4" />
             </button>

@@ -469,46 +469,15 @@ function isCurrentSuperAdmin(): boolean {
   return currentEmail === 'vuedevo@gmail.com';
 }
 
-function handleAppVisibilityOrFocus() {
-  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-  if (authStore.isAuthenticated && authStore.user?.uid) {
-    if (!isCurrentSuperAdmin()) {
-      void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid);
-    }
-    void automationStore.checkAndTriggerOnActivity();
-    if (typeof themeStore.fetchRemoteReportSettings === 'function') {
-      void themeStore.fetchRemoteReportSettings(authStore.user.uid);
-    }
-  }
-}
-
-let activityDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-function handleUserActivity() {
-  if (!authStore.isAuthenticated) return;
-  if (activityDebounceTimer) return;
-  activityDebounceTimer = setTimeout(() => {
-    activityDebounceTimer = null;
-    void automationStore.checkAndTriggerOnActivity();
-  }, 1200);
-}
-
 onMounted(() => {
   themeStore.initThemeListener();
   authStore.initAuth();
   window.addEventListener('popstate', handleDrawerPopState);
-  window.addEventListener('focus', handleAppVisibilityOrFocus);
-  window.addEventListener('pointerdown', handleUserActivity, { passive: true });
-  window.addEventListener('keydown', handleUserActivity, { passive: true });
-  document.addEventListener('visibilitychange', handleAppVisibilityOrFocus);
   document.addEventListener('mousedown', handleAccountMenuClickOutside);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('popstate', handleDrawerPopState);
-  window.removeEventListener('focus', handleAppVisibilityOrFocus);
-  window.removeEventListener('pointerdown', handleUserActivity);
-  window.removeEventListener('keydown', handleUserActivity);
-  document.removeEventListener('visibilitychange', handleAppVisibilityOrFocus);
   document.removeEventListener('mousedown', handleAccountMenuClickOutside);
 });
 

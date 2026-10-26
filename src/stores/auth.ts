@@ -22,6 +22,7 @@ import {
   collection,
   query,
   where,
+  limit,
 } from 'firebase/firestore';
 import {
   auth,
@@ -1542,23 +1543,21 @@ export const useAuthStore = defineStore('auth', () => {
         }
       }
 
-      // 3. If not @ and not found by username field, check common email prefix or scan /users for matching username/displayName/email-prefix
+      // 3. If not @ and not found by username field, check displayName or synthetic email using indexed queries with limit(1)
+      // STRICT QUOTA PROTECTION: Never call getDocs(usersCol) without where/limit constraints!
       if (!clean.includes('@')) {
-        const allUsersSnap = await getDocs(usersCol);
-        for (const d of allUsersSnap.docs) {
-          const data = d.data();
-          const docEmail = String(data.email || '').trim().toLowerCase();
-          const docEmailPrefix = docEmail.split('@')[0];
-          const docUsername = String(data.username || '').trim().toLowerCase().replace(/^@+/, '');
-          const docDisplay = String(data.displayName || '').trim().toLowerCase();
-          const docDisplaySlug = docDisplay.replace(/\s+/g, '_');
-          if (
-            (docUsername && (docUsername === clean || docUsername === normalizedUsername)) ||
-            (docEmailPrefix && (docEmailPrefix === clean || docEmailPrefix === normalizedUsername)) ||
-            (docDisplay && (docDisplay === clean || docDisplaySlug === normalizedUsername))
-          ) {
-            return mapFirestoreUserDoc(d, clean);
-          }
+        const byDisplaySnap = await getDocs(
+          query(usersCol, where('displayName', '==', clean), limit(1))
+        );
+        if (!byDisplaySnap.empty) {
+          return mapFirestoreUserDoc(byDisplaySnap.docs[0], clean);
+        }
+
+        const bySyntheticEmailSnap = await getDocs(
+          query(usersCol, where('email', '==', `${clean}@sisa-uang.id`), limit(1))
+        );
+        if (!bySyntheticEmailSnap.empty) {
+          return mapFirestoreUserDoc(bySyntheticEmailSnap.docs[0], clean);
         }
       }
     } catch (fsErr: any) {

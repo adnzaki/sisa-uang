@@ -1,166 +1,126 @@
-# Rencana Implementasi: Website Publik SisaUang untuk Kepatuhan Verifikasi Midtrans (Kategori Software)
+# Rencana Implementasi: Analisis & Optimasi Penggunaan Firestore Read API (Mencegah Limit 50.000 Reads/Hari)
 
-Dokumen ini memuat arsitektur dan rancangan implementasi website publik untuk **SisaUang** agar 100% memenuhi kriteria kelayakan website merchant pada proses verifikasi **Midtrans Payment Gateway** untuk kategori bisnis **Software**.
-
----
-
-## 1. Analisis Kriteria Wajib Midtrans
-
-Berdasarkan 5 tangkapan layar verifikasi dan dokumen *Terms & Conditions Template* Midtrans yang dilampirkan, berikut adalah 5 kriteria utama yang wajib dipenuhi:
-
-| No | Kriteria Midtrans | Ketentuan & Bukti Verifikasi | Solusi di SisaUang |
-|---|---|---|---|
-| 1 | **Dapat Diakses & Ada Deskripsi Produk** | Website dapat diakses publik tanpa login paksa, menyajikan deskripsi lengkap software, dan fitur dapat dipesan/dibeli langsung oleh pengunjung. | Menambahkan Landing Page publik SisaUang di root URL (`/`) bagi pengunjung umum/reviewer Midtrans, dengan navigasi jelas, showcase fitur, dan tombol aksi langganan. |
-| 2 | **Harga & Transaksi dalam Rupiah (IDR)** | Semua produk dan paket harga wajib menggunakan mata uang Rupiah (IDR / Rp) secara eksplisit. | Menyajikan tabel harga langganan **SisaUang Pro** dengan denominasi resmi Rupiah (**Bulanan: Rp 21.500**, **Tahunan: Rp 215.000**). |
-| 3 | **Halaman Pembayaran Tidak Dialihkan ke Website Lain** | Proses checkout dan pembayaran dilakukan langsung di dalam domain website sendiri (in-site modal / embedded Snap checkout), tidak diarahkan ke website asing/pihak ketiga yang mencurigakan. | Membuat modal Checkout interaktif langsung di dalam website (*In-Site Checkout Flow*) dengan rincian pemesanan, pemilihan paket, dan integrasi popup Midtrans Snap. |
-| 4 | **Informasi Kontak Bisnis yang Jelas** | Wajib mencantumkan kanal komunikasi bisnis resmi yang aktif dan dapat dihubungi pelanggan. | Menyediakan halaman `/contact` serta section kontak di footer: Email pengelola bisnis (`azzackey@gmail.com`), nomor WhatsApp layanan pelanggan, jam kerja operasional, dan alamat bisnis di Indonesia. |
-| 5 | **Syarat & Ketentuan serta Kebijakan Pengembalian Dana** | Menyediakan dokumen Syarat & Ketentuan (*Terms and Conditions*) serta Kebijakan Refund (*Refund & Cancellation Policy*). | Mengimplementasikan rute publik `/terms`, `/privacy`, dan `/refund-policy` yang mengadopsi struktur resmi **Template #3: Digital Goods / Software License Agreement** dari Midtrans. |
+Dokumen ini memuat hasil analisis teknis komprehensif mengenai penyebab habisnya kuota gratis Cloud Firestore (50.000 document reads/hari) pada aplikasi **SisaUang**, identifikasi fitur-fitur yang paling boros operasi read database, serta rencana arsitektur dan perbaikan kode terperinci untuk memangkas penggunaan read hingga **>95%**.
 
 ---
 
-## 2. Hasil Klarifikasi Pengguna
+## 1. Hasil Analisis: Fitur yang Paling Banyak Membutuhkan Proses Read Database
 
-Dari sesi tanya jawab dan masukan revisi pengguna:
-1. **Struktur Website**: Terintegrasi langsung sebagai landing page dan portal publik aplikasi SisaUang (bukan website terpisah), sehingga URL preview/domain yang diajukan ke Midtrans langsung berisi produk aslinya.
-2. **Model Produk Software & Harga Baru**:
-   - **SisaUang Pro Bulanan**: **Rp 21.500 / bulan** (Mata uang Rupiah).
-   - **SisaUang Pro Tahunan**: **Rp 215.000 / tahun** (~Rp 17.916/bulan, hemat 2 bulan).
-3. **Kontak Pengelola Bisnis**: Menampilkan email resmi `azzackey@gmail.com`, nomor WhatsApp dukungan pelanggan, serta alamat operasional fisik/kantor bisnis di Indonesia.
+Berdasarkan audit mendalam terhadap seluruh alur data di *client-side store*, *components*, dan *event listeners*, berikut adalah urutan fitur dengan konsumsi read terbesar yang memicu *quota exhaustion*:
 
----
-
-## 3. Arsitektur Rute & Logika Akses (Routing)
-
-Saat ini, root path (`/`) di SisaUang langsung diproteksi middleware `requiresAuth: true`, sehingga pengunjung yang belum login langsung terlempar ke `/auth` (Login). Reviewer Midtrans akan menolak jika halaman utama berupa form login tanpa deskripsi produk.
-
-### Perubahan Logika Navigasi:
-- **Pengunjung Belum Login (Guest / Reviewer Midtrans)**: Mengakses `/` akan menampilkan **Public Landing Page** lengkap dengan navigasi publik, fitur, harga dalam Rupiah, checkout, kontak, dan tautan legal.
-- **Pengguna Sudah Login (Authenticated)**: Mengakses `/` otomatis menampilkan **Dashboard Keuangan Pribadi** seperti biasa, dengan opsi menuju halaman publik via menu/footer jika ingin membaca terms atau kontak.
-- **Rute Publik Tambahan (Dapat Diakses Bebas)**:
-  - `/landing` : Landing Page utama (alias publik eksplisit)
-  - `/pricing` : Halaman daftar harga dan detail paket SisaUang Pro (IDR)
-  - `/terms` : Syarat dan Ketentuan Lisensi Software Digital Goods
-  - `/privacy` : Kebijakan Privasi dan Perlindungan Data Pengguna
-  - `/refund-policy` : Kebijakan Pengembalian Dana & Pembatalan Langganan
-  - `/contact` : Informasi Kontak Bisnis & Form Pertanyaan Pelanggan
+| Peringkat | Fitur / Komponen | Frekuensi & Pola Query | Estimasi Reads / Hari (Sebelum Perbaikan) | Tingkat Bahaya |
+|---|---|---|---|---|
+| **#1** | **Admin Polling & Control Panel (`admin.ts:792`)** | Setiap 15 detik me-refresh seluruh koleksi `users`, `budgets` (`__SISAUANG_PRO__`), dan `activity_logs` tanpa limit jika jumlah user server < 5. | **~25.000 – 40.000+ reads/hari** (Bahkan jika admin hanya membuka 1 tab selama beberapa jam) | 🔴 **Kritis (Biang Utama)** |
+| **#2** | **Activity Event Sync Loop (`App.vue` & `finance.ts`)** | `window.addEventListener` pada `pointerdown`, `keydown`, `focus`, dan `visibilitychange` mengecek `checkAndSyncIfRemoteChanged` dengan cooldown hanya 1.5 detik. Setiap perubahan token memicu `fetchAllCollectionsFromFirestore` (50–200 dokumen per burst). | **~10.000 – 25.000+ reads/hari** (Tiap klik tombol, ketik form, dan ganti tab) | 🔴 **Kritis** |
+| **#3** | **Data Explorer Admin (`DatabaseManagementView.vue` & `admin.ts:1955`)** | Fungsi `fetchFirestoreRawCollectionDocs` memanggil `getDocs(collection(targetDb, colName))` tanpa klausa `limit()`. Membuka koleksi `transactions` atau mengekspor backup membaca seluruh riwayat transaksi. | **~5.000 – 15.000+ reads per sesi eksplorasi** | 🔴 **Tinggi** |
+| **#4** | **Filter Riwayat Transaksi Lintas Periode (`finance.ts:1428`)** | Memilih periode "Semua" (`all`) saat memfilter kategori, dompet, atau tipe memanggil `getDocs` tanpa batas `limit()`, membaca seluruh transaksi user di Firestore. | **~2.000 – 8.000+ reads/hari** | 🟡 **Sedang-Tinggi** |
+| **#5** | **Pencarian Login / Username Scan (`auth.ts:1547`)** | Jika username tidak langsung cocok pada pencarian indeks pertama, `lookupUserFromFirestore` mengeksekusi `getDocs(usersCol)` (melakukan full scan terhadap semua akun pengguna di database). | **~500 – 2.000+ reads/hari** | 🟡 **Sedang** |
+| **#6** | **Pengecekan Otomatisasi Jadwal (`automation.ts` & `App.vue`)** | Event `pointerdown`/`keydown` memicu `checkAndTriggerOnActivity()` setiap 1.2 detik. Begitu cache 5 menit habis, kueri `automations` dijalankan kembali dari Firestore. | **~500 – 1.500+ reads/hari** | 🟡 **Sedang** |
 
 ---
 
-## 4. Rincian Desain & Spesifikasi Halaman
+## 2. Rincian 6 Akar Masalah (Root Causes)
 
-### A. Public Landing Page (`/` atau `/landing`)
-1. **Top Bar Navigasi Publik**:
-   - Wordmark **SisaUang** dengan logo minimalis.
-   - Menu tautan: *Fitur*, *Paket Harga*, *Tentang*, *Kontak*, *Syarat & Ketentuan*.
-   - Aksi: Tombol *"Masuk"* (ke `/auth`) dan tombol *"Mulai Gratis / Berlangganan"*.
-2. **Hero Section**:
-   - Headline: *"Software Manajemen Kas & Keuangan Modern untuk Pribadi, Usaha, dan Lembaga"*.
-   - Subtitle: *"Pantau multi sumber dana, kelola multi kepemilikan dana, kontrol anggaran bulanan & tahunan, serta cetak laporan resmi berstandar akuntansi dalam hitungan detik."*
-   - CTA Utama: Tombol *"Lihat Paket Pro"* (scroll ke pricing) dan *"Coba Gratis Sekarang"*.
-   - Visual Showcase: Cuplikan antarmuka aplikasi SisaUang (Buku Kas Umum, Analitik Arus Kas, dan Format Laporan Rekonsiliasi).
-3. **Showcase Fitur Unggulan (Core Software Capabilities)**:
-   - *01. Multi Sumber Dana*: Rekening Bank, Tunai, dan E-Wallet dalam satu atap.
-   - *02. Konsep Kepemilikan Dana*: Memisahkan dana pribadi, dana tabungan, dana operasional, dan dana titipan tanpa perlu banyak rekening fisik.
-   - *03. Anggaran Fleksibel & Ketat*: Perencanaan pagu bulanan dan alokasi setahun penuh.
-   - *04. Laporan Keuangan PDF Berstandar*: Laporan Kas Umum (BKU), Realisasi Anggaran, dan Rekonsiliasi Kas ber-Kop Surat dan Tanda Tangan Digital.
-4. **Section Pricing / Paket Berlangganan (Wajib Rupiah)**:
-   - **Paket Starter (Gratis / Rp 0)**: Maksimal 5 dompet, 2 kepemilikan, pencatatan transaksi standar.
-   - **Paket SisaUang Pro Bulanan**: **Rp 21.500 / bulan** (Termasuk PPN jika berlaku).
-   - **Paket SisaUang Pro Tahunan (Diskon Hemat)**: **Rp 215.000 / tahun** (Hanya ~Rp 17.916/bulan, hemat biaya 2 bulan penuh).
-   - Tombol pada setiap kartu: *"Pilih Paket Bulanan"* dan *"Pilih Paket Tahunan"* yang memicu modal pemesanan langsung (*In-Site Checkout*).
-5. **Section Kontak Bisnis & Alamat**:
-   - Email resmi: `azzackey@gmail.com`
-   - WhatsApp Layanan: Tombol chat langsung ke WhatsApp bisnis.
-   - Jam Layanan: Senin – Jumat (08.00 – 17.00 WIB).
-   - Alamat Operasional Bisnis: Alamat kantor/domisili pengembang di Indonesia.
-6. **Footer Publik**:
-   - Tautan navigasi legal lengkap: Syarat & Ketentuan, Kebijakan Pengembalian Dana, Kebijakan Privasi, Hubungi Kami, FAQ.
-   - Copyright notice resmi: *"© 2026 SisaUang. Hak cipta dilindungi undang-undang."*
+### Akar Masalah 1: *Super Admin Background Polling Loop* di `admin.ts`
+- **Lokasi**: `/src/stores/admin.ts` baris 792 & 820 (`startRealtimeMonitoring`).
+- **Analisis**: Interval `setInterval` berjalan setiap 15 detik. Di dalamnya terdapat kondisi `if (!silent || usersSummary.value.totalUsers < 5)`. Karena database lokal Express baru berjalan, total pengguna server sering kali di bawah 5, menyebabkan setiap 15 detik sistem memanggil `syncFirestoreUsersToServerRegistry()` yang membaca:
+  1. Seluruh dokumen `users` (`getDocs(collection(targetDb, 'users'))`).
+  2. Seluruh marker budget Pro (`getDocs(query(collection(targetDb, 'budgets'), where('category', '==', '__SISAUANG_PRO__')))`).
+  3. Seluruh audit log (`getDocs(collection(targetDb, 'activity_logs'))`).
+- **Dampak**: 1 jam buka tab admin = 240 siklus × 150 dokumen = **36.000 reads**! Kuota harian habis seketika.
 
----
+### Akar Masalah 2: *Activity-Driven Remote Token Sync Cooldown Terlalu Singkat*
+- **Lokasi**: `/src/App.vue` baris 472–513 & `/src/stores/finance.ts` baris 1566 & 1875.
+- **Analisis**: `TOKEN_CHECK_COOLDOWN_MS = 1500` (hanya 1.5 detik!). Setiap pengguna menyentuh layar HP (`pointerdown`), mengetik angka di form transaksi (`keydown`), atau beralih aplikasi (`visibilitychange`), sistem mengecek dokumen `/users/{uid}`. Jika selisih `remoteSyncToken` dan `localSyncToken` lebih dari 2 detik (misal ada sinkronisasi kecil di latar belakang), sistem langsung memicu `fetchAllCollectionsFromFirestore`, menarik kembali 5 query koleksi sekaligus (`wallets`, `wallet_owners`, `categories`, `transactions` bulan berjalan + 25 item, `budgets`).
 
-### B. Halaman Legal: Syarat & Ketentuan (`/terms`)
-Mengadopsi klausul resmi **Midtrans Template #3: Digital Goods (Software)** yang disesuaikan untuk SisaUang:
-1. **Conditions of Use & Overview**: Perjanjian hukum penggunaan software berbasis cloud (*Software as a Service*).
-2. **Grant of License**: Pemberian lisensi non-eksklusif dan non-transferabel untuk mengakses platform software SisaUang Pro selama masa aktif langganan.
-3. **Proprietary Rights & Copyrights**: Hak kekayaan intelektual kode sumber, merek, dan antarmuka adalah milik pengelola SisaUang.
-4. **Subscription Fees & Payment**: Biaya langganan dinyatakan dalam mata uang **Rupiah (IDR)** (**Rp 21.500/bulan** dan **Rp 215.000/tahun**), ditagihkan di muka, dan diproses melalui mitra payment gateway resmi berlisensi Bank Indonesia (Midtrans).
-5. **Service Availability & Support**: Komitmen ketersediaan layanan cloud, pencadangan data, serta kanal dukungan teknis melalui email `azzackey@gmail.com`.
-6. **Termination of Service**: Ketentuan berakhirnya atau pembatalan langganan oleh pengguna atau sistem jika terjadi pelanggaran hukum.
-7. **Applicable Law**: Diatur dan tunduk pada hukum yang berlaku di Republik Indonesia.
+### Akar Masalah 3: Kueri Koleksi Mentah Tanpa `limit()` pada Admin Data Explorer
+- **Lokasi**: `/src/stores/admin.ts` baris 1955 (`fetchFirestoreRawCollectionDocs`).
+- **Analisis**: `getDocs(collection(targetDb, collectionName))` dieksekusi tanpa batasan `limit()`. Ketika admin mengklik nama koleksi `transactions` di Data Explorer, seluruh dokumen dari masa lalu ditarik semua ke memori browser.
+
+### Akar Masalah 4: Filter Transaksi Periode 'Semua' Tanpa Server Boundary
+- **Lokasi**: `/src/stores/finance.ts` baris 1428.
+- **Analisis**: Ketika pengguna berada di halaman Riwayat Transaksi dengan periode "Semua" dan menerapkan filter tipe/kategori/dompet, sistem menjalankan kueri Firestore tanpa `limit()`, mengambil seluruh transaksi milik pengguna tersebut untuk kemudian dipotong di memori klien.
+
+### Akar Masalah 5: Full-Collection Scan Saat Login / Validasi Username
+- **Lokasi**: `/src/stores/auth.ts` baris 1547.
+- **Analisis**: Di `lookupUserFromFirestore()`, setelah pencarian spesifik gagal, kode memanggil `const allUsersSnap = await getDocs(usersCol);` dan me-looping seluruh dokumen koleksi `users`.
+
+### Akar Masalah 6: *Global Default Categories* Diambil Berulang Kali
+- **Lokasi**: `/src/stores/finance.ts` baris 1641–1649.
+- **Analisis**: Meskipun 45 kategori bawaan sistem bersifat statis, pengecekan `defaultCategories.value.length === 0` dapat memicu pembacaan 45 dokumen dari Firestore setiap kali refresh atau inisialisasi awal dilakukan jika cache memori terhapus.
 
 ---
 
-### C. Halaman Legal: Kebijakan Pengembalian Dana (`/refund-policy`)
-Klausul kebijakan pengembalian dana (*Refund & Cancellation Policy*) yang adil untuk produk software digital:
-1. **Masa Uji Coba & Garansi Kepuasan (7 Hari)**: Pengembalian dana 100% dapat diajukan dalam jangka waktu 7 hari kalender sejak aktivasi pertama paket SisaUang Pro jika sistem mengalami kendala teknis yang tidak dapat diselesaikan.
-2. **Kondisi Pengembalian Dana yang Diterima**:
-   - Terjadi kegagalan sistemik berulang yang diverifikasi tim teknis.
-   - Terjadi transaksi ganda (*double charge*) pada invoice yang sama akibat kendala jaringan.
-3. **Prosedur Pengajuan Refund**:
-   - Mengirimkan permohonan ke email `azzackey@gmail.com` dengan melampirkan Order ID / bukti transfer Midtrans dan email akun SisaUang.
-   - Proses verifikasi maksimal 2x24 jam kerja, dan dana dikembalikan melalui metode transfer bank / e-wallet asal.
-4. **Pembatalan Perpanjangan Otomatis**: Pengguna dapat membatalkan perpanjangan paket kapan saja tanpa biaya penalti.
+## 3. Strategi Optimasi (Solusi Komprehensif)
+
+Untuk menurunkan pembacaan Firestore dari >50.000 reads menjadi **di bawah 1.500 – 2.500 reads per hari** (penghematan >95%), berikut langkah-langkah optimasi yang akan diterapkan:
+
+1. **Matikan Polling Firestore di Admin Monitor**:
+   - Jadwalkan `fetchAdminOverview` hanya membaca data dari *in-memory Express server registry* (`apiClient.get('/admin/overview')` yang berbiaya 0 Firestore read).
+   - `syncFirestoreUsersToServerRegistry` **HANYA** dipanggil secara eksplisit saat Super Admin mengklik tombol "Segarkan Data" secara manual atau pada inisialisasi pertama sesi (disimpan dalam `sessionStorage`), bukan pada polling otomatis 15 detik.
+
+2. **Perbesar Cooldown & Lepas Event Listener Berlebih di `App.vue`**:
+   - Hapus listener `pointerdown` dan `keydown` untuk pengecekan sinkronisasi database.
+   - Pengecekan otomatis hanya terjadi saat `window` mendapatkan fokus kembali (`focus` / `visibilitychange`) dengan *cooldown* minimal **10 menit** (bukan 1.5 detik!).
+   - Transaksi atau perubahan data yang dibuat oleh user sendiri sudah langsung disimpan di lokal dan sinkron ke Firestore melalui *write operation*, sehingga tidak perlu di-read ulang secara terus-menerus.
+
+3. **Gunakan Limit Ketat pada Data Explorer Admin**:
+   - Pasang klausa `limit(50)` atau `limit(100)` secara default pada `fetchFirestoreRawCollectionDocs`.
+   - Tambahkan *pagination cursor* (`startAfter`) jika admin ingin melihat halaman data berikutnya, sehingga tidak pernah terjadi penarikan ribuan dokumen sekaligus.
+
+4. **Batasi Kueri Transaksi Lintas Periode**:
+   - Kueri `transactions` pada periode "Semua" wajib memiliki batas maksimal `limit(50)` atau `limit(100)` dengan paginasi berbasis kursor server.
+
+5. **Hapus Full Collection Scan pada `auth.ts`**:
+   - Hapus baris `const allUsersSnap = await getDocs(usersCol);`.
+   - Gunakan kueri tunggal terindeks `where('username', '==', ...)` atau `where('email', '==', ...)`.
+
+6. **Cache Permanen Kategori Bawaan di LocalStorage**:
+   - Simpan 45 kategori default di `localStorage` (`sisauang_default_categories_cache`).
+   - Jangan pernah membaca koleksi `categories` milik `__default__` lagi jika datanya sudah ada di `localStorage`.
 
 ---
 
-### D. Halaman Legal: Kebijakan Privasi (`/privacy`)
-1. **Data yang Dikumpulkan**: Data akun (email, nama profil) dan data keuangan yang dicatat mandiri oleh pengguna.
-2. **Keamanan & Enkripsi Data**: Seluruh data disimpan terenkripsi menggunakan Cloud Firestore di Google Cloud Platform regional Indonesia/Asia Tenggara.
-3. **Jaminan Kerahasiaan Data**: SisaUang tidak pernah menjual, menyewakan, atau memberikan data keuangan pengguna kepada pihak ketiga mana pun.
-4. **Data Transaksi Pembayaran**: Informasi sensitif pembayaran (kartu kredit, PIN e-wallet, virtual account) diproses langsung oleh payment gateway Midtrans yang terenkripsi berstandar PCI-DSS Level 1 dan tidak pernah disimpan di server SisaUang.
+## 4. Perubahan File yang Direncanakan (Proposed Changes)
+
+### 1. `/src/App.vue`
+- Menghapus event listener `pointerdown` dan `keydown` yang memicu pemanggilan `checkAndTriggerOnActivity()` berulang-ulang.
+- Mengatur `handleAppVisibilityOrFocus` agar memiliki jeda minimal 10 menit sebelum mengecek token sinkronisasi Firestore.
+
+### 2. `/src/stores/finance.ts`
+- Mengubah `TOKEN_CHECK_COOLDOWN_MS` dari **1.500 ms (1.5 detik)** menjadi **300.000 ms (5 menit)**.
+- Mengubah ambang batas toleransi timestamp token dari 2 detik menjadi 30 detik untuk menghindari refetch palsu akibat *network latency*.
+- Menambahkan `limit(100)` pada kueri transaksi filter lintas periode (`fetchTransactionsServerPage`).
+- Membaca kategori bawaan (`defaultCategories`) dari `localStorage` permanen sebelum menyentuh Firestore.
+
+### 3. `/src/stores/admin.ts`
+- Menghentikan pemanggilan `syncFirestoreUsersToServerRegistry` di dalam siklus interval polling 15 detik.
+- Mengubah polling admin agar 100% menggunakan API lokal Express backend (`/admin/overview`), 0 Firestore reads.
+- Menambahkan pembatasan `limit(50)` pada `fetchFirestoreRawCollectionDocs`.
+
+### 4. `/src/stores/auth.ts`
+- Menghapus pemanggilan `getDocs(usersCol)` (full scan) di `lookupUserFromFirestore`.
+- Mengoptimalkan pengecekan Pro status agar menggunakan `getDoc(doc(db, 'users', uid))` langsung ketimbang melakukan `getDocs(query(...))`.
+
+### 5. `/src/stores/automation.ts`
+- Memastikan pengecekan jadwal otomatisasi mengandalkan cache lokal (IndexedDB / localStorage) dan hanya melakukan sinkronisasi write saat jadwal benar-benar jatuh tempo.
 
 ---
 
-### E. Halaman & Modal Pemesanan (In-Site Checkout Flow)
-Memenuhi kriteria Midtrans Image 5 (*"Pastikan halaman pembayaran website Anda tidak diarahkan ke website lain"*):
-1. **Modal Checkout Terintegrasi**:
-   - Membuka modal pemesanan langsung di dalam website SisaUang saat tombol *"Berlangganan Sekarang"* diklik.
-   - Menampilkan ringkasan pesanan:
-     - Nama Produk: *SisaUang Pro (1 Bulan)* atau *SisaUang Pro (1 Tahun)*
-     - Rincian Biaya: **Rp 21.500** / **Rp 215.000** (Mata uang resmi IDR)
-     - Input data pembeli: Nama lengkap, email aktif (`azzackey@gmail.com` sebagai contoh/default akun), nomor telepon/WhatsApp.
-2. **Kesiapan Integrasi Midtrans Snap**:
-   - Tombol *"Lanjut ke Pembayaran"* memanggil API server `/api/payment/create-transaction`.
-   - Menampilkan popup **Midtrans Snap Modal** langsung di layar website (metode pembayaran: QRIS, GoPay, ShopeePay, Virtual Account BCA/Mandiri/BRI/BNI, Kartu Kredit).
-   - Pengunjung menyelesaikan transaksi tanpa dialihkan ke domain eksternal yang tidak dikenal.
-   - Setelah sukses, status akun otomatis ter-upgrade ke Pro dan invoice pembayaran dapat diunduh.
+## 5. User Review Required
+
+- **Konfirmasi**: Apakah toleransi sinkronisasi otomatis latar belakang selama 5–10 menit (dengan tombol manual "Segarkan Data" tetap tersedia jika pengguna ingin instan) dapat diterima untuk menghemat lebih dari 45.000 reads per hari?
+- **Admin Data Explorer**: Penjelajah database admin akan menampilkan 50 data per halaman dengan tombol navigasi (Next/Prev) alih-alih me-load seluruh tabel sekaligus.
 
 ---
 
-## 5. Rencana Langkah Kerja Implementasi
+## 6. Verification Plan
 
-Berikut tahapan teknis yang akan dilakukan saat eksekusi:
-
-1. **Pembuatan Komponen Halaman Publik**:
-   - `src/views/LandingView.vue`: Halaman landing page lengkap dengan Hero, Fitur, Pricing IDR (Rp 21.500 & Rp 215.000), Alur Checkout, FAQ, dan Kontak.
-   - `src/views/LegalView.vue` (atau modular `/terms`, `/refund-policy`, `/privacy`): Halaman dokumen hukum berstandar template Midtrans.
-   - `src/views/ContactView.vue`: Halaman kontak resmi dengan detail `azzackey@gmail.com`, WhatsApp, jam kerja, dan form pesan.
-   - `src/components/PublicNavbar.vue` & `src/components/PublicFooter.vue`: Navigasi publik yang bersih, responsif, dan elegan.
-   - `src/components/InSiteCheckoutModal.vue`: Modal checkout pemesanan langganan SisaUang Pro terintegrasi.
-2. **Pembaruan Router (`src/router/index.ts`)**:
-   - Menjadikan root `/` fleksibel (menampilkan Landing Page untuk guest / reviewer Midtrans, dan Dashboard untuk user yang login).
-   - Mendaftarkan rute publik `/landing`, `/pricing`, `/terms`, `/privacy`, `/refund-policy`, `/contact` tanpa proteksi login.
-3. **Integrasi Endpoint Backend Pembayaran (`server.ts`)**:
-   - Menambahkan rute `/api/payment/create-transaction` dan `/api/payment/webhook` yang siap dihubungkan dengan Server Key Midtrans saat akun disetujui.
-   - Menyiapkan sandbox mock flow agar saat dites oleh tim verifikator Midtrans, modal checkout langsung berfungsi mulus menampilkan QRIS/VA simulasi.
-4. **Verifikasi Tampilan Responsif & Kepatuhan Kontras**:
-   - Memastikan tampilan sempurna di layar mobile, tablet, dan desktop sesuai standar `frontend-design`.
-   - Menguji tautan dan memastikan tidak ada dead links atau tombol yang tidak merespons.
-
----
-
-## 6. Verifikasi & Pengujian Akhir untuk Midtrans & Stabilitas Aplikasi
-
-| Item Pengujian | Target Hasil | Status |
-|---|---|---|
-| Akses Publik (Incognito / Guest) | Halaman `/` langsung memuat landing page SisaUang tanpa redirect ke `/auth`. | Selesai |
-| Deskripsi & Fitur Produk Software | Menampilkan penjelasan detail fungsi software SisaUang dan manfaatnya. | Selesai |
-| Mata Uang IDR | Harga tercantum dalam format resmi `Rp 21.500 / bulan` dan `Rp 215.000 / tahun`. | Selesai |
-| Form / Modal Checkout Terintegrasi | Tombol langganan membuka modal checkout langsung di dalam domain sendiri dengan verifikasi akun login. | Selesai |
-| Wajib Login Sebelum Checkout | Pengguna wajib login sebelum bayar; diarahkan ke `/auth` lalu dikembalikan ke modal checkout. | Selesai |
-| Resolusi Firestore Permission Error | Mengeliminasi kesalahan list permissions pada `finance_collections` untuk `adnanzaki65` dan session handling. | Selesai |
-| Halaman Syarat & Ketentuan (`/terms`) | Memuat klausul lengkap lisensi digital goods sesuai template Midtrans. | Selesai |
-| Halaman Kebijakan Refund (`/refund-policy`) | Memuat syarat garansi refund 7 hari dan prosedur pengajuannya. | Selesai |
-| Informasi Kontak Bisnis (`/contact`) | Tercantum email bisnis, WhatsApp, jam kerja, dan alamat kantor (Jl. Pengasinan Tengah No. 68 Rawalumbu Kota Bekasi 17115). | Selesai |
-
+1. **Verifikasi Kompilasi**:
+   - Jalankan `compile_applet` untuk memastikan TypeScript dan build Vite berjalan 100% tanpa error.
+2. **Uji Operasi Database di Console / Network**:
+   - Pantau log network pada saat navigasi halaman, beralih tab, dan mengklik tombol: pastikan tidak ada rentetan permintaan Firestore berulang.
+3. **Uji Fitur Multi-Device & Offline Sync**:
+   - Pastikan transaksi baru tetap tersimpan rapi ke Firestore dan muncul di ringkasan keuangan.
+4. **Uji Panel Super Admin**:
+   - Pastikan Control Panel tetap memperbarui status pengguna tanpa membebani kuota Firestore.

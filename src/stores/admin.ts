@@ -13,6 +13,8 @@ import {
   writeBatch,
   query,
   where,
+  limit,
+  startAfter,
 } from 'firebase/firestore';
 import {
   signInWithEmailAndPassword,
@@ -523,7 +525,11 @@ export const useAdminStore = defineStore('admin', () => {
   let firestoreUsersSyncedInSession = false;
 
   async function syncFirestoreUsersToServerRegistry(force = false): Promise<number> {
-    if (!force && firestoreUsersSyncedInSession && usersSummary.value.totalUsers >= 5) {
+    const sessionSynced =
+      typeof sessionStorage !== 'undefined' &&
+      sessionStorage.getItem('sisauang_admin_synced_session') === 'true';
+
+    if (!force && (firestoreUsersSyncedInSession || sessionSynced)) {
       return usersSummary.value.totalUsers;
     }
 
@@ -725,6 +731,9 @@ export const useAdminStore = defineStore('admin', () => {
 
       if (fbUsers.length > 0 || fbLogs.length > 0) {
         firestoreUsersSyncedInSession = true;
+        if (typeof sessionStorage !== 'undefined') {
+          sessionStorage.setItem('sisauang_admin_synced_session', 'true');
+        }
         try {
           await apiClient.post('/admin/import-sql-json', {
             users: fbUsers,
@@ -786,10 +795,15 @@ export const useAdminStore = defineStore('admin', () => {
       }
       alerts.value = incomingAlerts;
 
-      // If Express server registry only has a couple of session-synced accounts (or manual refresh was clicked),
-      // hydrate the full user list from Cloud Firestore /users collection!
-      if (!silent || usersSummary.value.totalUsers < 5) {
-        await syncFirestoreUsersToServerRegistry(!silent);
+      // Only hydrate users from Firestore on explicit manual user request (!silent)
+      // or very first session load (protected by sessionStorage). Never run automatically on silent calls!
+      const hasSyncedInThisSession =
+        firestoreUsersSyncedInSession ||
+        (typeof sessionStorage !== 'undefined' &&
+          sessionStorage.getItem('sisauang_admin_synced_session') === 'true');
+
+      if (!silent && !hasSyncedInThisSession) {
+        await syncFirestoreUsersToServerRegistry(false);
       }
     } catch (err: any) {
       const msg =
@@ -805,21 +819,10 @@ export const useAdminStore = defineStore('admin', () => {
   }
 
   async function startRealtimeMonitoring() {
-    if (pollInterval) {
-      // Already monitoring; if server registry still has < 5 users, ensure Firestore users are hydrated
-      if (usersSummary.value.totalUsers < 5 && !firestoreUsersSyncedInSession) {
-        void syncFirestoreUsersToServerRegistry(false);
-      } else {
-        fetchAdminOverview(true);
-      }
-      return;
-    }
+    // Zero-polling architecture: disable automatic background polling loops (protects daily Firestore read quota)
+    // Updates are event-driven: navigation, mutations, or manual "Segarkan Data" button click
+    stopRealtimeMonitoring();
     await fetchAdminOverview(false);
-
-    // Poll lightweight local Express backend every 15 seconds (costs 0 Firestore reads!)
-    pollInterval = setInterval(() => {
-      fetchAdminOverview(true);
-    }, 15000);
   }
 
   function stopRealtimeMonitoring() {
@@ -1940,54 +1943,70 @@ export const useAdminStore = defineStore('admin', () => {
    * Fetch raw documents from a specific Cloud Firestore collection (`sisa-uang`)
    * with in-memory caching so switching tabs or sorting/filtering never re-reads the collection unless explicitly refreshed.
    */
+  const rawCollectionCursorMap = new Map<string, Map<number, any>>();
+
+  const serializeFirestoreValue = (val: any): any => {
+    if (val === null || val === undefined) return val;
+    if (typeof val === 'object') {
+      if (typeof val.toDate === 'function') {
+        try {
+          return val.toDate().toISOString();
+        } catch {
+          return String(val);
+        }
+      }
+      if ('seconds' in val && 'nanoseconds' in val && typeof val.seconds === 'number') {
+        try {
+          return new Date(val.seconds * 1000).toISOString();
+        } catch {
+          return String(val);
+        }
+      }
+      if (Array.isArray(val)) {
+        return val.map(serializeFirestoreValue);
+      }
+      const out: Record<string, any> = {};
+      for (const [k, v] of Object.entries(val)) {
+        out[k] = serializeFirestoreValue(v);
+      }
+      return out;
+    }
+    return val;
+  };
+
+  /**
+   * Fetch raw documents from a specific Cloud Firestore collection (`sisa-uang`)
+   * with strict limit (default 50 docs) and in-memory caching to avoid quota burn.
+   * Full backup uses options = { unlimited: true }.
+   */
   async function fetchFirestoreRawCollectionDocs(
     collectionName: string,
-    forceRefresh = false
+    forceRefresh = false,
+    options?: { limitCount?: number; unlimited?: boolean }
   ): Promise<Record<string, any>[]> {
-    if (!forceRefresh && cachedRawCollectionDocs.has(collectionName)) {
-      return cachedRawCollectionDocs.get(collectionName)!;
+    const isUnlimited = options?.unlimited === true;
+    const docLimit = isUnlimited ? 0 : Math.max(1, options?.limitCount || 50);
+    const cacheKey = isUnlimited ? `${collectionName}:unlimited` : `${collectionName}:lim_${docLimit}`;
+
+    if (!forceRefresh && cachedRawCollectionDocs.has(cacheKey)) {
+      return cachedRawCollectionDocs.get(cacheKey)!;
     }
 
     await ensureSuperAdminFirebaseSession();
     const targetDb = sisaUangDb || db;
     let snap;
     try {
-      snap = await getDocs(collection(targetDb, collectionName));
+      if (isUnlimited) {
+        snap = await getDocs(collection(targetDb, collectionName));
+      } else {
+        snap = await getDocs(query(collection(targetDb, collectionName), limit(docLimit)));
+      }
     } catch (err) {
       if (isFirestoreQuotaError(err)) {
         useNotificationStore().notifyQuotaExceeded();
       }
       throw err;
     }
-
-    const serializeFirestoreValue = (val: any): any => {
-      if (val === null || val === undefined) return val;
-      if (typeof val === 'object') {
-        if (typeof val.toDate === 'function') {
-          try {
-            return val.toDate().toISOString();
-          } catch {
-            return String(val);
-          }
-        }
-        if ('seconds' in val && 'nanoseconds' in val && typeof val.seconds === 'number') {
-          try {
-            return new Date(val.seconds * 1000).toISOString();
-          } catch {
-            return String(val);
-          }
-        }
-        if (Array.isArray(val)) {
-          return val.map(serializeFirestoreValue);
-        }
-        const out: Record<string, any> = {};
-        for (const [k, v] of Object.entries(val)) {
-          out[k] = serializeFirestoreValue(v);
-        }
-        return out;
-      }
-      return val;
-    };
 
     const docs = snap.docs.map((d) => {
       const rawData = d.data();
@@ -1999,13 +2018,91 @@ export const useAdminStore = defineStore('admin', () => {
       };
     });
 
-    cachedRawCollectionDocs.set(collectionName, docs);
+    cachedRawCollectionDocs.set(cacheKey, docs);
 
     if (collectionName === 'users' && docs.length > usersSummary.value.totalUsers) {
       void syncFirestoreUsersToServerRegistry(true);
     }
 
     return docs;
+  }
+
+  /**
+   * Server-side paginated fetch for Cloud Firestore Raw Collections (Data Explorer).
+   * Strictly limits reads to 50 documents per page with cursor tracking.
+   */
+  async function fetchFirestoreRawCollectionPage(
+    collectionName: string,
+    page = 1,
+    pageSize = 50,
+    forceRefresh = false
+  ): Promise<{ docs: Record<string, any>[]; hasMore: boolean; page: number; pageSize: number }> {
+    const cleanPage = Math.max(1, page);
+    const cleanPageSize = Math.max(1, Math.min(100, pageSize));
+    const cacheKey = `${collectionName}:p${cleanPage}:s${cleanPageSize}`;
+
+    if (forceRefresh) {
+      cachedRawCollectionDocs.delete(cacheKey);
+      rawCollectionCursorMap.delete(collectionName);
+    } else if (cachedRawCollectionDocs.has(cacheKey)) {
+      const cached = cachedRawCollectionDocs.get(cacheKey)!;
+      return {
+        docs: cached,
+        hasMore: cached.length >= cleanPageSize,
+        page: cleanPage,
+        pageSize: cleanPageSize,
+      };
+    }
+
+    await ensureSuperAdminFirebaseSession();
+    const targetDb = sisaUangDb || db;
+
+    if (!rawCollectionCursorMap.has(collectionName)) {
+      rawCollectionCursorMap.set(collectionName, new Map());
+    }
+    const cursorMap = rawCollectionCursorMap.get(collectionName)!;
+
+    let snap;
+    try {
+      if (cleanPage === 1 || !cursorMap.has(cleanPage - 1)) {
+        snap = await getDocs(query(collection(targetDb, collectionName), limit(cleanPageSize + 1)));
+      } else {
+        const prevCursor = cursorMap.get(cleanPage - 1);
+        snap = await getDocs(
+          query(collection(targetDb, collectionName), startAfter(prevCursor), limit(cleanPageSize + 1))
+        );
+      }
+    } catch (err) {
+      if (isFirestoreQuotaError(err)) {
+        useNotificationStore().notifyQuotaExceeded();
+      }
+      throw err;
+    }
+
+    const hasMore = snap.docs.length > cleanPageSize;
+    const pageDocs = hasMore ? snap.docs.slice(0, cleanPageSize) : snap.docs;
+
+    if (pageDocs.length > 0) {
+      cursorMap.set(cleanPage, pageDocs[pageDocs.length - 1]);
+    }
+
+    const docs = pageDocs.map((d) => {
+      const rawData = d.data();
+      const serialized = serializeFirestoreValue(rawData);
+      return {
+        __docId: d.id,
+        id: rawData.id ?? rawData.uid ?? d.id,
+        ...serialized,
+      };
+    });
+
+    cachedRawCollectionDocs.set(cacheKey, docs);
+    return {
+      docs,
+      hasMore,
+      page: cleanPage,
+      pageSize: cleanPageSize,
+    };
   }
 
   /**
@@ -2023,7 +2120,7 @@ export const useAdminStore = defineStore('admin', () => {
     const backupData: Record<string, Record<string, any>[]> = {};
     for (let i = 0; i < collectionsList.length; i++) {
       const colName = collectionsList[i];
-      const docs = await fetchFirestoreRawCollectionDocs(colName, false);
+      const docs = await fetchFirestoreRawCollectionDocs(colName, false, { unlimited: true });
       backupData[colName] = docs;
       if (onProgress) {
         onProgress({
@@ -2170,6 +2267,7 @@ export const useAdminStore = defineStore('admin', () => {
     importConvertedJsonToFirestore,
     fetchFirestoreCollectionStats,
     fetchFirestoreRawCollectionDocs,
+    fetchFirestoreRawCollectionPage,
     fetchAllCollectionsForFullBackup,
     deleteFirestoreCollections,
     dismissInstantAlertBanner,
