@@ -8,8 +8,6 @@ coverage/
 !.env.example
 package-lock.json
 dev-dist/
-.sisa_uang_logs_cache.json
-.sisa_uang_users_cache.json
 firebase-applet-config.json
 .firebase-applet-config.json
 public/assets/aistudio/*
