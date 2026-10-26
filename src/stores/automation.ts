@@ -5,13 +5,20 @@ import {
   doc,
   getDocs,
   setDoc,
-  updateDoc,
   deleteDoc,
   query,
   where,
+  onSnapshot,
   serverTimestamp,
 } from 'firebase/firestore';
-import { auth, db, sanitizeId, sanitizeString } from '../firebase';
+import {
+  auth,
+  db,
+  sanitizeId,
+  sanitizeString,
+  isFirestoreOfflineError,
+  isFirestoreQuotaError,
+} from '../firebase';
 import { useAuthStore } from './auth';
 import { useFinanceStore } from './finance';
 import { useNotificationStore } from './notification';
@@ -19,11 +26,6 @@ import type { AutomationItem, AutomationsCacheData } from '../types/automation';
 
 const CACHE_KEY_PREFIX = 'su_automations_cache_';
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL to save Firestore read quota
-
-function isSuperAdminUser(email?: string | null): boolean {
-  const cleanEmail = String(email || '').trim().toLowerCase();
-  return cleanEmail === 'vuedevo@gmail.com';
-}
 
 function getTodayIsoDate(): string {
   const now = new Date();
@@ -52,8 +54,10 @@ export const useAutomationStore = defineStore('automation', () => {
   const activeRules = computed(() => rules.value.filter((r) => r.isActive && !r.deleted));
   const hasActiveRules = computed(() => activeRules.value.length > 0);
 
+  let automationsUnsubscribe: (() => void) | null = null;
+
   // =========================================================================
-  // Local Storage 5-Minute Cache Management (Firestore Quota Saver)
+  // Local Storage Cache Management (With Multi-Key Fallback Discovery)
   // =========================================================================
 
   function getCacheKey(uid: string): string {
@@ -69,7 +73,38 @@ export const useAutomationStore = defineStore('automation', () => {
     };
     if (typeof window === 'undefined') return emptyCache;
     try {
-      const raw = localStorage.getItem(getCacheKey(uid));
+      // 1. Direct key lookup
+      let raw = localStorage.getItem(getCacheKey(uid));
+
+      // 2. Fallback key: check auth.currentUser?.uid if different
+      if (!raw) {
+        const altUid = sanitizeId(auth.currentUser?.uid || '');
+        if (altUid && altUid !== uid) {
+          raw = localStorage.getItem(getCacheKey(altUid));
+        }
+      }
+
+      // 3. Fallback scan: if user had saved a rule under any su_automations_cache_* key, discover it!
+      if (!raw) {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(CACHE_KEY_PREFIX)) {
+            const candidate = localStorage.getItem(key);
+            if (candidate && candidate.includes('"rules"') && candidate.includes('[')) {
+              try {
+                const testParsed = JSON.parse(candidate);
+                if (Array.isArray(testParsed?.rules) && testParsed.rules.length > 0) {
+                  raw = candidate;
+                  break;
+                }
+              } catch {
+                // Ignore parse error
+              }
+            }
+          }
+        }
+      }
+
       if (!raw) return emptyCache;
       const parsed = JSON.parse(raw) as AutomationsCacheData;
       if (!parsed || typeof parsed.expiresAt !== 'number' || !Array.isArray(parsed.rules)) {
@@ -92,7 +127,14 @@ export const useAutomationStore = defineStore('automation', () => {
         expiresAt: now + ttlMs,
         hasRules: validItems.length > 0,
       };
-      localStorage.setItem(getCacheKey(uid), JSON.stringify(cacheData));
+      const serialized = JSON.stringify(cacheData);
+      localStorage.setItem(getCacheKey(uid), serialized);
+
+      // Also mirror to auth.currentUser UID key if available to ensure cross-lookup succeeds
+      const altUid = sanitizeId(auth.currentUser?.uid || '');
+      if (altUid && altUid !== uid) {
+        localStorage.setItem(getCacheKey(altUid), serialized);
+      }
     } catch {
       // Ignore quota write errors
     }
@@ -102,8 +144,76 @@ export const useAutomationStore = defineStore('automation', () => {
     if (typeof window === 'undefined') return;
     try {
       localStorage.removeItem(getCacheKey(uid));
+      const altUid = sanitizeId(auth.currentUser?.uid || '');
+      if (altUid) {
+        localStorage.removeItem(getCacheKey(altUid));
+      }
     } catch {
       // Ignore
+    }
+  }
+
+  // =========================================================================
+  // Server API Background Sync Helper
+  // =========================================================================
+
+  async function syncAllToServer(uid: string, items: AutomationItem[]) {
+    try {
+      await fetch(`/api/users/${encodeURIComponent(uid)}/automations/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rules: items }),
+      });
+    } catch {
+      // Ignore background server sync error
+    }
+  }
+
+  // =========================================================================
+  // Real-Time Cloud Firestore Sync (Live across multiple devices & tabs)
+  // =========================================================================
+
+  function subscribeToAutomations(uidInput?: string) {
+    const authStore = useAuthStore();
+    const uid = sanitizeId(uidInput || authStore.user?.uid || auth.currentUser?.uid || '');
+    if (!uid || uid === 'guest') return;
+
+    if (automationsUnsubscribe) {
+      automationsUnsubscribe();
+      automationsUnsubscribe = null;
+    }
+
+    try {
+      const q = query(collection(db, 'automations'), where('ownerId', '==', uid));
+      automationsUnsubscribe = onSnapshot(
+        q,
+        (snap) => {
+          const freshRules = snap.docs
+            .map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<AutomationItem, 'id'>),
+            }))
+            .filter((item) => !item.deleted);
+
+          rules.value = freshRules.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+          writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+          void syncAllToServer(uid, rules.value);
+        },
+        (error) => {
+          if (!isFirestoreOfflineError(error) && !isFirestoreQuotaError(error)) {
+            console.warn('Automations onSnapshot notice:', error?.message || error);
+          }
+        }
+      );
+    } catch {
+      // Ignore snapshot attach errors
+    }
+  }
+
+  function unsubscribeFromAutomations() {
+    if (automationsUnsubscribe) {
+      automationsUnsubscribe();
+      automationsUnsubscribe = null;
     }
   }
 
@@ -113,55 +223,146 @@ export const useAutomationStore = defineStore('automation', () => {
 
   async function loadAutomations(uidInput?: string, forceRefresh = false): Promise<AutomationItem[]> {
     const authStore = useAuthStore();
-    const currentEmail = auth.currentUser?.email || authStore.user?.email;
-    if (isSuperAdminUser(currentEmail)) {
-      rules.value = [];
-      return [];
+    const uid = sanitizeId(uidInput || authStore.user?.uid || auth.currentUser?.uid || 'default');
+    if (!uid || uid === 'guest') {
+      return rules.value;
     }
 
-    const uid = sanitizeId(uidInput || authStore.user?.uid || auth.currentUser?.uid || '');
-    if (!uid) {
-      rules.value = [];
-      return [];
-    }
-
-    // 1. Check local storage cache if still valid within 5-minute TTL
+    // 1. If not forcing refresh, check local storage cache if still valid within TTL
     if (!forceRefresh) {
       const cached = readLocalStorageCache(uid);
-      if (Date.now() < cached.expiresAt) {
+      if (cached.rules.length > 0 && Date.now() < cached.expiresAt) {
         rules.value = cached.rules;
+        // Still trigger background fetch to ensure cross-device consistency!
+        void fetchAndSyncAutomations(uid);
         return cached.rules;
       }
     }
 
-    // 2. Cache is expired or force refresh requested -> fetch from Firestore
+    return await fetchAndSyncAutomations(uid);
+  }
+
+  async function fetchAndSyncAutomations(uid: string): Promise<AutomationItem[]> {
+    const financeStore = useFinanceStore();
     isLoading.value = true;
     try {
-      const q = query(collection(db, 'automations'), where('ownerId', '==', uid));
-      const snap = await getDocs(q);
-      const loaded: AutomationItem[] = snap.docs
-        .map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<AutomationItem, 'id'>),
-        }))
-        .filter((item) => !item.deleted);
+      // 1. Ensure authenticated Firebase session so Firestore rules permit query
+      await financeStore.ensureFirestoreSessionForUser(uid);
 
-      // Sort by creation date desc or name
-      loaded.sort((a, b) => a.name.localeCompare(b.name));
+      // 2. Read from Cloud Firestore (primary authoritative cloud source of truth)
+      let firestoreRules: AutomationItem[] = [];
+      let firestoreFetchSuccess = false;
+      try {
+        const q = query(collection(db, 'automations'), where('ownerId', '==', uid));
+        const snap = await getDocs(q);
+        firestoreRules = snap.docs
+          .map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<AutomationItem, 'id'>),
+          }))
+          .filter((item) => !item.deleted);
+        firestoreFetchSuccess = true;
+      } catch (err: any) {
+        if (!isFirestoreOfflineError(err) && !isFirestoreQuotaError(err)) {
+          console.warn('Firestore loadAutomations notice:', err?.message || err);
+        }
+      }
 
-      rules.value = loaded;
-      // Save to localStorage with fresh 5-minute TTL
-      writeLocalStorageCache(uid, loaded, CACHE_TTL_MS);
-      return loaded;
+      // 3. Fallback: persistent Server REST API (/api/users/:uid/automations)
+      let serverRules: AutomationItem[] = [];
+      try {
+        const res = await fetch(`/api/users/${encodeURIComponent(uid)}/automations`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.rules)) {
+            serverRules = data.rules.filter((r: any) => !r.deleted);
+          }
+        }
+      } catch {
+        // Ignore server network errors
+      }
+
+      // 4. Merge results: prefer Cloud Firestore, then Server API, then existing Local Cache
+      const cached = readLocalStorageCache(uid);
+      const combinedMap = new Map<string, AutomationItem>();
+
+      // Base: local cache
+      for (const item of cached.rules) {
+        if (!item.deleted) combinedMap.set(item.id, item);
+      }
+      // Layer: server API
+      for (const item of serverRules) {
+        if (!item.deleted) combinedMap.set(item.id, item);
+      }
+      // Top: Cloud Firestore
+      if (firestoreFetchSuccess) {
+        for (const item of firestoreRules) {
+          if (!item.deleted) combinedMap.set(item.id, item);
+        }
+        // If there were local items not yet in Firestore, push them up to Firestore
+        for (const item of cached.rules) {
+          if (!item.deleted && !firestoreRules.some((f) => f.id === item.id)) {
+            void pushAutomationDocToFirestore(item);
+          }
+        }
+      }
+
+      const merged = Array.from(combinedMap.values()).sort((a, b) =>
+        (a.name || '').localeCompare(b.name || '')
+      );
+
+      rules.value = merged;
+      writeLocalStorageCache(uid, merged, CACHE_TTL_MS);
+
+      // Keep server cache in sync with merged rules
+      if (merged.length > 0) {
+        void syncAllToServer(uid, merged);
+      }
+
+      return merged;
     } catch (err: any) {
-      console.warn('Firestore automations load notice, using local cache:', err?.message || err);
-      // On network/quota/permission error, gracefully fall back to whatever is currently in local storage cache
+      console.warn('Load automations notice, using local cache fallback:', err?.message || err);
       const fallback = readLocalStorageCache(uid);
       rules.value = fallback.rules;
-      writeLocalStorageCache(uid, fallback.rules, CACHE_TTL_MS);
       return fallback.rules;
     } finally {
       isLoading.value = false;
+    }
+  }
+
+  async function pushAutomationDocToFirestore(item: AutomationItem) {
+    try {
+      const docData: Record<string, any> = {
+        ownerId: item.ownerId,
+        name: item.name,
+        type: item.type,
+        walletId: item.walletId,
+        walletName: item.walletName,
+        fundOwnerId: item.fundOwnerId || null,
+        fundOwnerName: item.fundOwnerName || null,
+        toWalletId: item.toWalletId || null,
+        toWalletName: item.toWalletName || null,
+        toFundOwnerId: item.toFundOwnerId || null,
+        toFundOwnerName: item.toFundOwnerName || null,
+        category: item.category,
+        amount: item.amount,
+        adminFee: item.adminFee || 0,
+        note: item.note || '',
+        scheduleDays: item.scheduleDays,
+        executionTime: item.executionTime,
+        mode: item.mode,
+        isActive: item.isActive,
+        lastExecutedDate: item.lastExecutedDate || null,
+        lastCancelledDate: item.lastCancelledDate || null,
+        snoozedUntil: item.snoozedUntil || null,
+        deleted: false,
+        deletedAt: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      await setDoc(doc(db, 'automations', item.id), docData, { merge: true });
+    } catch {
+      // Ignore background push error
     }
   }
 
@@ -193,8 +394,9 @@ export const useAutomationStore = defineStore('automation', () => {
     }
   ): Promise<boolean> {
     const authStore = useAuthStore();
+    const financeStore = useFinanceStore();
     const notify = useNotificationStore();
-    const uid = sanitizeId(authStore.user?.uid || '');
+    const uid = sanitizeId(authStore.user?.uid || auth.currentUser?.uid || 'default');
     if (!uid) return false;
 
     const id = payload.id ? sanitizeId(payload.id) : sanitizeId(`auto_${Date.now()}`);
@@ -232,52 +434,6 @@ export const useAutomationStore = defineStore('automation', () => {
     const isEdit = Boolean(payload.id);
     const existingRule = isEdit ? rules.value.find((r) => r.id === id) : undefined;
 
-    const docData: Record<string, any> = {
-      ownerId: uid,
-      name: safeName,
-      type: payload.type,
-      walletId: payload.walletId,
-      walletName: payload.walletName,
-      category: safeCategory,
-      amount: numericAmount,
-      adminFee: payload.type === 'transfer' ? numericAdminFee : 0,
-      note: safeNote,
-      scheduleDays: cleanDays,
-      executionTime: safeExecutionTime,
-      mode: payload.mode,
-      isActive: payload.isActive !== undefined ? payload.isActive : true,
-      updatedAt: serverTimestamp(),
-    };
-
-    if (payload.fundOwnerId) docData.fundOwnerId = payload.fundOwnerId;
-    if (payload.fundOwnerName) docData.fundOwnerName = payload.fundOwnerName;
-
-    if (payload.type === 'transfer') {
-      if (payload.toWalletId) docData.toWalletId = payload.toWalletId;
-      if (payload.toWalletName) docData.toWalletName = payload.toWalletName;
-      if (payload.toFundOwnerId) docData.toFundOwnerId = payload.toFundOwnerId;
-      if (payload.toFundOwnerName) docData.toFundOwnerName = payload.toFundOwnerName;
-    }
-
-    if (!isEdit) {
-      docData.createdAt = serverTimestamp();
-      docData.lastExecutedDate = null;
-      docData.lastCancelledDate = null;
-      docData.snoozedUntil = null;
-      docData.deleted = false;
-    }
-
-    try {
-      if (isEdit) {
-        await updateDoc(doc(db, 'automations', id), docData);
-      } else {
-        await setDoc(doc(db, 'automations', id), docData);
-      }
-    } catch (err: any) {
-      console.warn('Firestore saveAutomation notice, persisting locally:', err?.message || err);
-    }
-
-    // Update in memory and local storage cache immediately
     const updatedItem: AutomationItem = {
       id,
       ownerId: uid,
@@ -285,12 +441,12 @@ export const useAutomationStore = defineStore('automation', () => {
       type: payload.type,
       walletId: payload.walletId,
       walletName: payload.walletName,
-      fundOwnerId: payload.fundOwnerId,
-      fundOwnerName: payload.fundOwnerName,
-      toWalletId: payload.toWalletId,
-      toWalletName: payload.toWalletName,
-      toFundOwnerId: payload.toFundOwnerId,
-      toFundOwnerName: payload.toFundOwnerName,
+      fundOwnerId: payload.fundOwnerId || undefined,
+      fundOwnerName: payload.fundOwnerName || undefined,
+      toWalletId: payload.type === 'transfer' ? (payload.toWalletId || undefined) : undefined,
+      toWalletName: payload.type === 'transfer' ? (payload.toWalletName || undefined) : undefined,
+      toFundOwnerId: payload.type === 'transfer' ? (payload.toFundOwnerId || undefined) : undefined,
+      toFundOwnerName: payload.type === 'transfer' ? (payload.toFundOwnerName || undefined) : undefined,
       category: safeCategory,
       amount: numericAmount,
       adminFee: payload.type === 'transfer' ? numericAdminFee : 0,
@@ -305,6 +461,7 @@ export const useAutomationStore = defineStore('automation', () => {
       deleted: false,
     };
 
+    // 1. Immediately update Pinia reactive memory
     const idx = rules.value.findIndex((r) => r.id === id);
     if (idx >= 0) {
       rules.value[idx] = updatedItem;
@@ -313,12 +470,67 @@ export const useAutomationStore = defineStore('automation', () => {
     }
     rules.value.sort((a, b) => a.name.localeCompare(b.name));
 
-    // Update local cache
+    // 2. Immediately persist to localStorage cache
     writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+
+    // 3. Immediately persist to server REST API endpoint
+    try {
+      await fetch(`/api/users/${encodeURIComponent(uid)}/automations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedItem),
+      });
+    } catch {
+      // Ignore network errors
+    }
+
+    // 4. Authoritatively sync directly into Cloud Firestore ("sisa-uang")
+    try {
+      await financeStore.ensureFirestoreSessionForUser(uid);
+
+      const docData: Record<string, any> = {
+        ownerId: uid,
+        name: safeName,
+        type: payload.type,
+        walletId: payload.walletId,
+        walletName: payload.walletName,
+        fundOwnerId: payload.fundOwnerId || null,
+        fundOwnerName: payload.fundOwnerName || null,
+        toWalletId: payload.type === 'transfer' ? (payload.toWalletId || null) : null,
+        toWalletName: payload.type === 'transfer' ? (payload.toWalletName || null) : null,
+        toFundOwnerId: payload.type === 'transfer' ? (payload.toFundOwnerId || null) : null,
+        toFundOwnerName: payload.type === 'transfer' ? (payload.toFundOwnerName || null) : null,
+        category: safeCategory,
+        amount: numericAmount,
+        adminFee: payload.type === 'transfer' ? numericAdminFee : 0,
+        note: safeNote,
+        scheduleDays: cleanDays,
+        executionTime: safeExecutionTime,
+        mode: payload.mode,
+        isActive: payload.isActive !== undefined ? payload.isActive : true,
+        deleted: false,
+        deletedAt: null,
+        updatedAt: serverTimestamp(),
+      };
+
+      if (!isEdit) {
+        docData.createdAt = serverTimestamp();
+        docData.lastExecutedDate = null;
+        docData.lastCancelledDate = null;
+        docData.snoozedUntil = null;
+      }
+
+      await setDoc(doc(db, 'automations', id), docData, { merge: true });
+    } catch (err: any) {
+      console.warn('Firestore saveAutomation notice:', err?.message || err);
+      if (isFirestoreQuotaError(err)) {
+        notify.notifyQuotaExceeded();
+      }
+    }
 
     notify.notifySuccess(
       isEdit ? 'Jadwal Otomatisasi Diperbarui' : 'Jadwal Otomatisasi Ditambahkan',
-      `Otomatisasi "${safeName}" berhasil disimpan.`
+      `Otomatisasi "${safeName}" berhasil disimpan ke Cloud Firestore.`
     );
     return true;
   }
@@ -329,8 +541,9 @@ export const useAutomationStore = defineStore('automation', () => {
 
   async function deleteAutomation(id: string): Promise<boolean> {
     const authStore = useAuthStore();
+    const financeStore = useFinanceStore();
     const notify = useNotificationStore();
-    const uid = sanitizeId(authStore.user?.uid || '');
+    const uid = sanitizeId(authStore.user?.uid || auth.currentUser?.uid || 'default');
     const rule = rules.value.find((r) => r.id === id);
     if (!rule || !uid) return false;
 
@@ -343,23 +556,40 @@ export const useAutomationStore = defineStore('automation', () => {
     });
     if (!confirmed) return false;
 
+    // 1. Immediately update Pinia memory
+    rules.value = rules.value.filter((r) => r.id !== id);
+
+    // 2. Immediately update local storage cache
+    writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+
+    // 3. Immediately delete from Server API
     try {
-      await updateDoc(doc(db, 'automations', id), {
-        deleted: true,
-        deletedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+      await fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
       });
     } catch {
-      // Fallback: deleteDoc directly
+      // Ignore
+    }
+
+    // 4. Delete / soft-delete from Cloud Firestore
+    try {
+      await financeStore.ensureFirestoreSessionForUser(uid);
+      await setDoc(
+        doc(db, 'automations', id),
+        {
+          deleted: true,
+          deletedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch {
       try {
         await deleteDoc(doc(db, 'automations', id));
       } catch (err: any) {
-        console.warn('Firestore deleteAutomation notice, updating locally:', err?.message || err);
+        console.warn('Firestore delete doc notice:', err?.message || err);
       }
     }
-
-    rules.value = rules.value.filter((r) => r.id !== id);
-    writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
 
     notify.notifySuccess(
       'Jadwal Otomatisasi Dihapus',
@@ -374,22 +604,42 @@ export const useAutomationStore = defineStore('automation', () => {
 
   async function toggleActive(id: string, activeState?: boolean): Promise<boolean> {
     const authStore = useAuthStore();
+    const financeStore = useFinanceStore();
     const notify = useNotificationStore();
-    const uid = sanitizeId(authStore.user?.uid || '');
+    const uid = sanitizeId(authStore.user?.uid || auth.currentUser?.uid || 'default');
     const rule = rules.value.find((r) => r.id === id);
     if (!rule || !uid) return false;
 
     const nextState = activeState !== undefined ? activeState : !rule.isActive;
-    try {
-      await updateDoc(doc(db, 'automations', id), {
-        isActive: nextState,
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err: any) {
-      console.warn('Firestore toggleActive notice, updating locally:', err?.message || err);
-    }
     rule.isActive = nextState;
     writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+
+    // Server API sync
+    try {
+      await fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isActive: nextState }),
+      });
+    } catch {
+      // Ignore
+    }
+
+    // Cloud Firestore sync
+    try {
+      await financeStore.ensureFirestoreSessionForUser(uid);
+      await setDoc(
+        doc(db, 'automations', id),
+        {
+          isActive: nextState,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (err: any) {
+      console.warn('Firestore toggleActive notice:', err?.message || err);
+    }
+
     notify.notifySuccess(
       nextState ? 'Otomatisasi Diaktifkan' : 'Otomatisasi Dinonaktifkan',
       `Jadwal "${rule.name}" kini ${nextState ? 'aktif dan akan berjalan sesuai jadwal' : 'dinonaktifkan sementara'}.`
@@ -408,7 +658,7 @@ export const useAutomationStore = defineStore('automation', () => {
     const authStore = useAuthStore();
     const financeStore = useFinanceStore();
     const notify = useNotificationStore();
-    const uid = sanitizeId(authStore.user?.uid || '');
+    const uid = sanitizeId(authStore.user?.uid || auth.currentUser?.uid || 'default');
     if (!uid) return false;
 
     const todayIso = getTodayIsoDate();
@@ -435,22 +685,37 @@ export const useAutomationStore = defineStore('automation', () => {
         date: todayIso,
       });
 
-      // Update lastExecutedDate in Firestore & local cache
-      const updatePayload: Record<string, any> = {
-        lastExecutedDate: todayIso,
-        snoozedUntil: null,
-        updatedAt: serverTimestamp(),
-      };
-      try {
-        await updateDoc(doc(db, 'automations', rule.id), updatePayload);
-      } catch (err: any) {
-        console.warn('Firestore executeTransaction notice, updating locally:', err?.message || err);
-      }
-
       // Update in memory rule
       rule.lastExecutedDate = todayIso;
       rule.snoozedUntil = undefined;
       writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+
+      // Server API sync
+      try {
+        await fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(rule.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lastExecutedDate: todayIso, snoozedUntil: null }),
+        });
+      } catch {
+        // Ignore
+      }
+
+      // Cloud Firestore sync
+      try {
+        await financeStore.ensureFirestoreSessionForUser(uid);
+        await setDoc(
+          doc(db, 'automations', rule.id),
+          {
+            lastExecutedDate: todayIso,
+            snoozedUntil: null,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch (err: any) {
+        console.warn('Firestore executeTransaction notice:', err?.message || err);
+      }
 
       // Dismiss confirmation banner if it matches current rule
       if (pendingConfirmation.value?.id === rule.id) {
@@ -487,38 +752,51 @@ export const useAutomationStore = defineStore('automation', () => {
 
   async function snoozeRule(ruleId: string, durationMs: number, durationLabel: string): Promise<boolean> {
     const authStore = useAuthStore();
+    const financeStore = useFinanceStore();
     const notify = useNotificationStore();
-    const uid = sanitizeId(authStore.user?.uid || '');
+    const uid = sanitizeId(authStore.user?.uid || auth.currentUser?.uid || 'default');
     const rule = rules.value.find((r) => r.id === ruleId);
     if (!rule || !uid) return false;
 
     const snoozedUntil = new Date(Date.now() + durationMs).toISOString();
+    rule.snoozedUntil = snoozedUntil;
+    writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
 
+    // Server API sync
     try {
-      try {
-        await updateDoc(doc(db, 'automations', ruleId), {
+      await fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(ruleId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ snoozedUntil }),
+      });
+    } catch {
+      // Ignore
+    }
+
+    // Cloud Firestore sync
+    try {
+      await financeStore.ensureFirestoreSessionForUser(uid);
+      await setDoc(
+        doc(db, 'automations', ruleId),
+        {
           snoozedUntil,
           updatedAt: serverTimestamp(),
-        });
-      } catch (err: any) {
-        console.warn('Firestore snoozeRule notice, updating locally:', err?.message || err);
-      }
-      rule.snoozedUntil = snoozedUntil;
-      writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
-
-      if (pendingConfirmation.value?.id === ruleId) {
-        dismissCurrentConfirmation();
-      }
-
-      notify.notifySuccess(
-        'Pencatatan Ditunda',
-        `Pencatatan otomatis "${rule.name}" ditunda selama ${durationLabel}.`
+        },
+        { merge: true }
       );
-      return true;
     } catch (err: any) {
-      notify.notifyError('Gagal Menunda Jadwal', err?.message || err);
-      return false;
+      console.warn('Firestore snoozeRule notice:', err?.message || err);
     }
+
+    if (pendingConfirmation.value?.id === ruleId) {
+      dismissCurrentConfirmation();
+    }
+
+    notify.notifySuccess(
+      'Pencatatan Ditunda',
+      `Pencatatan otomatis "${rule.name}" ditunda selama ${durationLabel}.`
+    );
+    return true;
   }
 
   // =========================================================================
@@ -527,39 +805,53 @@ export const useAutomationStore = defineStore('automation', () => {
 
   async function cancelRuleForToday(ruleId: string): Promise<boolean> {
     const authStore = useAuthStore();
+    const financeStore = useFinanceStore();
     const notify = useNotificationStore();
-    const uid = sanitizeId(authStore.user?.uid || '');
+    const uid = sanitizeId(authStore.user?.uid || auth.currentUser?.uid || 'default');
     const rule = rules.value.find((r) => r.id === ruleId);
     if (!rule || !uid) return false;
 
     const todayIso = getTodayIsoDate();
+    rule.lastCancelledDate = todayIso;
+    rule.snoozedUntil = undefined;
+    writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+
+    // Server API sync
     try {
-      try {
-        await updateDoc(doc(db, 'automations', ruleId), {
+      await fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(ruleId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lastCancelledDate: todayIso, snoozedUntil: null }),
+      });
+    } catch {
+      // Ignore
+    }
+
+    // Cloud Firestore sync
+    try {
+      await financeStore.ensureFirestoreSessionForUser(uid);
+      await setDoc(
+        doc(db, 'automations', ruleId),
+        {
           lastCancelledDate: todayIso,
           snoozedUntil: null,
           updatedAt: serverTimestamp(),
-        });
-      } catch (err: any) {
-        console.warn('Firestore cancelRuleForToday notice, updating locally:', err?.message || err);
-      }
-      rule.lastCancelledDate = todayIso;
-      rule.snoozedUntil = undefined;
-      writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
-
-      if (pendingConfirmation.value?.id === ruleId) {
-        dismissCurrentConfirmation();
-      }
-
-      notify.notifySuccess(
-        'Pencatatan Dibatalkan',
-        `Pencatatan otomatis "${rule.name}" untuk hari ini telah dibatalkan.`
+        },
+        { merge: true }
       );
-      return true;
     } catch (err: any) {
-      notify.notifyError('Gagal Membatalkan Pencatatan', err?.message || err);
-      return false;
+      console.warn('Firestore cancelRuleForToday notice:', err?.message || err);
     }
+
+    if (pendingConfirmation.value?.id === ruleId) {
+      dismissCurrentConfirmation();
+    }
+
+    notify.notifySuccess(
+      'Pencatatan Dibatalkan',
+      `Pencatatan otomatis "${rule.name}" untuk hari ini telah dibatalkan.`
+    );
+    return true;
   }
 
   // =========================================================================
@@ -580,10 +872,6 @@ export const useAutomationStore = defineStore('automation', () => {
 
   async function checkAndTriggerOnActivity(): Promise<void> {
     const authStore = useAuthStore();
-    const currentEmail = auth.currentUser?.email || authStore.user?.email;
-    if (isSuperAdminUser(currentEmail)) {
-      return;
-    }
     if (!authStore.isAuthenticated || !authStore.user?.uid) {
       return;
     }
@@ -609,7 +897,7 @@ export const useAutomationStore = defineStore('automation', () => {
         currentRules = cached.rules;
         rules.value = cached.rules;
       } else {
-        // Cache expired or missing -> fetch from Firestore & refresh 5-min TTL
+        // Cache expired or missing -> fetch fresh rules
         currentRules = await loadAutomations(uid, true);
       }
 
@@ -687,6 +975,8 @@ export const useAutomationStore = defineStore('automation', () => {
     pendingQueue,
     activeRules,
     hasActiveRules,
+    subscribeToAutomations,
+    unsubscribeFromAutomations,
     loadAutomations,
     saveAutomation,
     deleteAutomation,

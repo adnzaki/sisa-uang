@@ -112,10 +112,16 @@ const categoryFilterOptions = computed<SelectOptionItem[]>(() => {
     }
   }
 
+  // Set of names that are in active categories
+  const activeNames = new Set(financeStore.categories.map((c) => c.name.toLowerCase().trim()));
+
   for (const tx of financeStore.transactions) {
     if (!tx.category) continue;
     if (typeFilter.value !== 'all' && tx.type !== typeFilter.value) continue;
-    if (!seen.has(tx.category)) {
+    if (
+      !seen.has(tx.category) &&
+      (activeNames.has(tx.category.toLowerCase().trim()) || tx.type === 'transfer')
+    ) {
       seen.add(tx.category);
       items.push({
         value: tx.category,

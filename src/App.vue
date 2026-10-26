@@ -474,8 +474,8 @@ function handleAppVisibilityOrFocus() {
   if (authStore.isAuthenticated && authStore.user?.uid) {
     if (!isCurrentSuperAdmin()) {
       void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid);
-      void automationStore.checkAndTriggerOnActivity();
     }
+    void automationStore.checkAndTriggerOnActivity();
     if (typeof themeStore.fetchRemoteReportSettings === 'function') {
       void themeStore.fetchRemoteReportSettings(authStore.user.uid);
     }
@@ -484,7 +484,7 @@ function handleAppVisibilityOrFocus() {
 
 let activityDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 function handleUserActivity() {
-  if (!authStore.isAuthenticated || isCurrentSuperAdmin()) return;
+  if (!authStore.isAuthenticated) return;
   if (activityDebounceTimer) return;
   activityDebounceTimer = setTimeout(() => {
     activityDebounceTimer = null;
@@ -529,8 +529,8 @@ watch(
         } else {
           financeStore.initFinanceData(uid);
         }
-        void automationStore.loadAutomations(uid);
       }
+      void automationStore.loadAutomations(uid);
     } else {
       financeStore.cleanupListeners();
       adminStore.stopRealtimeMonitoring();

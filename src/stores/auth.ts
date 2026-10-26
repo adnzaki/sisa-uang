@@ -1703,7 +1703,11 @@ export const useAuthStore = defineStore('auth', () => {
           try {
             await signInWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
           } catch {
-            // Ignore
+            try {
+              await createUserWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
+            } catch {
+              // Ignore
+            }
           }
         }
       } else {

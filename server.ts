@@ -348,6 +348,92 @@ async function syncReportSettingsToPeer(ownerId: string, record: ServerReportSet
   }
 }
 
+export interface ServerAutomationRecord {
+  id: string;
+  ownerId: string;
+  name: string;
+  type: 'income' | 'expense' | 'transfer';
+  walletId: string;
+  walletName: string;
+  fundOwnerId?: string;
+  fundOwnerName?: string;
+  toWalletId?: string;
+  toWalletName?: string;
+  toFundOwnerId?: string;
+  toFundOwnerName?: string;
+  category: string;
+  amount: number;
+  adminFee?: number;
+  note: string;
+  scheduleDays: number[];
+  executionTime: string;
+  mode: 'with_confirmation' | 'without_confirmation';
+  isActive: boolean;
+  lastExecutedDate?: string | null;
+  lastCancelledDate?: string | null;
+  snoozedUntil?: string | null;
+  deleted?: boolean;
+  deletedAt?: string | null;
+  createdAt?: string;
+  updatedAt: string;
+}
+
+const AUTOMATIONS_CACHE_FILE = path.join(__dirname, '.sisa_uang_automations_cache.json');
+const automationsStore = new Map<string, ServerAutomationRecord>();
+
+function loadPersistedAutomationsCache() {
+  try {
+    if (fs.existsSync(AUTOMATIONS_CACHE_FILE)) {
+      const raw = fs.readFileSync(AUTOMATIONS_CACHE_FILE, 'utf8');
+      const list = JSON.parse(raw) as ServerAutomationRecord[];
+      if (Array.isArray(list)) {
+        automationsStore.clear();
+        for (const item of list) {
+          if (item && item.id) {
+            automationsStore.set(item.id, item);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore cache read error
+  }
+}
+
+function savePersistedAutomationsCache() {
+  try {
+    const list = Array.from(automationsStore.values());
+    fs.writeFileSync(AUTOMATIONS_CACHE_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch {
+    // Ignore cache write error
+  }
+}
+
+loadPersistedAutomationsCache();
+
+async function syncAutomationToPeer(ownerId: string, record: ServerAutomationRecord, isDelete = false) {
+  try {
+    const peerUrls = [DEV_APP_URL, PRE_APP_URL];
+    for (const pUrl of peerUrls) {
+      if (isDelete) {
+        void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/automations/${encodeURIComponent(record.id)}?peer=1`, {
+          method: 'DELETE',
+          signal: AbortSignal.timeout(3000),
+        }).catch(() => {});
+      } else {
+        void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/automations?peer=1`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(record),
+          signal: AbortSignal.timeout(3000),
+        }).catch(() => {});
+      }
+    }
+  } catch {
+    // Ignore peer sync network error
+  }
+}
+
 const otpChallenges = new Map<string, OtpChallenge>();
 const verifiedAdminTokens = new Map<string, { email: string; verifiedAt: number }>();
 const failedLoginTracker = new Map<string, number>();
@@ -1832,6 +1918,247 @@ async function startServer() {
       success: true,
       updatedAt: record.updatedAt,
       reportSettings: record,
+    });
+  });
+
+  // =========================================================================
+  // Automations Persistence Endpoints (/api/users/:uid/automations)
+  // =========================================================================
+
+  app.get('/api/users/:uid/automations', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_');
+
+    let userRules = Array.from(automationsStore.values()).filter(
+      (r) => (r.ownerId === uid || r.ownerId === rawUid) && !r.deleted
+    );
+
+    // If empty and uid is super admin / alias, check other known admin identifiers
+    if (userRules.length === 0 && (uid.includes('vuedevo') || uid === 'admin_vuedevo_01' || rawUid === 'KlSX6JgegtUIsQinZRKp535OJ6E3')) {
+      userRules = Array.from(automationsStore.values()).filter(
+        (r) => (r.ownerId.includes('vuedevo') || r.ownerId === 'admin_vuedevo_01' || r.ownerId === 'KlSX6JgegtUIsQinZRKp535OJ6E3') && !r.deleted
+      );
+    }
+
+    userRules.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    res.json({
+      success: true,
+      count: userRules.length,
+      rules: userRules,
+    });
+  });
+
+  app.post('/api/users/:uid/automations', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const body = req.body || {};
+
+    const id = String(body.id || `auto_${Date.now()}`).trim();
+    const record: ServerAutomationRecord = {
+      id,
+      ownerId: uid,
+      name: String(body.name || 'Catat Otomatis').slice(0, 100),
+      type: body.type === 'income' || body.type === 'transfer' ? body.type : 'expense',
+      walletId: String(body.walletId || '').slice(0, 128),
+      walletName: String(body.walletName || 'Dompet').slice(0, 60),
+      fundOwnerId: body.fundOwnerId ? String(body.fundOwnerId).slice(0, 128) : undefined,
+      fundOwnerName: body.fundOwnerName ? String(body.fundOwnerName).slice(0, 60) : undefined,
+      toWalletId: body.toWalletId ? String(body.toWalletId).slice(0, 128) : undefined,
+      toWalletName: body.toWalletName ? String(body.toWalletName).slice(0, 60) : undefined,
+      toFundOwnerId: body.toFundOwnerId ? String(body.toFundOwnerId).slice(0, 128) : undefined,
+      toFundOwnerName: body.toFundOwnerName ? String(body.toFundOwnerName).slice(0, 60) : undefined,
+      category: String(body.category || 'Lainnya').slice(0, 50),
+      amount: Math.abs(Number(body.amount) || 0),
+      adminFee: Math.max(0, Number(body.adminFee) || 0),
+      note: String(body.note || '').slice(0, 200),
+      scheduleDays: Array.isArray(body.scheduleDays)
+        ? body.scheduleDays.map((d: any) => Math.floor(Number(d))).filter((d: number) => d >= 1 && d <= 31)
+        : [25],
+      executionTime: String(body.executionTime || '09:00').slice(0, 5),
+      mode: body.mode === 'without_confirmation' ? 'without_confirmation' : 'with_confirmation',
+      isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
+      lastExecutedDate: body.lastExecutedDate || null,
+      lastCancelledDate: body.lastCancelledDate || null,
+      snoozedUntil: body.snoozedUntil || null,
+      deleted: false,
+      createdAt: body.createdAt || nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    automationsStore.set(id, record);
+    savePersistedAutomationsCache();
+
+    const isFromPeer = req.query.peer === '1';
+    if (!isFromPeer) {
+      void syncAutomationToPeer(uid, record, false);
+    }
+
+    res.json({
+      success: true,
+      rule: record,
+    });
+  });
+
+  app.put('/api/users/:uid/automations/:id', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const id = String(req.params.id || '').trim();
+    const body = req.body || {};
+
+    const existing = automationsStore.get(id);
+    const record: ServerAutomationRecord = {
+      id,
+      ownerId: uid,
+      name: String(body.name || existing?.name || 'Catat Otomatis').slice(0, 100),
+      type: body.type === 'income' || body.type === 'transfer' ? body.type : (existing?.type || 'expense'),
+      walletId: String(body.walletId || existing?.walletId || '').slice(0, 128),
+      walletName: String(body.walletName || existing?.walletName || 'Dompet').slice(0, 60),
+      fundOwnerId: body.fundOwnerId !== undefined ? String(body.fundOwnerId || '').slice(0, 128) : existing?.fundOwnerId,
+      fundOwnerName: body.fundOwnerName !== undefined ? String(body.fundOwnerName || '').slice(0, 60) : existing?.fundOwnerName,
+      toWalletId: body.toWalletId !== undefined ? String(body.toWalletId || '').slice(0, 128) : existing?.toWalletId,
+      toWalletName: body.toWalletName !== undefined ? String(body.toWalletName || '').slice(0, 60) : existing?.toWalletName,
+      toFundOwnerId: body.toFundOwnerId !== undefined ? String(body.toFundOwnerId || '').slice(0, 128) : existing?.toFundOwnerId,
+      toFundOwnerName: body.toFundOwnerName !== undefined ? String(body.toFundOwnerName || '').slice(0, 60) : existing?.toFundOwnerName,
+      category: String(body.category || existing?.category || 'Lainnya').slice(0, 50),
+      amount: body.amount !== undefined ? Math.abs(Number(body.amount) || 0) : (existing?.amount || 0),
+      adminFee: body.adminFee !== undefined ? Math.max(0, Number(body.adminFee) || 0) : (existing?.adminFee || 0),
+      note: String(body.note !== undefined ? body.note : (existing?.note || '')).slice(0, 200),
+      scheduleDays: Array.isArray(body.scheduleDays)
+        ? body.scheduleDays.map((d: any) => Math.floor(Number(d))).filter((d: number) => d >= 1 && d <= 31)
+        : (existing?.scheduleDays || [25]),
+      executionTime: String(body.executionTime || existing?.executionTime || '09:00').slice(0, 5),
+      mode: body.mode === 'without_confirmation' ? 'without_confirmation' : 'with_confirmation',
+      isActive: body.isActive !== undefined ? Boolean(body.isActive) : (existing?.isActive !== undefined ? existing.isActive : true),
+      lastExecutedDate: body.lastExecutedDate !== undefined ? body.lastExecutedDate : (existing?.lastExecutedDate || null),
+      lastCancelledDate: body.lastCancelledDate !== undefined ? body.lastCancelledDate : (existing?.lastCancelledDate || null),
+      snoozedUntil: body.snoozedUntil !== undefined ? body.snoozedUntil : (existing?.snoozedUntil || null),
+      deleted: false,
+      createdAt: existing?.createdAt || nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    automationsStore.set(id, record);
+    savePersistedAutomationsCache();
+
+    const isFromPeer = req.query.peer === '1';
+    if (!isFromPeer) {
+      void syncAutomationToPeer(uid, record, false);
+    }
+
+    res.json({
+      success: true,
+      rule: record,
+    });
+  });
+
+  app.patch('/api/users/:uid/automations/:id', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const id = String(req.params.id || '').trim();
+    const body = req.body || {};
+
+    const existing = automationsStore.get(id);
+    if (!existing) {
+      res.status(404).json({ error: 'Automation rule not found' });
+      return;
+    }
+
+    if (body.isActive !== undefined) existing.isActive = Boolean(body.isActive);
+    if (body.lastExecutedDate !== undefined) existing.lastExecutedDate = body.lastExecutedDate;
+    if (body.lastCancelledDate !== undefined) existing.lastCancelledDate = body.lastCancelledDate;
+    if (body.snoozedUntil !== undefined) existing.snoozedUntil = body.snoozedUntil;
+    if (body.deleted !== undefined) existing.deleted = Boolean(body.deleted);
+    existing.updatedAt = nowIso();
+
+    automationsStore.set(id, existing);
+    savePersistedAutomationsCache();
+
+    const isFromPeer = req.query.peer === '1';
+    if (!isFromPeer) {
+      void syncAutomationToPeer(uid, existing, false);
+    }
+
+    res.json({
+      success: true,
+      rule: existing,
+    });
+  });
+
+  app.delete('/api/users/:uid/automations/:id', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const id = String(req.params.id || '').trim();
+
+    const existing = automationsStore.get(id);
+    if (existing) {
+      existing.deleted = true;
+      existing.deletedAt = nowIso();
+      existing.updatedAt = nowIso();
+      automationsStore.set(id, existing);
+      savePersistedAutomationsCache();
+
+      const isFromPeer = req.query.peer === '1';
+      if (!isFromPeer) {
+        void syncAutomationToPeer(uid, existing, true);
+      }
+    }
+
+    res.json({
+      success: true,
+      deletedId: id,
+    });
+  });
+
+  app.post('/api/users/:uid/automations/batch', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const items = Array.isArray(req.body?.rules) ? req.body.rules : [];
+
+    let count = 0;
+    for (const item of items) {
+      if (item && item.id) {
+        const id = String(item.id);
+        const record: ServerAutomationRecord = {
+          id,
+          ownerId: uid,
+          name: String(item.name || 'Catat Otomatis').slice(0, 100),
+          type: item.type === 'income' || item.type === 'transfer' ? item.type : 'expense',
+          walletId: String(item.walletId || '').slice(0, 128),
+          walletName: String(item.walletName || 'Dompet').slice(0, 60),
+          fundOwnerId: item.fundOwnerId ? String(item.fundOwnerId).slice(0, 128) : undefined,
+          fundOwnerName: item.fundOwnerName ? String(item.fundOwnerName).slice(0, 60) : undefined,
+          toWalletId: item.toWalletId ? String(item.toWalletId).slice(0, 128) : undefined,
+          toWalletName: item.toWalletName ? String(item.toWalletName).slice(0, 60) : undefined,
+          toFundOwnerId: item.toFundOwnerId ? String(item.toFundOwnerId).slice(0, 128) : undefined,
+          toFundOwnerName: item.toFundOwnerName ? String(item.toFundOwnerName).slice(0, 60) : undefined,
+          category: String(item.category || 'Lainnya').slice(0, 50),
+          amount: Math.abs(Number(item.amount) || 0),
+          adminFee: Math.max(0, Number(item.adminFee) || 0),
+          note: String(item.note || '').slice(0, 200),
+          scheduleDays: Array.isArray(item.scheduleDays) ? item.scheduleDays : [25],
+          executionTime: String(item.executionTime || '09:00').slice(0, 5),
+          mode: item.mode === 'without_confirmation' ? 'without_confirmation' : 'with_confirmation',
+          isActive: item.isActive !== undefined ? Boolean(item.isActive) : true,
+          lastExecutedDate: item.lastExecutedDate || null,
+          lastCancelledDate: item.lastCancelledDate || null,
+          snoozedUntil: item.snoozedUntil || null,
+          deleted: Boolean(item.deleted),
+          createdAt: item.createdAt || nowIso(),
+          updatedAt: nowIso(),
+        };
+        automationsStore.set(id, record);
+        count++;
+      }
+    }
+
+    if (count > 0) {
+      savePersistedAutomationsCache();
+    }
+
+    res.json({
+      success: true,
+      syncedCount: count,
     });
   });
 

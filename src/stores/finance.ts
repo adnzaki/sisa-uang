@@ -21,6 +21,7 @@ import {
 } from 'firebase/firestore';
 import {
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   signInAnonymously,
 } from 'firebase/auth';
 import {
@@ -558,8 +559,14 @@ export const useFinanceStore = defineStore('finance', () => {
         await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
         await ensureUserDocExistsForSyncToken(uid);
         return true;
-      } catch {
-        // Bridge sign-in was not available
+      } catch (signInErr: any) {
+        try {
+          await createUserWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
+          await ensureUserDocExistsForSyncToken(uid);
+          return true;
+        } catch {
+          // Bridge sign-in was not available
+        }
       }
     }
 
@@ -1813,6 +1820,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
     isSyncedWithFirestore.value = true;
     saveLocalSnapshot(uid, true, effectiveSyncToken);
+    void reconcileCustomizedCategories(uid);
 
     // If initialPage1Items were fetched, also pre-populate Page 1 cache if total count <= 24
     if (initialPage1Items.length > 0 && initialPage1Items.length < 25) {
@@ -2060,9 +2068,31 @@ export const useFinanceStore = defineStore('finance', () => {
       for (const b of budgets.value) {
         if (b.period && /^\d{4}-\d{2}$/.test(b.period)) periodSet.add(b.period);
       }
-      budgetPeriods.value = Array.from(periodSet).sort((a, b) => b.localeCompare(a));
-
       syncWalletTotalBalancesFromHolders();
+
+      // Immediately reconcile any cached transactions/budgets if a default category was renamed
+      if (rawUserCategories.value.length > 0 && defaultCategories.value.length > 0) {
+        const prefix = `${uid}_def_`;
+        for (const userCat of rawUserCategories.value) {
+          if (userCat.deleted || !userCat.id.startsWith(prefix)) continue;
+          const baseId = userCat.id.slice(prefix.length);
+          const defCat = defaultCategories.value.find((d) => d.id === baseId);
+          if (defCat && defCat.name.trim().toLowerCase() !== userCat.name.trim().toLowerCase()) {
+            const oldNameLower = defCat.name.trim().toLowerCase();
+            const newName = userCat.name.trim();
+            for (const t of rawTransactions.value) {
+              if (t.category && t.category.trim().toLowerCase() === oldNameLower) {
+                t.category = newName;
+              }
+            }
+            for (const b of budgets.value) {
+              if (b.category && b.category.trim().toLowerCase() === oldNameLower) {
+                b.category = newName;
+              }
+            }
+          }
+        }
+      }
 
       if (rawTransactions.value.length > 0 && !hasAutoSelectedPeriod.value) {
         hasAutoSelectedPeriod.value = true;
@@ -2271,13 +2301,24 @@ export const useFinanceStore = defineStore('finance', () => {
     return Array.from(map.values()).sort((a, b) => b.totalBalance - a.totalBalance);
   });
 
-  // Dynamic Expense & Income Category Lists (from Firestore categories + transaction categories)
+  // Dynamic Expense & Income Category Lists (from active categories + user transaction categories)
   const expenseCategoryNames = computed<string[]>(() => {
     const fromCats = categories.value
       .filter((c) => c.type === 'expense')
       .map((c) => c.name);
+    // Identify default categories that were overridden or deleted by the user so their old names never reappear
+    const overriddenDefaultNames = new Set(
+      defaultCategories.value
+        .filter((c) => customizedDefaultCatIds.value.has(c.id))
+        .map((c) => c.name.toLowerCase().trim())
+    );
     const fromTx = rawTransactions.value
-      .filter((t) => t.type === 'expense' && t.category)
+      .filter(
+        (t) =>
+          t.type === 'expense' &&
+          t.category &&
+          !overriddenDefaultNames.has(t.category.toLowerCase().trim())
+      )
       .map((t) => t.category);
     const combined = Array.from(new Set([...fromCats, ...fromTx]));
     return combined.length > 0 ? combined : FALLBACK_EXPENSE_CATEGORIES;
@@ -2287,8 +2328,19 @@ export const useFinanceStore = defineStore('finance', () => {
     const fromCats = categories.value
       .filter((c) => c.type === 'income')
       .map((c) => c.name);
+    // Identify default categories that were overridden or deleted by the user so their old names never reappear
+    const overriddenDefaultNames = new Set(
+      defaultCategories.value
+        .filter((c) => customizedDefaultCatIds.value.has(c.id))
+        .map((c) => c.name.toLowerCase().trim())
+    );
     const fromTx = rawTransactions.value
-      .filter((t) => t.type === 'income' && t.category)
+      .filter(
+        (t) =>
+          t.type === 'income' &&
+          t.category &&
+          !overriddenDefaultNames.has(t.category.toLowerCase().trim())
+      )
       .map((t) => t.category);
     const combined = Array.from(new Set([...fromCats, ...fromTx]));
     return combined.length > 0 ? combined : FALLBACK_INCOME_CATEGORIES;
@@ -3010,6 +3062,193 @@ export const useFinanceStore = defineStore('finance', () => {
     );
   }
 
+  async function cascadeCategoryRename(
+    uid: string,
+    oldName: string,
+    newName: string,
+    catType?: 'income' | 'expense'
+  ) {
+    if (!uid || !oldName || !newName || oldName.trim() === newName.trim()) {
+      return;
+    }
+
+    const cleanOld = oldName.trim();
+    const cleanNew = newName.trim();
+    const cleanOldLower = cleanOld.toLowerCase();
+
+    // 1. Update in-memory rawTransactions
+    const localMatchedDocIds: string[] = [];
+    for (const t of rawTransactions.value) {
+      if (
+        t.category &&
+        t.category.trim().toLowerCase() === cleanOldLower &&
+        (!catType || t.type === catType)
+      ) {
+        t.category = cleanNew;
+        if (t.id) {
+          localMatchedDocIds.push(t.id);
+        }
+      }
+    }
+
+    // 2. Update in-memory rawServerPaginatedTransactions
+    for (const t of rawServerPaginatedTransactions.value) {
+      if (
+        t.category &&
+        t.category.trim().toLowerCase() === cleanOldLower &&
+        (!catType || t.type === catType)
+      ) {
+        t.category = cleanNew;
+        if (t.id && !localMatchedDocIds.includes(t.id)) {
+          localMatchedDocIds.push(t.id);
+        }
+      }
+    }
+
+    // 3. Update in-memory budgets
+    const localMatchedBudgetIds: string[] = [];
+    for (const b of budgets.value) {
+      if (b.category && b.category.trim().toLowerCase() === cleanOldLower) {
+        b.category = cleanNew;
+        if (b.id) {
+          localMatchedBudgetIds.push(b.id);
+        }
+      }
+    }
+
+    // 4. Query & Batch update matching transactions in Firestore
+    try {
+      await ensureFirestoreSessionForUser(uid);
+      const matchedDocIds = new Set<string>(localMatchedDocIds);
+
+      // Query Firestore transactions by exact oldName
+      try {
+        const q1 = query(
+          collection(db, 'transactions'),
+          where('ownerId', '==', uid),
+          where('category', '==', cleanOld)
+        );
+        const snap1 = await getDocs(q1);
+        for (const d of snap1.docs) {
+          const dData = d.data();
+          if (!catType || dData.type === catType) {
+            matchedDocIds.add(d.id);
+          }
+        }
+      } catch (errQ1) {
+        console.warn('Direct exact category query on transactions:', errQ1);
+      }
+
+      // If cleanOld has different casing, also query lowercase
+      if (cleanOldLower !== cleanOld) {
+        try {
+          const q2 = query(
+            collection(db, 'transactions'),
+            where('ownerId', '==', uid),
+            where('category', '==', cleanOldLower)
+          );
+          const snap2 = await getDocs(q2);
+          for (const d of snap2.docs) {
+            const dData = d.data();
+            if (!catType || dData.type === catType) {
+              matchedDocIds.add(d.id);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // Batch write in chunks of 400
+      const docIdList = Array.from(matchedDocIds);
+      if (docIdList.length > 0) {
+        for (let i = 0; i < docIdList.length; i += 400) {
+          const chunk = docIdList.slice(i, i + 400);
+          const batch = writeBatch(db);
+          for (const docId of chunk) {
+            batch.update(doc(db, 'transactions', docId), {
+              category: cleanNew,
+              updatedAt: serverTimestamp(),
+            });
+          }
+          touchUserSyncTokenInBatch(batch, uid);
+          await batch.commit();
+        }
+      }
+
+      // 5. Query & Batch update matching budgets in Firestore
+      const matchedBudgetDocIds = new Set<string>(localMatchedBudgetIds);
+      try {
+        const bq = query(
+          collection(db, 'budgets'),
+          where('ownerId', '==', uid),
+          where('category', '==', cleanOld)
+        );
+        const bSnap = await getDocs(bq);
+        for (const bd of bSnap.docs) {
+          matchedBudgetDocIds.add(bd.id);
+        }
+      } catch (errB) {
+        console.warn('Cascade budget query failed:', errB);
+      }
+
+      const budgetIdList = Array.from(matchedBudgetDocIds);
+      if (budgetIdList.length > 0) {
+        const bBatch = writeBatch(db);
+        for (const bId of budgetIdList) {
+          bBatch.update(doc(db, 'budgets', bId), {
+            category: cleanNew,
+            updatedAt: serverTimestamp(),
+          });
+        }
+        touchUserSyncTokenInBatch(bBatch, uid);
+        await bBatch.commit();
+      }
+    } catch (cascadeErr) {
+      console.warn('Cascade category rename Firestore update error:', cascadeErr);
+    }
+
+    // Invalidate server pagination caches & refresh
+    invalidateServerPaginationCaches(uid);
+    void fetchTransactionsServerPage(undefined, true, true);
+    saveLocalSnapshot(uid, true);
+  }
+
+  async function reconcileCustomizedCategories(uid: string) {
+    if (!uid || uid === DEFAULT_CATEGORY_OWNER_ID) return;
+    const prefix = `${uid}_def_`;
+    for (const userCat of rawUserCategories.value) {
+      if (userCat.deleted || !userCat.id.startsWith(prefix)) continue;
+      const baseDefaultId = userCat.id.slice(prefix.length);
+      const defCat = defaultCategories.value.find((d) => d.id === baseDefaultId);
+      if (!defCat) continue;
+
+      const oldDefName = defCat.name.trim();
+      const newCustomName = userCat.name.trim();
+
+      if (oldDefName.toLowerCase() !== newCustomName.toLowerCase()) {
+        const flagKey = storageKey(`cat_reconciled_${userCat.id}_${encodeURIComponent(newCustomName)}`, uid);
+        const alreadyReconciled = localStorage.getItem(flagKey) === 'true';
+
+        const hasOldInLocal = rawTransactions.value.some(
+          (t) => t.category && t.category.trim().toLowerCase() === oldDefName.toLowerCase()
+        );
+        const hasOldInBudgets = budgets.value.some(
+          (b) => b.category && b.category.trim().toLowerCase() === oldDefName.toLowerCase()
+        );
+
+        if (!alreadyReconciled || hasOldInLocal || hasOldInBudgets) {
+          await cascadeCategoryRename(uid, oldDefName, newCustomName, defCat.type);
+          try {
+            localStorage.setItem(flagKey, 'true');
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+  }
+
   async function updateCategory(
     catId: string,
     payload: { name: string; type: 'income' | 'expense'; color?: string }
@@ -3030,12 +3269,14 @@ export const useFinanceStore = defineStore('finance', () => {
       return;
     }
 
+    const oldName = target.name;
     const safeName = sanitizeString(payload.name, MAX_CATEGORY_LENGTH, target.name);
     const safeColor = sanitizeString(
       payload.color || target.color || (payload.type === 'income' ? 'emerald' : 'rose'),
       20,
       'emerald'
     );
+    const hasNameChanged = oldName.trim().toLowerCase() !== safeName.trim().toLowerCase();
 
     await ensureFirestoreSessionForUser(uid);
 
@@ -3078,11 +3319,19 @@ export const useFinanceStore = defineStore('finance', () => {
         rawUserCategories.value.push(newCat);
       }
       rawUserCategories.value.sort((a, b) => a.name.localeCompare(b.name));
+
+      // Cascade update to transactions and budgets if name changed
+      if (hasNameChanged) {
+        await cascadeCategoryRename(uid, oldName, safeName, target.type);
+      }
+
       saveLocalSnapshot(uid, true);
 
       useNotificationStore().notifySuccess(
-        'Kategori Diubah Menjadi Kustom',
-        `Kategori bawaan "${target.name}" berhasil diperbarui menjadi "${safeName}" dengan label Kustom.`
+        'Kategori Diperbarui',
+        hasNameChanged
+          ? `Kategori bawaan "${oldName}" berhasil diperbarui menjadi "${safeName}". Semua transaksi terkait otomatis disinkronkan.`
+          : `Kategori bawaan "${safeName}" berhasil diperbarui.`
       );
       return;
     }
@@ -3115,11 +3364,26 @@ export const useFinanceStore = defineStore('finance', () => {
       defCat.type = payload.type;
       defCat.color = safeColor;
     }
+
+    // Cascade update to transactions and budgets if name changed
+    if (hasNameChanged) {
+      await cascadeCategoryRename(uid, oldName, safeName, target.type);
+      if (catId.startsWith(`${uid}_def_`)) {
+        const baseDefId = catId.slice(`${uid}_def_`.length);
+        const baseDef = defaultCategories.value.find((d) => d.id === baseDefId);
+        if (baseDef && baseDef.name.trim().toLowerCase() !== safeName.trim().toLowerCase()) {
+          await cascadeCategoryRename(uid, baseDef.name, safeName, baseDef.type);
+        }
+      }
+    }
+
     saveLocalSnapshot(uid, true);
 
     useNotificationStore().notifySuccess(
       'Kategori Diperbarui',
-      `Kategori "${safeName}" berhasil diperbarui di Firestore.`
+      hasNameChanged
+        ? `Kategori "${oldName}" berhasil diperbarui menjadi "${safeName}". Semua transaksi terkait otomatis disinkronkan.`
+        : `Kategori "${safeName}" berhasil diperbarui di Firestore.`
     );
   }
 
@@ -5228,5 +5492,6 @@ export const useFinanceStore = defineStore('finance', () => {
     saveBudget,
     removeBudget,
     refreshData,
+    ensureFirestoreSessionForUser,
   };
 });

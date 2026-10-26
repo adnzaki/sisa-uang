@@ -218,12 +218,7 @@ router.afterEach((to) => {
   // Activity check for automated schedules (with 5-minute quota cache protection)
   try {
     const authStore = useAuthStore();
-    const currentEmail = String(auth.currentUser?.email || authStore.user?.email || '').trim().toLowerCase();
-    const isAdmin =
-      authStore.isSuperAdmin ||
-      currentEmail === 'vuedevo@gmail.com';
-
-    if (!isAdmin && (authStore.isAuthenticated || auth.currentUser)) {
+    if (authStore.isAuthenticated || auth.currentUser) {
       const automationStore = useAutomationStore();
       void automationStore.checkAndTriggerOnActivity();
     }

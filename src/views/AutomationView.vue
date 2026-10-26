@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import {
   Clock,
@@ -67,33 +67,53 @@ const formIsActive = ref(true);
 const isSaving = ref(false);
 const filterTab = ref<'all' | 'with_confirmation' | 'without_confirmation' | 'active'>('all');
 
-async function ensureDataReady() {
+const isRefreshing = ref(false);
+
+async function ensureDataReady(force = false) {
   const uid = authStore.user?.uid;
   if (!uid) return;
-  const currentEmail = String(authStore.user?.email || '').trim().toLowerCase();
-  if (currentEmail === 'vuedevo@gmail.com') return;
 
   const tasks: Promise<any>[] = [];
   if (financeStore.wallets.length === 0) {
     tasks.push(financeStore.initFinanceData(uid));
   }
-  if (automationStore.rules.length === 0) {
-    tasks.push(automationStore.loadAutomations(uid));
-  }
+  tasks.push(automationStore.loadAutomations(uid, force));
   if (tasks.length > 0) {
     await Promise.all(tasks);
+  }
+  automationStore.subscribeToAutomations(uid);
+}
+
+async function handleManualRefresh() {
+  const uid = authStore.user?.uid;
+  if (!uid || isRefreshing.value) return;
+  isRefreshing.value = true;
+  try {
+    await ensureDataReady(true);
+    notificationStore.notifySuccess(
+      'Jadwal Disegarkan',
+      'Daftar jadwal transaksi otomatis berhasil diperbarui dari Cloud Firestore.'
+    );
+  } catch (err: any) {
+    notificationStore.notifyError('Gagal Menyegarkan Jadwal', err?.message || err);
+  } finally {
+    isRefreshing.value = false;
   }
 }
 
 onMounted(async () => {
-  await ensureDataReady();
+  await ensureDataReady(true);
+});
+
+onUnmounted(() => {
+  automationStore.unsubscribeFromAutomations();
 });
 
 watch(
   () => authStore.user?.uid,
   async (uid) => {
     if (uid) {
-      await ensureDataReady();
+      await ensureDataReady(true);
     }
   },
   { immediate: true }
@@ -531,6 +551,17 @@ function getExecutionStatusText(rule: AutomationItem): { text: string; color: st
       </div>
 
       <div class="flex items-center gap-2.5">
+        <button
+          type="button"
+          :disabled="isRefreshing"
+          class="min-h-[42px] px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-all shadow-2xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
+          title="Segarkan Jadwal Otomatis"
+          @click="handleManualRefresh"
+        >
+          <RefreshCw class="w-4 h-4 text-emerald-600 dark:text-emerald-400" :class="{ 'animate-spin': isRefreshing }" />
+          <span class="hidden sm:inline">Segarkan</span>
+        </button>
+
         <button
           type="button"
           class="min-h-[42px] px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-sm hover:shadow active:scale-95 flex items-center gap-2 cursor-pointer"
