@@ -1014,7 +1014,8 @@ export const useFinanceStore = defineStore('finance', () => {
         collection(db, 'transactions'),
         where('ownerId', '==', uid),
         where('date', '>=', startIso),
-        where('date', '<=', `${endIso}\uf8ff`)
+        where('date', '<=', `${endIso}\uf8ff`),
+        limit(25)
       );
       const snap = await getDocs(q);
       const fetched: TransactionItem[] = snap.docs
@@ -1028,7 +1029,26 @@ export const useFinanceStore = defineStore('finance', () => {
       mergeFetchedTransactionsIntoCache(fetched);
       saveLocalSnapshot(uid, false);
     } catch {
-      // Fallback: if composite index on (ownerId, date) is not built, query by period or latest batch
+      // Fallback: bounded query with limit(25) if composite index is building
+      try {
+        const fallbackQ = query(
+          collection(db, 'transactions'),
+          where('ownerId', '==', uid),
+          limit(25)
+        );
+        const snap = await getDocs(fallbackQ);
+        const fetched: TransactionItem[] = snap.docs
+          .map((d: any) => ({
+            id: d.id,
+            ...(d.data() as Omit<TransactionItem, 'id'>),
+          }))
+          .filter((t: TransactionItem) => !t.deleted);
+        loadedTransactionPeriods.add(rangeKey);
+        mergeFetchedTransactionsIntoCache(fetched);
+        saveLocalSnapshot(uid, false);
+      } catch {
+        // Ignore fallback errors
+      }
     }
   }
 
@@ -1073,13 +1093,134 @@ export const useFinanceStore = defineStore('finance', () => {
 
     const targetPeriod = currentTxServerFilter.period || 'all';
     const targetPage = Math.max(1, currentTxServerFilter.page || 1);
-    const pageSize = Math.max(1, currentTxServerFilter.limit || 25);
+    const pageSize = Math.min(25, Math.max(1, currentTxServerFilter.limit || 25));
+    const searchStr = (currentTxServerFilter.search || '').trim();
+    const hasSearch = Boolean(searchStr);
     const hasClientSubFilters =
       currentTxServerFilter.type !== 'all' ||
       currentTxServerFilter.category !== 'all' ||
       currentTxServerFilter.walletId !== 'all' ||
       currentTxServerFilter.holder !== 'all' ||
-      Boolean(currentTxServerFilter.search.trim());
+      hasSearch;
+
+    // Search Box Logic: check localStorage first (across all periods); if no matches, query Firestore directly without period filter (limit 25)
+    if (hasSearch) {
+      if (!silent) isTxServerPageLoading.value = true;
+      try {
+        // Step 1: Check localStorage and memory cache first
+        const localPool: TransactionItem[] = [...rawTransactions.value];
+        try {
+          const rawStored = localStorage.getItem(storageKey('transactions', uid));
+          if (rawStored) {
+            const parsedStored = JSON.parse(rawStored) as TransactionItem[];
+            if (Array.isArray(parsedStored)) {
+              const idSet = new Set(localPool.map((t) => t.id));
+              for (const item of parsedStored) {
+                if (item && item.id && !idSet.has(item.id)) {
+                  localPool.push(item);
+                  idSet.add(item.id);
+                }
+              }
+            }
+          }
+        } catch {
+          // Ignore JSON errors
+        }
+
+        const localMatches = localPool
+          .filter((tx) => !tx.deleted)
+          .map((tx) => enrichTransactionItem(tx))
+          .filter((tx) => matchesClientSubFilters(tx));
+
+        if (localMatches.length > 0) {
+          // Found in localStorage/cache: return immediately with 0 Firestore reads!
+          localMatches.sort((a, b) => {
+            const cmp = String(b.date || '').localeCompare(String(a.date || ''));
+            if (cmp !== 0) return cmp;
+            return String(b.id || '').localeCompare(String(a.id || ''));
+          });
+          const totalFiltered = localMatches.length;
+          const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
+          const safePage = Math.min(targetPage, totalPages);
+          const start = (safePage - 1) * pageSize;
+          const pageSlice = localMatches.slice(start, start + pageSize);
+
+          rawServerPaginatedTransactions.value = pageSlice;
+          txServerPage.value = safePage;
+          txServerPageSize.value = pageSize;
+          txServerTotalFiltered.value = totalFiltered;
+          txServerTotalPages.value = totalPages;
+          return;
+        }
+
+        // Step 2: Not found locally -> query Firestore directly without filtering by month period (limit 25)
+        const canQuery = await ensureFirestoreSessionForUser(uid);
+        if (canQuery) {
+          const searchConstraints: QueryConstraint[] = [
+            where('ownerId', '==', uid),
+            where('deleted', '==', false),
+          ];
+          if (currentTxServerFilter.type !== 'all') {
+            searchConstraints.push(where('type', '==', currentTxServerFilter.type));
+          }
+          if (currentTxServerFilter.category !== 'all') {
+            searchConstraints.push(where('category', '==', currentTxServerFilter.category));
+          }
+          if (
+            currentTxServerFilter.walletId !== 'all' &&
+            currentTxServerFilter.type !== 'transfer'
+          ) {
+            searchConstraints.push(where('walletId', '==', currentTxServerFilter.walletId));
+          }
+          searchConstraints.push(limit(25));
+
+          const searchSnap = await getDocs(
+            query(collection(db, 'transactions'), ...searchConstraints)
+          );
+          const remoteDocs: TransactionItem[] = searchSnap.docs
+            .map((d: any) => ({
+              id: d.id,
+              ...(d.data() as Omit<TransactionItem, 'id'>),
+            }))
+            .filter((t: TransactionItem) => !t.deleted);
+
+          remoteDocs.sort((a, b) => {
+            const cmp = String(b.date || '').localeCompare(String(a.date || ''));
+            if (cmp !== 0) return cmp;
+            return String(b.id || '').localeCompare(String(a.id || ''));
+          });
+
+          mergeFetchedTransactionsIntoCache(remoteDocs);
+          saveLocalSnapshot(uid, false);
+
+          const remoteMatches = remoteDocs
+            .map((tx) => enrichTransactionItem(tx))
+            .filter((tx) => matchesClientSubFilters(tx));
+
+          const totalFiltered = remoteMatches.length;
+          const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
+          const safePage = Math.min(targetPage, totalPages);
+          const start = (safePage - 1) * pageSize;
+          const pageSlice = remoteMatches.slice(start, start + pageSize);
+
+          rawServerPaginatedTransactions.value = pageSlice;
+          txServerPage.value = safePage;
+          txServerPageSize.value = pageSize;
+          txServerTotalFiltered.value = totalFiltered;
+          txServerTotalPages.value = totalPages;
+          return;
+        }
+
+        rawServerPaginatedTransactions.value = [];
+        txServerPage.value = 1;
+        txServerPageSize.value = pageSize;
+        txServerTotalFiltered.value = 0;
+        txServerTotalPages.value = 1;
+        return;
+      } finally {
+        if (!silent) isTxServerPageLoading.value = false;
+      }
+    }
 
     // 1. Check if we already have this exact page in cache so we can render it immediately without UI flicker
     const initialSyncToken = getSavedUserSyncToken(uid);
@@ -1147,7 +1288,8 @@ export const useFinanceStore = defineStore('finance', () => {
               where('ownerId', '==', uid),
               where('date', '>=', startIso),
               where('date', '<=', `${endIso}\uf8ff`),
-              orderBy('date', 'desc')
+              orderBy('date', 'desc'),
+              limit(25)
             );
             const snap = await getDocs(monthQuery);
             const monthDocs: TransactionItem[] = snap.docs
@@ -1377,8 +1519,8 @@ export const useFinanceStore = defineStore('finance', () => {
           ) {
             constraints.push(where('walletId', '==', currentTxServerFilter.walletId));
           }
-          // Strict quota protection: bound query with limit(100) when fetching all-periods pool
-          constraints.push(limit(100));
+          // Strict quota protection: bound query with limit(25) when fetching all-periods pool
+          constraints.push(limit(25));
           const snap = await getDocs(query(collection(db, 'transactions'), ...constraints));
           matchedDocs = snap.docs
             .map((d: any) => ({
@@ -1457,7 +1599,9 @@ export const useFinanceStore = defineStore('finance', () => {
   }
 
   function matchesClientSubFilters(tx: TransactionItem): boolean {
+    const hasSearch = Boolean(currentTxServerFilter.search && currentTxServerFilter.search.trim());
     if (
+      !hasSearch &&
       currentTxServerFilter.period !== 'all' &&
       String(tx.date || '').slice(0, 7) !== currentTxServerFilter.period
     ) {
@@ -1489,7 +1633,7 @@ export const useFinanceStore = defineStore('finance', () => {
     ) {
       return false;
     }
-    if (currentTxServerFilter.search.trim()) {
+    if (hasSearch) {
       const q = currentTxServerFilter.search.trim().toLowerCase();
       return (
         String(tx.note || '').toLowerCase().includes(q) ||
@@ -1497,7 +1641,9 @@ export const useFinanceStore = defineStore('finance', () => {
         String(tx.walletName || '').toLowerCase().includes(q) ||
         String(tx.toWalletName || '').toLowerCase().includes(q) ||
         String(tx.fundOwnerName || '').toLowerCase().includes(q) ||
-        String(tx.toFundOwnerName || '').toLowerCase().includes(q)
+        String(tx.toFundOwnerName || '').toLowerCase().includes(q) ||
+        String(tx.amount || '').includes(q) ||
+        String(tx.date || '').includes(q)
       );
     }
     return true;
@@ -2126,6 +2272,256 @@ export const useFinanceStore = defineStore('finance', () => {
       }
     } finally {
       isRefreshingData = false;
+    }
+  }
+
+  /**
+   * Route-Specific Firestore Data Reload:
+   * When opening any route/menu, reloads only the required collection data from Firestore
+   * with a strict limit of 25 documents per collection.
+   * This guarantees cross-device synchronization without manual page reloads or unbounded reads.
+   */
+  async function loadRouteDataFromFirestore(routePath: string, uidInput?: string) {
+    const authStore = useAuthStore();
+    const uid = sanitizeId(uidInput || authStore.user?.uid || activeOwnerUid.value || '');
+    if (!uid || uid === 'guest') return;
+    if (authStore.isSuperAdmin) return;
+
+    const cleanPath = (routePath || '').split('?')[0].toLowerCase();
+    const canQuery = await ensureFirestoreSessionForUser(uid);
+    if (!canQuery) return;
+
+    try {
+      // 1. Dashboard ('/' or '/dashboard')
+      if (cleanPath === '/' || cleanPath === '/dashboard') {
+        const [walletsSnap, holdersSnap, txSnap, budgetSnap] = await Promise.all([
+          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid), limit(25))),
+          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid), limit(25))),
+          getDocs(
+            query(
+              collection(db, 'transactions'),
+              where('ownerId', '==', uid),
+              orderBy('date', 'desc'),
+              limit(25)
+            )
+          ),
+          getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid), limit(25))),
+        ]);
+
+        const fetchedWallets = walletsSnap.docs
+          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletItem, 'id'>) }))
+          .filter((w: WalletItem) => !w.deleted)
+          .sort((a: WalletItem, b: WalletItem) => a.name.localeCompare(b.name));
+        if (fetchedWallets.length > 0) wallets.value = fetchedWallets;
+
+        const fetchedHolders = holdersSnap.docs
+          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletOwnerItem, 'id'>) }))
+          .filter((fo: WalletOwnerItem) => !fo.deleted);
+        if (fetchedHolders.length > 0) rawWalletOwners.value = fetchedHolders;
+        syncWalletTotalBalancesFromHolders();
+
+        const fetchedTx = txSnap.docs
+          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<TransactionItem, 'id'>) }))
+          .filter((t: TransactionItem) => !t.deleted);
+        mergeFetchedTransactionsIntoCache(fetchedTx);
+
+        const allBudgetDocs = budgetSnap.docs.map((d: any) => {
+          knownFirestoreBudgetDocIds.add(d.id);
+          return { id: d.id, ...(d.data() as Omit<BudgetItem, 'id'>) };
+        });
+        if (allBudgetDocs.length > 0) {
+          budgets.value = allBudgetDocs.filter(
+            (b: BudgetItem) =>
+              !b.deleted &&
+              b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
+              b.category !== ANNUAL_BUDGET_META_CATEGORY &&
+              b.category !== '__SISAUANG_PRO__'
+          );
+        }
+        saveLocalSnapshot(uid, false);
+        return;
+      }
+
+      // 2. Transactions ('/transactions')
+      if (cleanPath === '/transactions') {
+        const [walletsSnap, holdersSnap] = await Promise.all([
+          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid), limit(25))),
+          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid), limit(25))),
+        ]);
+
+        const fetchedWallets = walletsSnap.docs
+          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletItem, 'id'>) }))
+          .filter((w: WalletItem) => !w.deleted)
+          .sort((a: WalletItem, b: WalletItem) => a.name.localeCompare(b.name));
+        if (fetchedWallets.length > 0) wallets.value = fetchedWallets;
+
+        const fetchedHolders = holdersSnap.docs
+          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletOwnerItem, 'id'>) }))
+          .filter((fo: WalletOwnerItem) => !fo.deleted);
+        if (fetchedHolders.length > 0) rawWalletOwners.value = fetchedHolders;
+        syncWalletTotalBalancesFromHolders();
+
+        await fetchTransactionsServerPage({ page: 1, limit: 25 }, true, true);
+        saveLocalSnapshot(uid, false);
+        return;
+      }
+
+      // 3. Wallets & Ownership ('/wallets', '/ownership')
+      if (cleanPath === '/wallets' || cleanPath === '/ownership') {
+        const [walletsSnap, holdersSnap] = await Promise.all([
+          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid), limit(25))),
+          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid), limit(25))),
+        ]);
+
+        const fetchedWallets = walletsSnap.docs
+          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletItem, 'id'>) }))
+          .filter((w: WalletItem) => !w.deleted)
+          .sort((a: WalletItem, b: WalletItem) => a.name.localeCompare(b.name));
+        if (fetchedWallets.length > 0) wallets.value = fetchedWallets;
+
+        const fetchedHolders = holdersSnap.docs
+          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletOwnerItem, 'id'>) }))
+          .filter((fo: WalletOwnerItem) => !fo.deleted);
+        if (fetchedHolders.length > 0) rawWalletOwners.value = fetchedHolders;
+        syncWalletTotalBalancesFromHolders();
+        saveLocalSnapshot(uid, false);
+        return;
+      }
+
+      // 4. Categories ('/categories')
+      if (cleanPath === '/categories') {
+        const queries: Promise<any>[] = [
+          getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid), limit(25))),
+        ];
+        if (defaultCategories.value.length === 0 && uid !== DEFAULT_CATEGORY_OWNER_ID) {
+          queries.push(
+            getDocs(
+              query(
+                collection(db, 'categories'),
+                where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID),
+                limit(25)
+              )
+            )
+          );
+        }
+        const [catsSnap, defCatsSnap] = await Promise.all(queries);
+        const fetchedCats = catsSnap.docs
+          .map((d: any) => ({
+            id: d.id,
+            ...(d.data() as Omit<CategoryItem, 'id'>),
+            isDefault: false,
+          }))
+          .sort((a: CategoryItem, b: CategoryItem) => a.name.localeCompare(b.name));
+        if (fetchedCats.length > 0) rawUserCategories.value = fetchedCats;
+
+        if (defCatsSnap) {
+          defaultCategories.value = defCatsSnap.docs
+            .map((d: any) => ({
+              id: d.id,
+              ...(d.data() as Omit<CategoryItem, 'id'>),
+              isDefault: true,
+            }))
+            .filter((c: CategoryItem) => !c.deleted)
+            .sort((a: CategoryItem, b: CategoryItem) => a.name.localeCompare(b.name));
+        }
+        saveLocalSnapshot(uid, false);
+        return;
+      }
+
+      // 5. Budgets ('/budgets')
+      if (cleanPath === '/budgets') {
+        const queries: Promise<any>[] = [
+          getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid), limit(25))),
+          getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid), limit(25))),
+          getDocs(
+            query(
+              collection(db, 'transactions'),
+              where('ownerId', '==', uid),
+              orderBy('date', 'desc'),
+              limit(25)
+            )
+          ),
+        ];
+        const [budgetSnap, catsSnap, txSnap] = await Promise.all(queries);
+
+        const allBudgetDocs = budgetSnap.docs.map((d: any) => {
+          knownFirestoreBudgetDocIds.add(d.id);
+          return { id: d.id, ...(d.data() as Omit<BudgetItem, 'id'>) };
+        });
+        if (allBudgetDocs.length > 0) {
+          budgets.value = allBudgetDocs.filter(
+            (b: BudgetItem) =>
+              !b.deleted &&
+              b.category !== BUDGET_PERIOD_MARKER_CATEGORY &&
+              b.category !== ANNUAL_BUDGET_META_CATEGORY &&
+              b.category !== '__SISAUANG_PRO__'
+          );
+        }
+
+        const fetchedCats = catsSnap.docs
+          .map((d: any) => ({
+            id: d.id,
+            ...(d.data() as Omit<CategoryItem, 'id'>),
+            isDefault: false,
+          }))
+          .sort((a: CategoryItem, b: CategoryItem) => a.name.localeCompare(b.name));
+        if (fetchedCats.length > 0) rawUserCategories.value = fetchedCats;
+
+        const txList = txSnap.docs
+          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<TransactionItem, 'id'>) }))
+          .filter((t: TransactionItem) => !t.deleted);
+        mergeFetchedTransactionsIntoCache(txList);
+
+        saveLocalSnapshot(uid, false);
+        return;
+      }
+
+      // 6. Analytics & Report Settings ('/analytics', '/report-settings')
+      if (cleanPath === '/analytics' || cleanPath === '/report-settings') {
+        const [txSnap, walletsSnap, holdersSnap] = await Promise.all([
+          getDocs(
+            query(
+              collection(db, 'transactions'),
+              where('ownerId', '==', uid),
+              orderBy('date', 'desc'),
+              limit(25)
+            )
+          ),
+          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid), limit(25))),
+          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid), limit(25))),
+        ]);
+
+        const txList = txSnap.docs
+          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<TransactionItem, 'id'>) }))
+          .filter((t: TransactionItem) => !t.deleted);
+        mergeFetchedTransactionsIntoCache(txList);
+
+        const fetchedWallets = walletsSnap.docs
+          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletItem, 'id'>) }))
+          .filter((w: WalletItem) => !w.deleted)
+          .sort((a: WalletItem, b: WalletItem) => a.name.localeCompare(b.name));
+        if (fetchedWallets.length > 0) wallets.value = fetchedWallets;
+
+        const fetchedHolders = holdersSnap.docs
+          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletOwnerItem, 'id'>) }))
+          .filter((fo: WalletOwnerItem) => !fo.deleted);
+        if (fetchedHolders.length > 0) rawWalletOwners.value = fetchedHolders;
+        syncWalletTotalBalancesFromHolders();
+
+        saveLocalSnapshot(uid, false);
+        return;
+      }
+
+      // 7. Automation ('/utilities/automation' or '/automations')
+      if (cleanPath === '/utilities/automation' || cleanPath === '/automations') {
+        const { useAutomationStore } = await import('./automation');
+        void useAutomationStore().loadAutomations(uid);
+        return;
+      }
+    } catch (err) {
+      if (isFirestoreQuotaError(err)) {
+        useNotificationStore().notifyQuotaExceeded();
+      }
     }
   }
 
@@ -5355,6 +5751,7 @@ export const useFinanceStore = defineStore('finance', () => {
     saveBudget,
     removeBudget,
     refreshData,
+    loadRouteDataFromFirestore,
     ensureFirestoreSessionForUser,
   };
 });

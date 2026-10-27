@@ -63,15 +63,19 @@ function getAccountInitials(nameOrEmail: string): string {
 }
 
 async function handleQuickSwitchFromAuth(targetUid: string) {
-  const ok = await authStore.switchAccount(targetUid);
-  if (ok) {
-    const defaultTarget = authStore.isSuperAdmin ? '/control-panel' : '/dashboard';
-    router.push(defaultTarget);
-  }
+  await authStore.switchAccount(targetUid);
 }
 
 onMounted(() => {
   authStore.clearError();
+  if (
+    authStore.isAuthenticated &&
+    route.query.mode !== 'add-account' &&
+    !(authStore.user?.email.toLowerCase() === 'vuedevo@gmail.com' && authStore.requiresOtp && !authStore.otpVerified)
+  ) {
+    const target = (route.query.redirect as string) || (authStore.isSuperAdmin ? '/control-panel' : '/dashboard');
+    router.replace(target);
+  }
 });
 
 watch(activeTab, () => {

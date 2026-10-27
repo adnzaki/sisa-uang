@@ -4,6 +4,7 @@ import App from './App.vue';
 import { router } from './router';
 import { i18n } from './i18n';
 import { initPWAListeners } from './composables/usePWA';
+import { useAuthStore } from './stores/auth';
 import './index.css';
 
 // Initialize PWA Service Worker registration, update detection & install listeners
@@ -13,6 +14,11 @@ const app = createApp(App);
 const pinia = createPinia();
 
 app.use(pinia);
+
+// Initialize auth state synchronously from storage before router evaluates initial navigation
+const authStore = useAuthStore();
+authStore.initAuth();
+
 app.use(router);
 app.use(i18n);
 
