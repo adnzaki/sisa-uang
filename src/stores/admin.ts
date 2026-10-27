@@ -1440,49 +1440,6 @@ export const useAdminStore = defineStore('admin', () => {
       }
     }
 
-    // 2. Group wallets, wallet_owners, categories, transactions, and budgets by ownerId for local snapshot readiness
-    const ownerUids = new Set<string>([
-      ...importedWallets.map((w) => w.ownerId),
-      ...importedWalletOwners.map((fo) => fo.ownerId),
-      ...importedCategories.map((c) => c.ownerId),
-      ...importedTransactions.map((t) => t.ownerId),
-      ...importedBudgets.map((b) => b.ownerId),
-    ]);
-
-    for (const ownerUid of ownerUids) {
-      const userWallets = importedWallets.filter((w) => w.ownerId === ownerUid);
-      const userHolders = importedWalletOwners.filter((fo) => fo.ownerId === ownerUid);
-      const userCats = importedCategories.filter((c) => c.ownerId === ownerUid);
-      const userTxs = importedTransactions.filter((t) => t.ownerId === ownerUid);
-      const userBudgets = importedBudgets.filter((b) => b.ownerId === ownerUid);
-
-      try {
-        if (userWallets.length > 0) {
-          localStorage.setItem(`sisa_uang_wallets_${ownerUid}`, JSON.stringify(userWallets));
-        }
-        if (userHolders.length > 0) {
-          localStorage.setItem(
-            `sisa_uang_wallet_owners_${ownerUid}`,
-            JSON.stringify(userHolders)
-          );
-        }
-        if (userCats.length > 0) {
-          localStorage.setItem(`sisa_uang_categories_${ownerUid}`, JSON.stringify(userCats));
-        }
-        if (userTxs.length > 0) {
-          localStorage.setItem(
-            `sisa_uang_transactions_${ownerUid}`,
-            JSON.stringify(userTxs.slice(0, 1500))
-          );
-        }
-        if (userBudgets.length > 0) {
-          localStorage.setItem(`sisa_uang_budgets_${ownerUid}`, JSON.stringify(userBudgets));
-        }
-      } catch {
-        // Ignore browser localStorage quota limit if dataset is very large
-      }
-    }
-
     // 3. Build strictly validated Firestore operations conforming to firestore.rules
     interface QueuedWriteOp {
       col: string;

@@ -73,38 +73,7 @@ export const useAutomationStore = defineStore('automation', () => {
     };
     if (typeof window === 'undefined') return emptyCache;
     try {
-      // 1. Direct key lookup
-      let raw = localStorage.getItem(getCacheKey(uid));
-
-      // 2. Fallback key: check auth.currentUser?.uid if different
-      if (!raw) {
-        const altUid = sanitizeId(auth.currentUser?.uid || '');
-        if (altUid && altUid !== uid) {
-          raw = localStorage.getItem(getCacheKey(altUid));
-        }
-      }
-
-      // 3. Fallback scan: if user had saved a rule under any su_automations_cache_* key, discover it!
-      if (!raw) {
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (key && key.startsWith(CACHE_KEY_PREFIX)) {
-            const candidate = localStorage.getItem(key);
-            if (candidate && candidate.includes('"rules"') && candidate.includes('[')) {
-              try {
-                const testParsed = JSON.parse(candidate);
-                if (Array.isArray(testParsed?.rules) && testParsed.rules.length > 0) {
-                  raw = candidate;
-                  break;
-                }
-              } catch {
-                // Ignore parse error
-              }
-            }
-          }
-        }
-      }
-
+      const raw = localStorage.getItem(getCacheKey(uid));
       if (!raw) return emptyCache;
       const parsed = JSON.parse(raw) as AutomationsCacheData;
       if (!parsed || typeof parsed.expiresAt !== 'number' || !Array.isArray(parsed.rules)) {
@@ -200,8 +169,6 @@ export const useAutomationStore = defineStore('automation', () => {
       const cached = readLocalStorageCache(uid);
       if (cached.rules.length > 0 && Date.now() < cached.expiresAt) {
         rules.value = cached.rules;
-        // Still trigger background fetch to ensure cross-device consistency!
-        void fetchAndSyncAutomations(uid);
         return cached.rules;
       }
     }

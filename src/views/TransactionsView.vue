@@ -65,17 +65,10 @@ function triggerServerTransactionsFetch(targetPage: number, silent = false) {
 }
 
 onMounted(() => {
-  triggerServerTransactionsFetch(1);
-});
-
-watch(
-  () => financeStore.isSyncedWithFirestore,
-  (synced) => {
-    if (synced) {
-      triggerServerTransactionsFetch(financeStore.txServerPage, true);
-    }
+  if (financeStore.rawServerPaginatedTransactions.length === 0) {
+    triggerServerTransactionsFetch(1);
   }
-);
+});
 
 const periodFilterOptions = computed<SelectOptionItem[]>(() => [
   {

@@ -36,7 +36,7 @@ import {
   MAX_CATEGORY_LENGTH,
   MAX_NOTE_LENGTH,
 } from '../firebase';
-import { useAuthStore } from './auth';
+import { useAuthStore, purgeForeignLocalStorage } from './auth';
 import { useNotificationStore } from './notification';
 
 export interface WalletItem {
@@ -409,15 +409,8 @@ export const useFinanceStore = defineStore('finance', () => {
     }
   }
 
-  function touchUserSyncTokenInBatch(batch: WriteBatch, uid: string) {
-    if (!uid || uid === 'guest') return;
-    try {
-      batch.update(doc(db, 'users', uid), {
-        updatedAt: serverTimestamp(),
-      });
-    } catch {
-      // Ignore if user doc cannot be touched
-    }
+  function touchUserSyncTokenInBatch(_batch: WriteBatch, _uid: string) {
+    // Disabled to prevent remote token invalidation cascade and massive Firestore read spikes
   }
 
   function upsertBudgetDocInBatch(
@@ -532,7 +525,6 @@ export const useFinanceStore = defineStore('finance', () => {
       const emailLower = current.email?.toLowerCase();
       // 1. Current user's Firebase Auth UID matches target UID directly
       if (current.uid === uid) {
-        await ensureUserDocExistsForSyncToken(uid);
         return true;
       }
       // 2. Current user is a bootstrapped admin or super admin recognized in firestore.rules
@@ -541,12 +533,10 @@ export const useFinanceStore = defineStore('finance', () => {
         emailLower === 'vuedevo@gmail.com' ||
         authStore.isSuperAdmin
       ) {
-        await ensureUserDocExistsForSyncToken(uid);
         return true;
       }
       // 3. Current Firebase user's email matches the active user store email
       if (authStore.user?.email && emailLower === authStore.user.email.toLowerCase()) {
-        await ensureUserDocExistsForSyncToken(uid);
         return true;
       }
     }
@@ -555,12 +545,10 @@ export const useFinanceStore = defineStore('finance', () => {
     if (!current || current.isAnonymous) {
       try {
         await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-        await ensureUserDocExistsForSyncToken(uid);
         return true;
       } catch (signInErr: any) {
         try {
           await createUserWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-          await ensureUserDocExistsForSyncToken(uid);
           return true;
         } catch {
           // Bridge sign-in was not available
@@ -578,7 +566,6 @@ export const useFinanceStore = defineStore('finance', () => {
         finalEmailLower === 'vuedevo@gmail.com' ||
         (authStore.user?.email && finalEmailLower === authStore.user.email.toLowerCase())
       ) {
-        await ensureUserDocExistsForSyncToken(uid);
         return true;
       }
     }
@@ -1802,7 +1789,6 @@ export const useFinanceStore = defineStore('finance', () => {
 
     isSyncedWithFirestore.value = true;
     saveLocalSnapshot(uid, true, effectiveSyncToken);
-    void reconcileCustomizedCategories(uid);
 
     // If initialPage1Items were fetched, also pre-populate Page 1 cache if total count <= 24
     if (initialPage1Items.length > 0 && initialPage1Items.length < 25) {
@@ -1839,128 +1825,25 @@ export const useFinanceStore = defineStore('finance', () => {
    * - If remote `updatedAt` HAS changed: invalidates caches, reloads fresh data from server, stores in cache again, and returns `true`.
    */
   async function checkAndSyncIfRemoteChanged(
-    uidInput?: string,
-    bypassCooldown = false
+    _uidInput?: string,
+    _bypassCooldown = false
   ): Promise<boolean> {
-    const authStore = useAuthStore();
-    if (!authStore.isAuthenticated) return false;
-
-    const uid = sanitizeId(uidInput || authStore.user?.uid || activeOwnerUid.value || '');
-    if (!uid || uid === 'guest') return false;
-
-    // If initial load hasn't completed yet, let initFinanceData handle it
-    if (isLoading.value || !isSyncedWithFirestore.value || activeOwnerUid.value !== uid) {
-      return false;
-    }
-
-    const now = Date.now();
-    if (!bypassCooldown && now - lastTokenCheckAt < TOKEN_CHECK_COOLDOWN_MS) {
-      return false;
-    }
-    if (isCheckingSyncToken) return false;
-
-    isCheckingSyncToken = true;
-    lastTokenCheckAt = now;
-
-    try {
-      // Also check lightweight local server user status & subscription (0 Firestore reads)
-      let serverSaysFree = false;
-      let serverReportedProOrPending = false;
-      try {
-        const res = await fetch(`/api/users/${encodeURIComponent(uid)}/status`);
-        if (res.ok) {
-          const statusData = await res.json();
-          if (
-            statusData.subscriptionStatus === 'free' ||
-            statusData.isPro === false ||
-            statusData.isExplicitlyDeactivated === true
-          ) {
-            serverSaysFree = true;
-            authStore.setExternalSubscriptionStatus('free', null, null, true);
-          } else if (statusData.subscriptionStatus === 'pro' || statusData.isPro === true) {
-            serverReportedProOrPending = true;
-            authStore.setExternalSubscriptionStatus(
-              'pro',
-              statusData.subscriptionPlan || 'monthly',
-              statusData.subscriptionExpiresAt || null
-            );
-          } else if (statusData.subscriptionStatus === 'pending') {
-            serverReportedProOrPending = true;
-            authStore.setExternalSubscriptionStatus(
-              'pending',
-              statusData.subscriptionPlan || 'monthly',
-              null
-            );
-          }
-        }
-      } catch {
-        // Ignore network error
-      }
-
-      const canQuery = await ensureFirestoreSessionForUser(uid);
-      if (!canQuery) return false;
-
-      const localSyncToken = getSavedUserSyncToken(uid);
-
-      const userSnap = await getDoc(doc(db, 'users', uid));
-      if (!userSnap.exists()) return false;
-      confirmedUserDocsInFirestore.add(uid);
-
-      const uData = userSnap.data();
-      const remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
-
-      // Sync subscription directly from the already-read `/users/{uid}` document (0 extra Firestore reads!)
-      if (serverSaysFree || uData?.isExplicitlyDeactivated === true || authStore.user?.isExplicitlyDeactivated === true) {
-        // Authoritative server status is Free or explicitly deactivated: do NOT let stale IndexedDB/Firestore snapshot revive PRO!
-        authStore.setExternalSubscriptionStatus('free', null, null, true);
-      } else if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
-        authStore.setExternalSubscriptionStatus(
-          'pro',
-          uData?.subscriptionPlan === 'yearly'
-            ? 'yearly'
-            : authStore.user?.subscriptionPlan || 'monthly',
-          uData?.subscriptionExpiresAt || authStore.user?.subscriptionExpiresAt || null
-        );
-      } else if (uData?.subscriptionStatus === 'free' || uData?.isPro === false) {
-        authStore.setExternalSubscriptionStatus('free', null, null);
-      } else if (!serverReportedProOrPending) {
-        // Check `/budgets/su_sub_pro_{uid}` if `/users/{uid}` doesn't have subscriptionStatus field yet
-        void authStore.syncSubscriptionFromFirestoreForUser(uid, authStore.user?.email);
-      }
-
-      // If remote document has a strictly newer timestamp (> 15s tolerance) or local token is missing, invalidate page caches and pull fresh data
-      if (
-        remoteSyncToken > 0 &&
-        (localSyncToken <= 0 || (remoteSyncToken > localSyncToken && remoteSyncToken - localSyncToken > 15000))
-      ) {
-        invalidateServerPaginationCaches(uid);
-        await fetchAllCollectionsFromFirestore(uid, remoteSyncToken);
-        await fetchTransactionsServerPage(undefined, true, true);
-        return true;
-      }
-      return false;
-    } catch (err) {
-      if (isFirestoreQuotaError(err)) {
-        useNotificationStore().notifyQuotaExceeded();
-      }
-      return false;
-    } finally {
-      isCheckingSyncToken = false;
-    }
+    // Zero-polling architecture: disable automatic background remote sync to protect Firestore read quota
+    return false;
   }
 
   async function initFinanceData(uidInput: string, forceRefresh = false) {
     cleanupListeners();
     const uid = sanitizeId(uidInput);
+    purgeForeignLocalStorage(uid);
 
-    // If already loaded in memory for this user and not forced to refresh, perform a lightweight 1-read sync check instead
+    // If already loaded in memory for this user and not forced to refresh, return immediately (0 Firestore reads!)
     if (
       !forceRefresh &&
       activeOwnerUid.value === uid &&
       isSyncedWithFirestore.value &&
       (wallets.value.length > 0 || rawTransactions.value.length > 0)
     ) {
-      await checkAndSyncIfRemoteChanged(uid, false);
       return;
     }
 
@@ -2180,12 +2063,16 @@ export const useFinanceStore = defineStore('finance', () => {
           }
         }
 
-        if (hasRestoredLocalCache && localSyncToken > 0) {
-          restorePersistedTxPageCache(uid, localSyncToken);
+        if (hasRestoredLocalCache) {
+          if (localSyncToken > 0) {
+            restorePersistedTxPageCache(uid, localSyncToken);
+          }
           isSyncedWithFirestore.value = true;
+          isLoading.value = false;
+          return;
         }
 
-        // Always fetch fresh state from Cloud Firestore to guarantee up-to-date transactions and correct wallet balances
+        // Fetch from Cloud Firestore ONLY when local storage cache is empty (e.g. first login or manual refreshData)
         await fetchAllCollectionsFromFirestore(uid, remoteSyncToken);
         isLoading.value = false;
       } catch (err) {
@@ -3190,9 +3077,7 @@ export const useFinanceStore = defineStore('finance', () => {
       console.warn('Cascade category rename Firestore update error:', cascadeErr);
     }
 
-    // Invalidate server pagination caches & refresh
     invalidateServerPaginationCaches(uid);
-    void fetchTransactionsServerPage(undefined, true, true);
     saveLocalSnapshot(uid, true);
   }
 
@@ -3704,7 +3589,7 @@ export const useFinanceStore = defineStore('finance', () => {
         }
       }
 
-      touchUserSyncTokenInBatch(batch, uid);
+      // Commit write to Firestore (0 reads)
       await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menyimpan Transaksi', err);
@@ -3766,15 +3651,13 @@ export const useFinanceStore = defineStore('finance', () => {
       if (rawDest) rawDest.balance = newDestHolderBalance;
     }
     syncWalletTotalBalancesFromHolders();
-    saveLocalSnapshot(uid, true);
+    saveLocalSnapshot(uid, false);
 
-    invalidateServerPaginationCaches(uid);
-    void fetchTransactionsServerPage(undefined, true, true);
-
-    // Ensure selectedPeriod shows the month of the newly added transaction
+    // Update in-memory paginated table slice directly (0 Firestore reads!)
     const txMonth = safeDate.slice(0, 7);
-    if (selectedPeriod.value !== 'all' && /^\d{4}-\d{2}$/.test(txMonth)) {
-      selectedPeriod.value = txMonth;
+    if (selectedPeriod.value === 'all' || selectedPeriod.value === txMonth) {
+      rawServerPaginatedTransactions.value.unshift(newTxItem);
+      txServerTotalFiltered.value++;
     }
 
     const sourceHolderLabel = formatHolderName(sourceHolder?.holderName);
@@ -4015,16 +3898,17 @@ export const useFinanceStore = defineStore('finance', () => {
         }
       }
 
-      touchUserSyncTokenInBatch(batch, uid);
+      // Commit update to Firestore (0 reads)
       await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Memperbarui Transaksi', err);
       handleFirestoreError(err, OperationType.UPDATE, txPath);
     }
 
+    let updatedTx: TransactionItem | null = null;
     const rawTxIdx = rawTransactions.value.findIndex((t) => t.id === txId);
     if (rawTxIdx >= 0) {
-      const updatedTx: TransactionItem = {
+      updatedTx = {
         ...rawTransactions.value[rawTxIdx],
         walletId: newWallet.id,
         walletName: newWallet.name,
@@ -4058,14 +3942,12 @@ export const useFinanceStore = defineStore('finance', () => {
       }
     }
     syncWalletTotalBalancesFromHolders();
-    saveLocalSnapshot(uid, true);
+    saveLocalSnapshot(uid, false);
 
-    invalidateServerPaginationCaches(uid);
-    void fetchTransactionsServerPage(undefined, true, true);
-
-    const txMonth = safeDate.slice(0, 7);
-    if (selectedPeriod.value !== 'all' && /^\d{4}-\d{2}$/.test(txMonth)) {
-      selectedPeriod.value = txMonth;
+    // Update in-memory paginated table slice directly (0 Firestore reads!)
+    const paginatedIdx = rawServerPaginatedTransactions.value.findIndex((t) => t.id === txId);
+    if (paginatedIdx >= 0 && updatedTx) {
+      rawServerPaginatedTransactions.value[paginatedIdx] = updatedTx;
     }
 
     await authStore.recordAuditLog(
@@ -4180,7 +4062,7 @@ export const useFinanceStore = defineStore('finance', () => {
         }
       }
 
-      touchUserSyncTokenInBatch(batch, uid);
+      // Commit soft-delete to Firestore (0 reads)
       await batch.commit();
     } catch (err) {
       useNotificationStore().notifyError('Gagal Menghapus Transaksi', err);
@@ -4191,8 +4073,7 @@ export const useFinanceStore = defineStore('finance', () => {
     rawServerPaginatedTransactions.value = rawServerPaginatedTransactions.value.filter(
       (t) => t.id !== txId
     );
-    invalidateServerPaginationCaches(uid);
-    void fetchTransactionsServerPage(undefined, true, true);
+    txServerTotalFiltered.value = Math.max(0, txServerTotalFiltered.value - 1);
     if (tx.type === 'income' && sourceHolder) {
       const rawSrc = rawWalletOwners.value.find((h) => h.id === sourceHolder.id);
       if (rawSrc) rawSrc.balance = Number(rawSrc.balance || 0) - tx.amount;

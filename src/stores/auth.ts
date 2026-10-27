@@ -85,6 +85,84 @@ export function isSubscriptionActiveByDate(
   return true;
 }
 
+export function purgeForeignLocalStorage(activeUid?: string) {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  const currentUid = activeUid ? sanitizeId(activeUid) : '';
+  const genericAllowlist = new Set([
+    'sisa_uang_theme',
+    'sisa_uang_locale',
+    'sisa_uang_active_user',
+    'sisa_uang_saved_accounts_v1',
+    'sisa_uang_device_id',
+    'sisa_uang_device_id_v1',
+    'sisa_uang_custom_device_name_v1',
+    'sisa_uang_explicit_logout',
+    'sisa_uang_otp_verified',
+    'sisa_uang_admin_token',
+    'sisa_uang_admin_synced_session',
+    'sisauang_pwa_dismissed',
+    'sisa_uang_real_default_categories',
+    'sisa_uang_app_logo',
+  ]);
+
+  const keysToRemove: string[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+
+      if (
+        key.startsWith('sisa_uang_') ||
+        key.startsWith('su_') ||
+        key.startsWith('sisauang_')
+      ) {
+        if (genericAllowlist.has(key)) {
+          continue;
+        }
+        if (!currentUid) {
+          keysToRemove.push(key);
+        } else {
+          // Check if key belongs strictly to currentUid (prevent substring collisions like ci4_user_2 in ci4_user_29)
+          const belongsToActiveUser =
+            key.endsWith(`_${currentUid}`) ||
+            key.endsWith(`_${currentUid}:all`) ||
+            key.includes(`_${currentUid}_`) ||
+            key.includes(`:${currentUid}:`);
+
+          if (!belongsToActiveUser) {
+            keysToRemove.push(key);
+          }
+        }
+      }
+    }
+
+    for (const k of keysToRemove) {
+      localStorage.removeItem(k);
+    }
+  } catch {
+    // Ignore localStorage access errors
+  }
+}
+
+// Immediately purge on file evaluation to clean up existing foreign user entries
+try {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    const rawSaved = localStorage.getItem('sisa_uang_active_user');
+    let activeUid = '';
+    if (rawSaved) {
+      try {
+        const parsed = JSON.parse(rawSaved);
+        if (parsed?.uid) activeUid = parsed.uid;
+      } catch {
+        // ignore
+      }
+    }
+    purgeForeignLocalStorage(activeUid);
+  }
+} catch {
+  // ignore
+}
+
 export interface OtpDispatchInfo {
   email: string;
   expiresAt: number;
@@ -629,6 +707,7 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = nextUser;
     localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextUser));
+    purgeForeignLocalStorage(nextUser.uid);
 
     const isTargetSuperAdmin =
       nextUser.role === 'admin' ||
@@ -1356,6 +1435,7 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.removeItem(SESSION_STORAGE_KEY);
       localStorage.removeItem(OTP_VERIFIED_KEY);
       setApiAdminContext(null, null);
+      purgeForeignLocalStorage();
     } else {
       const savedRaw = localStorage.getItem(SESSION_STORAGE_KEY);
       if (savedRaw) {
@@ -1371,6 +1451,7 @@ export const useAuthStore = defineStore('auth', () => {
             parsed.subscriptionExpiresAt = null;
           }
           user.value = parsed;
+          purgeForeignLocalStorage(parsed.uid);
           localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
           const isAdminAccount =
             parsed.role === 'admin' ||
@@ -1387,11 +1468,11 @@ export const useAuthStore = defineStore('auth', () => {
           }
           setApiAdminContext(parsed.email, storedToken);
           upsertSavedAccount(parsed, storedToken);
-          void syncSubscriptionFromFirestoreForUser(parsed.uid, parsed.email);
           void registerCurrentDeviceSession(parsed, false);
           startUserStatusMonitor(parsed);
         } catch {
           localStorage.removeItem(SESSION_STORAGE_KEY);
+          purgeForeignLocalStorage();
         }
       }
     }
@@ -1408,16 +1489,13 @@ export const useAuthStore = defineStore('auth', () => {
         }
         user.value = null;
         isReady.value = true;
+        purgeForeignLocalStorage();
         return;
       }
       localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
 
       if (fbUser && !fbUser.isAnonymous) {
-        // If user is already restored from localStorage session or currently registering, still verify subscription from Firestore once
         if (user.value || isRegisteringInProgress) {
-          if (user.value && !isRegisteringInProgress) {
-            void syncSubscriptionFromFirestoreForUser(user.value.uid, user.value.email);
-          }
           isReady.value = true;
           return;
         }
@@ -1694,6 +1772,7 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
       user.value = loggedInUser;
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(loggedInUser));
+      purgeForeignLocalStorage(loggedInUser.uid);
 
       // Step C: Ensure Firebase Auth session is active for Firestore security rules
       if (isMigratedUserUid) {
@@ -1774,6 +1853,7 @@ export const useAuthStore = defineStore('auth', () => {
           localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
           user.value = profile;
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
+          purgeForeignLocalStorage(profile.uid);
           const fallbackToken =
             localStorage.getItem('sisa_uang_admin_token') ||
             (profile.email.toLowerCase() === SUPER_ADMIN_EMAIL ? DEFAULT_ADMIN_SESSION_TOKEN : null);
@@ -2288,9 +2368,9 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
       user.value = profile;
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
+      purgeForeignLocalStorage(profile.uid);
       const googleAdminToken = localStorage.getItem('sisa_uang_admin_token');
       setApiAdminContext(profile.email, googleAdminToken);
-      await syncSubscriptionFromFirestoreForUser(profile.uid, profile.email);
       upsertSavedAccount(user.value || profile, googleAdminToken);
       await registerCurrentDeviceSession(user.value || profile, true);
       startUserStatusMonitor(user.value || profile);
@@ -2460,6 +2540,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('sisa_uang_admin_token');
     localStorage.removeItem('sisa_uang_actor_email');
     setApiAdminContext(null, null);
+    purgeForeignLocalStorage();
 
     user.value = null;
     deviceSessions.value = [];
