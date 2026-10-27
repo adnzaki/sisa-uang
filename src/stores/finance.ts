@@ -5,6 +5,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  getDocsFromServer,
   setDoc,
   getCountFromServer,
   query,
@@ -1105,63 +1106,25 @@ export const useFinanceStore = defineStore('finance', () => {
       currentTxServerFilter.holder !== 'all' ||
       hasSearch;
 
-    // Search Box Logic: check localStorage first (across all periods); if no matches, query Firestore directly without period filter (limit 25)
+    // Direct Firestore Search: Query directly from Firestore server (no local cache / localStorage shortcuts)
     if (hasSearch) {
       if (!silent) isTxServerPageLoading.value = true;
       try {
-        // Step 1: Check localStorage and memory cache first
-        const localPool: TransactionItem[] = [...rawTransactions.value];
-        try {
-          const rawStored = localStorage.getItem(storageKey('transactions', uid));
-          if (rawStored) {
-            const parsedStored = JSON.parse(rawStored) as TransactionItem[];
-            if (Array.isArray(parsedStored)) {
-              const idSet = new Set(localPool.map((t) => t.id));
-              for (const item of parsedStored) {
-                if (item && item.id && !idSet.has(item.id)) {
-                  localPool.push(item);
-                  idSet.add(item.id);
-                }
-              }
-            }
-          }
-        } catch {
-          // Ignore JSON errors
-        }
-
-        const localMatches = localPool
-          .filter((tx) => !tx.deleted)
-          .map((tx) => enrichTransactionItem(tx))
-          .filter((tx) => matchesClientSubFilters(tx));
-
-        if (localMatches.length > 0) {
-          // Found in localStorage/cache: return immediately with 0 Firestore reads!
-          localMatches.sort((a, b) => {
-            const cmp = String(b.date || '').localeCompare(String(a.date || ''));
-            if (cmp !== 0) return cmp;
-            return String(b.id || '').localeCompare(String(a.id || ''));
-          });
-          const totalFiltered = localMatches.length;
-          const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
-          const safePage = Math.min(targetPage, totalPages);
-          const start = (safePage - 1) * pageSize;
-          const pageSlice = localMatches.slice(start, start + pageSize);
-
-          rawServerPaginatedTransactions.value = pageSlice;
-          txServerPage.value = safePage;
-          txServerPageSize.value = pageSize;
-          txServerTotalFiltered.value = totalFiltered;
-          txServerTotalPages.value = totalPages;
-          return;
-        }
-
-        // Step 2: Not found locally -> query Firestore directly without filtering by month period (limit 25)
         const canQuery = await ensureFirestoreSessionForUser(uid);
         if (canQuery) {
           const searchConstraints: QueryConstraint[] = [
             where('ownerId', '==', uid),
             where('deleted', '==', false),
           ];
+
+          // STRICT MONTH ISOLATION: When month filter is active, constrain Firestore query by date range
+          if (targetPeriod !== 'all' && /^\d{4}-\d{2}$/.test(targetPeriod)) {
+            searchConstraints.push(
+              where('date', '>=', `${targetPeriod}-01`),
+              where('date', '<=', `${targetPeriod}-31\uf8ff`)
+            );
+          }
+
           if (currentTxServerFilter.type !== 'all') {
             searchConstraints.push(where('type', '==', currentTxServerFilter.type));
           }
@@ -1174,17 +1137,38 @@ export const useFinanceStore = defineStore('finance', () => {
           ) {
             searchConstraints.push(where('walletId', '==', currentTxServerFilter.walletId));
           }
-          searchConstraints.push(limit(25));
 
-          const searchSnap = await getDocs(
-            query(collection(db, 'transactions'), ...searchConstraints)
-          );
-          const remoteDocs: TransactionItem[] = searchSnap.docs
+          let searchSnap;
+          try {
+            // Always query directly from Firestore backend server
+            searchSnap = await getDocsFromServer(
+              query(collection(db, 'transactions'), ...searchConstraints, orderBy('date', 'desc'))
+            );
+          } catch {
+            try {
+              searchSnap = await getDocsFromServer(
+                query(collection(db, 'transactions'), ...searchConstraints)
+              );
+            } catch {
+              searchSnap = await getDocs(
+                query(collection(db, 'transactions'), ...searchConstraints)
+              );
+            }
+          }
+
+          let remoteDocs: TransactionItem[] = searchSnap.docs
             .map((d: any) => ({
               id: d.id,
               ...(d.data() as Omit<TransactionItem, 'id'>),
             }))
             .filter((t: TransactionItem) => !t.deleted);
+
+          // STRICT MONTH ISOLATION: Reject any document outside targetPeriod if month filter is active
+          if (targetPeriod !== 'all') {
+            remoteDocs = remoteDocs.filter(
+              (tx) => String(tx.date || '').slice(0, 7) === targetPeriod
+            );
+          }
 
           remoteDocs.sort((a, b) => {
             const cmp = String(b.date || '').localeCompare(String(a.date || ''));
@@ -1192,13 +1176,12 @@ export const useFinanceStore = defineStore('finance', () => {
             return String(b.id || '').localeCompare(String(a.id || ''));
           });
 
-          mergeFetchedTransactionsIntoCache(remoteDocs);
-          saveLocalSnapshot(uid, false);
-
+          // Match client-side search query (note, category, wallet, holder, amount, etc.)
           const remoteMatches = remoteDocs
             .map((tx) => enrichTransactionItem(tx))
             .filter((tx) => matchesClientSubFilters(tx));
 
+          // Pagination: 25 items per page
           const totalFiltered = remoteMatches.length;
           const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
           const safePage = Math.min(targetPage, totalPages);
@@ -1601,9 +1584,9 @@ export const useFinanceStore = defineStore('finance', () => {
   }
 
   function matchesClientSubFilters(tx: TransactionItem): boolean {
-    const hasSearch = Boolean(currentTxServerFilter.search && currentTxServerFilter.search.trim());
+    // STRICT PERIOD ISOLATION: If a period is chosen (e.g. '2026-07'), NEVER accept any transaction from a different month!
     if (
-      !hasSearch &&
+      currentTxServerFilter.period &&
       currentTxServerFilter.period !== 'all' &&
       String(tx.date || '').slice(0, 7) !== currentTxServerFilter.period
     ) {
@@ -1635,6 +1618,7 @@ export const useFinanceStore = defineStore('finance', () => {
     ) {
       return false;
     }
+    const hasSearch = Boolean(currentTxServerFilter.search && currentTxServerFilter.search.trim());
     if (hasSearch) {
       const q = currentTxServerFilter.search.trim().toLowerCase();
       return (

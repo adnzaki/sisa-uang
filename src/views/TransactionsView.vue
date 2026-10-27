@@ -33,7 +33,7 @@ const searchQuery = ref('');
 const selectedWalletId = ref<string>('all');
 const selectedHolderFilter = ref<string>('all');
 
-// Server-side Pagination state when 'all' (Semua Periode) is active: 25 transactions per page
+// Server-side Pagination state (25 transactions per page) for all periods and monthly filters
 const TX_PAGE_SIZE = 25;
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const isRefreshing = ref(false);
@@ -457,28 +457,15 @@ function getDateBadge(dateStr: string) {
         </div>
       </div>
 
-      <!-- Server-Side Pagination (25 transactions per page) when 'all' (Semua Periode) is active -->
-      <AppPagination
-        v-if="txSelectedPeriod === 'all'"
-        :current-page="financeStore.txServerPage"
-        :total-items="totalFilteredTransactions"
-        :page-size="TX_PAGE_SIZE"
-        item-label="transaksi"
-        @update:current-page="handleTxPageChange"
-      />
-
       <!-- Monthly Period Summary Footer when a specific month is selected -->
       <div
-        v-else
+        v-if="txSelectedPeriod !== 'all'"
         class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 text-xs text-slate-600 dark:text-slate-400 flex flex-col sm:flex-row items-center justify-between gap-2"
       >
         <span>
-          Menampilkan seluruh
-          <strong class="font-mono font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
-            {{ totalFilteredTransactions }}
-          </strong>
-          transaksi pada periode
+          Menampilkan transaksi periode
           <strong class="text-slate-900 dark:text-slate-100">{{ activePeriodLabel }}</strong>
+          (Total: <strong class="font-mono font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">{{ totalFilteredTransactions }}</strong> transaksi)
         </span>
         <button
           type="button"
@@ -488,6 +475,16 @@ function getDateBadge(dateStr: string) {
           Tampilkan Semua Periode
         </button>
       </div>
+
+      <!-- Server-Side Pagination (25 transactions per page) when total items > 25 (works for both 'all' and monthly period) -->
+      <AppPagination
+        v-if="totalFilteredTransactions > TX_PAGE_SIZE"
+        :current-page="financeStore.txServerPage"
+        :total-items="totalFilteredTransactions"
+        :page-size="TX_PAGE_SIZE"
+        item-label="transaksi"
+        @update:current-page="handleTxPageChange"
+      />
     </div>
 
     <!-- =================================================================== -->
