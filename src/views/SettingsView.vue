@@ -152,26 +152,10 @@ const customDeviceLabel = ref(
     : ''
 );
 
-let sessionsPollInterval: ReturnType<typeof setInterval> | null = null;
-
 onMounted(() => {
   themeStore.loadReportSignatureConfig(authStore.user?.uid);
   void authStore.fetchDeviceSessions();
   checkAndScrollToSection();
-
-  // Periodically keep sessions fresh while on settings page so other devices appear automatically
-  sessionsPollInterval = setInterval(() => {
-    if (authStore.user?.uid && typeof document !== 'undefined' && document.visibilityState === 'visible') {
-      void authStore.fetchDeviceSessions(true);
-    }
-  }, 10000);
-});
-
-onUnmounted(() => {
-  if (sessionsPollInterval) {
-    clearInterval(sessionsPollInterval);
-    sessionsPollInterval = null;
-  }
 });
 
 watch(

@@ -389,6 +389,11 @@ export const useAdminStore = defineStore('admin', () => {
       }
       localAdminUsersSyncToken = remoteToken;
 
+      if ((!data.items || data.items.length <= 1) && !forceServerReload) {
+        await syncFirestoreUsersToServerRegistry(true);
+        return;
+      }
+
       paginatedUsers.value = data.items || [];
       usersPage.value = Number(data.page) || 1;
       usersPageSize.value = Number(data.limit) || 25;
@@ -525,19 +530,15 @@ export const useAdminStore = defineStore('admin', () => {
   let firestoreUsersSyncedInSession = false;
 
   async function syncFirestoreUsersToServerRegistry(force = false): Promise<number> {
-    const sessionSynced =
-      typeof sessionStorage !== 'undefined' &&
-      sessionStorage.getItem('sisauang_admin_synced_session') === 'true';
-
-    if (!force && (firestoreUsersSyncedInSession || sessionSynced)) {
+    if (!force && firestoreUsersSyncedInSession && users.value.length > 1) {
       return usersSummary.value.totalUsers;
     }
 
     try {
       await ensureSuperAdminFirebaseSession();
       const targetDb = sisaUangDb || db;
-      // Strict quota safety: bound users query to at most 50 documents
-      const snap = await getDocs(query(collection(targetDb, 'users'), limit(50)));
+      // Load all Firestore user documents (up to 500)
+      const snap = await getDocs(query(collection(targetDb, 'users'), limit(500)));
       const proMarkersMap = new Map<
         string,
         { status: 'pending' | 'pro' | 'free'; plan: 'monthly' | 'yearly' | null; expiresAt: string | null }
@@ -546,7 +547,7 @@ export const useAdminStore = defineStore('admin', () => {
 
       try {
         const proSnap = await getDocs(
-          query(collection(targetDb, 'budgets'), where('category', '==', '__SISAUANG_PRO__'), limit(50))
+          query(collection(targetDb, 'budgets'), where('category', '==', '__SISAUANG_PRO__'), limit(500))
         );
         proSnap.docs.forEach((pd) => {
           const pData = pd.data() as Record<string, any>;
@@ -594,65 +595,10 @@ export const useAdminStore = defineStore('admin', () => {
       snap.docs.forEach((d) => {
         const fbUser = d.data();
         const markerInfo = proMarkersMap.get(d.id);
-        const existingLocalUser =
-          users.value.find(
-            (u) =>
-              u.uid === d.id ||
-              (u.email && fbUser.email && u.email.toLowerCase() === fbUser.email.toLowerCase())
-          ) ||
-          paginatedUsers.value.find(
-            (u) =>
-              u.uid === d.id ||
-              (u.email && fbUser.email && u.email.toLowerCase() === fbUser.email.toLowerCase())
-          );
 
         const isExplicitlyDeactivated =
           explicitlyDeactivatedOwners.has(d.id) ||
-          fbUser.isExplicitlyDeactivated === true ||
-          existingLocalUser?.isExplicitlyDeactivated === true ||
-          (existingLocalUser && existingLocalUser.subscriptionStatus === 'free' && !existingLocalUser.isPro) ||
-          fbUser.subscriptionStatus === 'free' ||
-          fbUser.isPro === false;
-
-        // Auto-repair stale Firestore user document if budget marker shows deactivation but user doc still has PRO
-        if (isExplicitlyDeactivated && (fbUser.isPro === true || fbUser.subscriptionStatus === 'pro')) {
-          void (async () => {
-            try {
-              // Priority 1: updateDoc directly modifies only subscription fields (guaranteed to match rules on existing docs)
-              await updateDoc(doc(targetDb, 'users', d.id), {
-                subscriptionStatus: 'free',
-                isPro: false,
-                subscriptionPlan: null,
-                subscriptionExpiresAt: null,
-                updatedAt: serverTimestamp(),
-              });
-            } catch {
-              try {
-                // Priority 2: Sanitized setDoc fallback with ONLY allowed schema keys
-                const sanitizedRepairDoc: Record<string, any> = {
-                  uid: d.id,
-                  email: fbUser.email || `${d.id}@sisa-uang.id`,
-                  displayName: fbUser.displayName || fbUser.username || d.id,
-                  role: fbUser.role === 'admin' ? 'admin' : 'user',
-                  status: fbUser.status === 'blocked' ? 'blocked' : 'active',
-                  authProvider: fbUser.authProvider === 'google' ? 'google' : 'password',
-                  currency: fbUser.currency === 'USD' ? 'USD' : 'IDR',
-                  subscriptionStatus: 'free',
-                  isPro: false,
-                  subscriptionPlan: null,
-                  subscriptionExpiresAt: null,
-                  updatedAt: serverTimestamp(),
-                };
-                if (fbUser.username) sanitizedRepairDoc.username = fbUser.username;
-                if (fbUser.passwordHash) sanitizedRepairDoc.passwordHash = fbUser.passwordHash;
-                if (fbUser.createdAt) sanitizedRepairDoc.createdAt = fbUser.createdAt;
-                await setDoc(doc(targetDb, 'users', d.id), sanitizedRepairDoc, { merge: true });
-              } catch {
-                // Ignore background auto-repair error
-              }
-            }
-          })();
-        }
+          fbUser.isExplicitlyDeactivated === true;
 
         const isPending =
           !isExplicitlyDeactivated &&
@@ -662,7 +608,8 @@ export const useAdminStore = defineStore('admin', () => {
           !isExplicitlyDeactivated &&
           !isPending &&
           (markerInfo?.status === 'pro' ||
-            (fbUser.subscriptionStatus === 'pro' || fbUser.isPro === true)) &&
+            fbUser.subscriptionStatus === 'pro' ||
+            fbUser.isPro === true) &&
           isAdminUserProActive({
             uid: d.id,
             email: fbUser.email,
@@ -694,7 +641,7 @@ export const useAdminStore = defineStore('admin', () => {
           currency: fbUser.currency === 'USD' ? 'USD' : 'IDR',
           subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
           isPro,
-          isExplicitlyDeactivated: isExplicitlyDeactivated || !isPro,
+          isExplicitlyDeactivated,
           subscriptionPlan,
           subscriptionExpiresAt,
           passwordHash: fbUser.passwordHash,
@@ -766,9 +713,13 @@ export const useAdminStore = defineStore('admin', () => {
     error.value = null;
 
     try {
+      if (!silent || usersSummary.value.totalUsers <= 1 || paginatedUsers.value.length <= 1) {
+        await syncFirestoreUsersToServerRegistry(!silent);
+      }
+
       const [overviewRes] = await Promise.all([
         apiClient.get('/admin/overview'),
-        fetchAdminUsersPage(undefined, true, !silent),
+        fetchAdminUsersPage(undefined, true, true),
         fetchAdminLogsPage(undefined, true, !silent),
       ]);
       const data = overviewRes.data;

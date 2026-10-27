@@ -2133,41 +2133,6 @@ export const useFinanceStore = defineStore('finance', () => {
       // Ignore corrupt cache
     }
 
-    // Sync latest subscription status from Express registry (0 Firestore reads)
-    let serverSaysFree = false;
-    let localServerHasProOrPending = false;
-    try {
-      const res = await fetch(`/api/users/${encodeURIComponent(uid)}/status`);
-      if (res.ok) {
-        const statusData = await res.json();
-        const authStore = useAuthStore();
-        if (
-          statusData.subscriptionStatus === 'free' ||
-          statusData.isPro === false ||
-          statusData.isExplicitlyDeactivated === true
-        ) {
-          serverSaysFree = true;
-          authStore.setExternalSubscriptionStatus('free', null, null, true);
-        } else if (statusData.subscriptionStatus === 'pro' || statusData.isPro === true) {
-          localServerHasProOrPending = true;
-          authStore.setExternalSubscriptionStatus(
-            'pro',
-            statusData.subscriptionPlan || 'monthly',
-            statusData.subscriptionExpiresAt || null
-          );
-        } else if (statusData.subscriptionStatus === 'pending') {
-          localServerHasProOrPending = true;
-          authStore.setExternalSubscriptionStatus(
-            'pending',
-            statusData.subscriptionPlan || 'monthly',
-            null
-          );
-        }
-      }
-    } catch {
-      // Ignore network error
-    }
-
     const canQueryFirestore = await ensureFirestoreSessionForUser(uid);
 
     if (canQueryFirestore) {
@@ -2185,7 +2150,7 @@ export const useFinanceStore = defineStore('finance', () => {
             confirmedUserDocsInFirestore.add(uid);
             const uData = userSnap.data();
             remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
-            if (serverSaysFree || uData?.isExplicitlyDeactivated === true || authStore.user?.isExplicitlyDeactivated === true) {
+            if (uData?.isExplicitlyDeactivated === true || authStore.user?.isExplicitlyDeactivated === true) {
               authStore.setExternalSubscriptionStatus('free', null, null, true);
             } else if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
               authStore.setExternalSubscriptionStatus(
@@ -2197,10 +2162,10 @@ export const useFinanceStore = defineStore('finance', () => {
               );
             } else if (uData?.subscriptionStatus === 'free' || uData?.isPro === false) {
               authStore.setExternalSubscriptionStatus('free', null, null);
-            } else if (!localServerHasProOrPending) {
+            } else {
               void authStore.syncSubscriptionFromFirestoreForUser(uid, authStore.user?.email);
             }
-          } else if (!localServerHasProOrPending) {
+          } else {
             void authStore.syncSubscriptionFromFirestoreForUser(uid, authStore.user?.email);
           }
         } catch (tokenErr) {
