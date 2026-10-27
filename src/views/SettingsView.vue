@@ -52,7 +52,10 @@ const notificationStore = useNotificationStore();
 const {
   needRefresh,
   isReloadingForUpdate,
+  clientAppVersion,
   currentAppVersion,
+  latestServerVersion,
+  hasNewVersion,
   checkForAppUpdates,
   performFullAppReload,
 } = usePWA();
@@ -63,12 +66,19 @@ async function handleManualCheckUpdate() {
   isCheckingUpdate.value = true;
   try {
     const hasUpdate = await checkForAppUpdates();
-    if (!hasUpdate) {
+    if (hasUpdate || hasNewVersion.value || needRefresh.value) {
+      notificationStore.notifySuccess(
+        'Pembaruan Versi Tersedia!',
+        `Versi baru (${latestServerVersion.value || '1.0.0-rc.7'}) telah siap! Versi aktif saat ini: ${clientAppVersion.value}. Gunakan tombol "Bersihkan Cache & Reload Penuh" untuk menerapkan versi terbaru.`
+      );
+    } else {
       notificationStore.notifySuccess(
         'Aplikasi Sudah Versi Terbaru',
-        `Anda sedang menggunakan Sisa Uang versi terbaru (${currentAppVersion.value}). Jika tampilan belum berubah, gunakan tombol "Bersihkan Cache & Reload Penuh".`
+        `Anda sedang menggunakan Sisa Uang versi terbaru (${clientAppVersion.value}). Jika tampilan belum berubah, gunakan tombol "Bersihkan Cache & Reload Penuh".`
       );
     }
+  } catch (err: any) {
+    notificationStore.notifyError('Gagal Memeriksa Pembaruan', err);
   } finally {
     isCheckingUpdate.value = false;
   }
@@ -756,15 +766,45 @@ function handleGoToAddAccount() {
             <div class="font-medium text-slate-900 dark:text-slate-100 flex flex-wrap items-center gap-2">
               <span>Versi &amp; Pembaruan Aplikasi</span>
               <span class="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                {{ currentAppVersion }}
+                v{{ clientAppVersion }}
               </span>
               <span
-                v-if="needRefresh"
-                class="px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold"
+                v-if="hasNewVersion || needRefresh"
+                class="px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold flex items-center gap-1"
               >
-                Update Tersedia
+                <span>Update Tersedia: v{{ latestServerVersion || '1.0.0-rc.7' }}</span>
+              </span>
+              <span
+                v-else
+                class="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold"
+              >
+                Versi Terbaru Aktif
               </span>
             </div>
+
+            <!-- Prominent Update Alert Box if new version is detected -->
+            <div
+              v-if="hasNewVersion || needRefresh"
+              class="p-3 rounded-xl border border-amber-500/40 bg-amber-50/80 dark:bg-amber-950/30 text-amber-800 dark:text-amber-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+            >
+              <div class="flex items-center gap-2">
+                <Sparkles class="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span>
+                  <strong>Versi baru v{{ latestServerVersion || '1.0.0-rc.7' }} siap dipasang!</strong>
+                  (Versi aktif saat ini: v{{ clientAppVersion }})
+                </span>
+              </div>
+              <button
+                type="button"
+                :disabled="isReloadingForUpdate"
+                class="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                @click="performFullAppReload(true)"
+              >
+                <RefreshCw class="w-3.5 h-3.5" :class="isReloadingForUpdate ? 'animate-spin' : ''" />
+                <span>Perbarui Sekarang</span>
+              </button>
+            </div>
+
             <p class="w-full text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
               Jika sudah reload namun tampilan aplikasi belum terupdate, gunakan tombol <strong>Bersihkan Cache &amp; Reload Penuh</strong> untuk memuat ulang seluruh aset terbaru dari server.
             </p>

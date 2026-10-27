@@ -52,8 +52,14 @@ function ssgPrerenderPlugin() {
   };
 }
 
+import pkg from './package.json';
+
 export default defineConfig(() => {
   return {
+    define: {
+      __APP_VERSION__: JSON.stringify(pkg.version || '1.0.0-rc.7'),
+      __BUILD_TIMESTAMP__: JSON.stringify(new Date().toISOString()),
+    },
     plugins: [
       vue(),
       tailwindcss(),

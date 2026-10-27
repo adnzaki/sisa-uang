@@ -4119,7 +4119,8 @@ async function startServer() {
   }
 
   app.get('/api/app-version', (_req: Request, res: Response) => {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
     res.json(computeCurrentBuildFingerprint());

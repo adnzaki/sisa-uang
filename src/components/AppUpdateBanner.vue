@@ -8,6 +8,8 @@ const {
   isReloadingForUpdate,
   reloadDidNotUpdate,
   reloadAttemptCount,
+  clientAppVersion,
+  latestServerVersion,
   performFullAppReload,
   dismissUpdateNotice,
 } = usePWA();
@@ -46,21 +48,33 @@ const showTroubleshootInfo = ref(false);
             </div>
 
             <div class="space-y-1 min-w-0">
-              <div
-                class="text-[11px] font-bold uppercase tracking-wider"
-                :class="reloadDidNotUpdate ? 'text-amber-300' : 'text-emerald-300'"
-              >
-                {{
-                  reloadDidNotUpdate
-                    ? 'Pembaruan Tertahan Cache'
-                    : 'Pembaruan Aplikasi Tersedia'
-                }}
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span
+                  class="text-[11px] font-bold uppercase tracking-wider"
+                  :class="reloadDidNotUpdate ? 'text-amber-300' : 'text-emerald-300'"
+                >
+                  {{
+                    reloadDidNotUpdate
+                      ? 'Pembaruan Tertahan Cache'
+                      : latestServerVersion
+                        ? `Update v${latestServerVersion} Tersedia`
+                        : 'Pembaruan Aplikasi Tersedia'
+                  }}
+                </span>
+                <span
+                  v-if="clientAppVersion"
+                  class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-slate-300 font-semibold"
+                >
+                  Saat ini: v{{ clientAppVersion }}
+                </span>
               </div>
               <p class="text-xs sm:text-sm font-semibold text-white leading-relaxed">
                 {{
                   reloadDidNotUpdate
                     ? 'Halaman sudah dimuat ulang namun versi terbaru belum aktif karena cache browser/Service Worker.'
-                    : 'Versi terbaru Sisa Uang telah siap. Muat ulang halaman secara penuh untuk menerapkan pembaruan.'
+                    : latestServerVersion
+                      ? `Versi ${latestServerVersion} telah siap. Muat ulang halaman secara penuh untuk menerapkan pembaruan.`
+                      : 'Versi terbaru Sisa Uang telah siap. Muat ulang halaman secara penuh untuk menerapkan pembaruan.'
                 }}
               </p>
             </div>

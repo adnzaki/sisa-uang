@@ -10,6 +10,40 @@ const RELOAD_ATTEMPT_KEY = 'sisa_uang_update_reload_attempt';
 const RELOAD_COUNT_KEY = 'sisa_uang_update_reload_count';
 const KNOWN_BUILD_HASH_KEY = 'sisa_uang_known_build_hash';
 
+// Compile-time client version injected via Vite define (__APP_VERSION__)
+export const COMPILED_CLIENT_VERSION =
+  typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.0-rc.7';
+
+/**
+ * Semver comparison helper (supports semver + Release Candidate format like 1.0.0-rc.7 vs 1.0.0-rc.6)
+ * Returns true if serverVer is strictly newer than currentVer.
+ */
+export function isNewerVersion(serverVer: string, currentVer: string): boolean {
+  if (!serverVer || !currentVer) return false;
+  if (serverVer.trim() === currentVer.trim()) return false;
+
+  const parse = (v: string) => {
+    const clean = v.replace(/^v/i, '').trim();
+    const [main, rc] = clean.split('-');
+    const parts = main.split('.').map((p) => parseInt(p, 10) || 0);
+    while (parts.length < 3) parts.push(0);
+    let rcNum = 999999; // Stable release without RC suffix is higher than any RC
+    if (rc) {
+      const match = rc.match(/rc\.?(\d+)/i);
+      rcNum = match ? parseInt(match[1], 10) : 0;
+    }
+    return { major: parts[0], minor: parts[1], patch: parts[2], rc: rcNum };
+  };
+
+  const s = parse(serverVer);
+  const c = parse(currentVer);
+
+  if (s.major !== c.major) return s.major > c.major;
+  if (s.minor !== c.minor) return s.minor > c.minor;
+  if (s.patch !== c.patch) return s.patch > c.patch;
+  return s.rc > c.rc;
+}
+
 // Shared reactive singleton state across all mounted PWA components
 const deferredPrompt = ref<BeforeInstallPromptEvent | null>(null);
 const isInstalled = ref(false);
@@ -22,9 +56,22 @@ const needRefresh = ref(false);
 const isReloadingForUpdate = ref(false);
 const reloadDidNotUpdate = ref(false);
 const reloadAttemptCount = ref(0);
-const currentAppVersion = ref('1.0.0-rc.7');
-const currentBuildHash = ref<string | null>(null);
-const latestServerBuildHash = ref<string | null>(null);
+
+// Client's currently running version (immutable to this compiled bundle)
+export const clientAppVersion = ref(COMPILED_CLIENT_VERSION);
+// Backward-compatible alias for existing templates
+export const currentAppVersion = clientAppVersion;
+
+// Latest version reported by server endpoint /api/app-version
+export const latestServerVersion = ref<string | null>(null);
+export const latestServerBuildHash = ref<string | null>(null);
+export const currentBuildHash = ref<string | null>(null);
+export const lastUpdateCheckedAt = ref<Date | null>(null);
+
+export const hasNewVersion = computed(() => {
+  if (!latestServerVersion.value) return false;
+  return isNewerVersion(latestServerVersion.value, clientAppVersion.value);
+});
 
 let listenersInitialized = false;
 let swRegistered = false;
@@ -73,9 +120,12 @@ function handleOffline() {
   isOnline.value = false;
 }
 
-function markUpdateDetected(newServerHash?: string | null) {
+export function markUpdateDetected(newServerHash?: string | null, newServerVersion?: string | null) {
   if (newServerHash) {
     latestServerBuildHash.value = newServerHash;
+  }
+  if (newServerVersion) {
+    latestServerVersion.value = newServerVersion;
   }
   needRefresh.value = true;
 
@@ -85,7 +135,11 @@ function markUpdateDetected(newServerHash?: string | null) {
     const count = Number(sessionStorage.getItem(RELOAD_COUNT_KEY) || '0');
     reloadAttemptCount.value = count;
     if (rawAttempt) {
-      const parsed = JSON.parse(rawAttempt) as { ts: number; targetHash?: string | null };
+      const parsed = JSON.parse(rawAttempt) as {
+        ts: number;
+        targetHash?: string | null;
+        targetVer?: string | null;
+      };
       if (Date.now() - parsed.ts < 90000) {
         reloadDidNotUpdate.value = true;
       }
@@ -98,75 +152,56 @@ function markUpdateDetected(newServerHash?: string | null) {
 export async function checkForAppUpdates(): Promise<boolean> {
   if (typeof window === 'undefined' || !navigator.onLine) return false;
 
-  // 1. Trigger Service Worker update check if supported
-  try {
-    if ('serviceWorker' in navigator) {
-      const reg = await navigator.serviceWorker.getRegistration();
-      if (reg) {
-        await reg.update();
-        if (reg.waiting) {
-          markUpdateDetected();
-          return true;
-        }
-      }
-    }
-  } catch {
-    // Ignore SW check error
-  }
+  let updateFound = false;
 
-  // 2. Check live server build hash (/api/app-version) with cache-busting query
+  // 1. Check live server version & build hash (/api/app-version) with cache-busting query
   try {
     const res = await fetch(`/api/app-version?_t=${Date.now()}`, {
       cache: 'no-store',
       headers: {
-        'Cache-Control': 'no-cache',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
         Pragma: 'no-cache',
       },
     });
     if (res.ok) {
+      lastUpdateCheckedAt.value = new Date();
       const data = (await res.json()) as { version?: string; buildHash?: string };
-      if (data.version) {
-        currentAppVersion.value = data.version;
-      }
-      if (data.buildHash) {
-        if (!currentBuildHash.value) {
-          // First load in this tab lifecycle
-          const previousAttemptRaw = sessionStorage.getItem(RELOAD_ATTEMPT_KEY);
-          const savedKnownHash = localStorage.getItem(KNOWN_BUILD_HASH_KEY);
-          currentBuildHash.value = data.buildHash;
-          localStorage.setItem(KNOWN_BUILD_HASH_KEY, data.buildHash);
+      const serverVersion = data.version ? String(data.version) : null;
+      const serverHash = data.buildHash ? String(data.buildHash) : null;
 
-          if (previousAttemptRaw) {
-            try {
-              const parsed = JSON.parse(previousAttemptRaw) as {
-                ts: number;
-                fromHash?: string | null;
-                targetHash?: string | null;
-              };
-              // If the user reloaded because of a waiting SW or hash mismatch, and SW is still waiting or hash didn't advance
-              if (
-                Date.now() - parsed.ts < 90000 &&
-                parsed.fromHash &&
-                parsed.targetHash &&
-                parsed.fromHash === data.buildHash &&
-                parsed.targetHash !== data.buildHash
-              ) {
-                reloadDidNotUpdate.value = true;
-                needRefresh.value = true;
-              } else {
-                sessionStorage.removeItem(RELOAD_ATTEMPT_KEY);
-                sessionStorage.removeItem(RELOAD_COUNT_KEY);
-                reloadAttemptCount.value = 0;
-              }
-            } catch {
-              sessionStorage.removeItem(RELOAD_ATTEMPT_KEY);
-            }
-          } else if (savedKnownHash && savedKnownHash !== data.buildHash) {
-            localStorage.setItem(KNOWN_BUILD_HASH_KEY, data.buildHash);
+      if (serverVersion) {
+        latestServerVersion.value = serverVersion;
+      }
+      if (serverHash) {
+        latestServerBuildHash.value = serverHash;
+      }
+
+      // Check A: Server version is strictly newer or different from currently running client bundle
+      if (
+        serverVersion &&
+        (isNewerVersion(serverVersion, clientAppVersion.value) ||
+          serverVersion !== clientAppVersion.value)
+      ) {
+        markUpdateDetected(serverHash, serverVersion);
+        updateFound = true;
+      }
+
+      // Check B: Build hash changed compared to previous known hash
+      if (serverHash) {
+        const savedKnownHash = localStorage.getItem(KNOWN_BUILD_HASH_KEY);
+        if (savedKnownHash && savedKnownHash !== serverHash) {
+          markUpdateDetected(serverHash, serverVersion);
+          updateFound = true;
+        }
+
+        if (!currentBuildHash.value) {
+          currentBuildHash.value = serverHash;
+          if (!savedKnownHash) {
+            localStorage.setItem(KNOWN_BUILD_HASH_KEY, serverHash);
           }
-        } else if (data.buildHash !== currentBuildHash.value) {
-          markUpdateDetected(data.buildHash);
-          return true;
+        } else if (serverHash !== currentBuildHash.value) {
+          markUpdateDetected(serverHash, serverVersion);
+          updateFound = true;
         }
       }
     }
@@ -174,7 +209,41 @@ export async function checkForAppUpdates(): Promise<boolean> {
     // Ignore network error
   }
 
-  return needRefresh.value;
+  // 2. Trigger Service Worker update check if supported
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) {
+        if (reg.waiting) {
+          markUpdateDetected(latestServerBuildHash.value, latestServerVersion.value);
+          updateFound = true;
+        }
+
+        await reg.update();
+
+        if (reg.waiting) {
+          markUpdateDetected(latestServerBuildHash.value, latestServerVersion.value);
+          updateFound = true;
+        }
+
+        if (reg.installing) {
+          const installingWorker = reg.installing;
+          installingWorker.addEventListener('statechange', () => {
+            if (
+              installingWorker.state === 'installed' &&
+              navigator.serviceWorker.controller
+            ) {
+              markUpdateDetected(latestServerBuildHash.value, latestServerVersion.value);
+            }
+          });
+        }
+      }
+    }
+  } catch {
+    // Ignore SW check error
+  }
+
+  return updateFound || needRefresh.value;
 }
 
 export async function performFullAppReload(forcePurgeCaches = false): Promise<void> {
@@ -190,6 +259,8 @@ export async function performFullAppReload(forcePurgeCaches = false): Promise<vo
       RELOAD_ATTEMPT_KEY,
       JSON.stringify({
         ts: Date.now(),
+        fromVer: clientAppVersion.value,
+        targetVer: latestServerVersion.value,
         fromHash: currentBuildHash.value,
         targetHash: latestServerBuildHash.value,
       })
@@ -202,9 +273,15 @@ export async function performFullAppReload(forcePurgeCaches = false): Promise<vo
   }
 
   try {
-    // If user already reloaded once and it still didn't update (or requested force purge),
+    // If user requested force purge, or reload failed to update, or there is a known new version,
     // unregister all Service Workers and delete all CacheStorage entries before hard navigation.
-    if (forcePurgeCaches || reloadDidNotUpdate.value || reloadAttemptCount.value > 1) {
+    const shouldPurge =
+      forcePurgeCaches ||
+      reloadDidNotUpdate.value ||
+      reloadAttemptCount.value > 1 ||
+      hasNewVersion.value;
+
+    if (shouldPurge) {
       if ('serviceWorker' in navigator) {
         const registrations = await navigator.serviceWorker.getRegistrations();
         await Promise.all(
@@ -324,12 +401,12 @@ export function initPWAListeners() {
     });
   }
 
-  // Initial check and periodic 45-second check for new app versions
+  // Initial check and periodic 30-second check for new app versions
   checkForAppUpdates();
   if (!versionPollTimer) {
     versionPollTimer = setInterval(() => {
       checkForAppUpdates();
-    }, 45000);
+    }, 30000);
   }
 }
 
@@ -374,8 +451,11 @@ export function usePWA() {
     isReloadingForUpdate,
     reloadDidNotUpdate,
     reloadAttemptCount,
+    clientAppVersion,
     currentAppVersion,
-    currentBuildHash,
+    latestServerVersion,
+    hasNewVersion,
+    lastUpdateCheckedAt,
     install,
     checkForAppUpdates,
     performFullAppReload,

@@ -59,6 +59,7 @@ import ReleaseNotesModal from './components/ReleaseNotesModal.vue';
 import AutomationConfirmBanner from './components/AutomationConfirmBanner.vue';
 import InSiteCheckoutModal from './components/InSiteCheckoutModal.vue';
 import { scrollToPageTop, scrollToPageTopMultiFrame } from './utils/scroll';
+import { usePWA } from './composables/usePWA';
 
 const { t, locale } = useI18n();
 const route = useRoute();
@@ -69,6 +70,7 @@ const financeStore = useFinanceStore();
 const adminStore = useAdminStore();
 const notificationStore = useNotificationStore();
 const automationStore = useAutomationStore();
+const { clientAppVersion, needRefresh, hasNewVersion } = usePWA();
 
 const mobileDrawerOpen = ref(false);
 const accountMenuOpen = ref(false);
@@ -1360,11 +1362,16 @@ async function handleSubmitProPayment() {
           <button
             type="button"
             class="w-full py-1.5 px-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/80 text-center text-[11px] font-mono text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center justify-center gap-1.5 transition-colors"
-            title="Lihat Informasi Rilis &amp; Changelog v1.0.0-rc.7"
+            :title="`Lihat Informasi Rilis & Changelog v${clientAppVersion}`"
             @click="notificationStore.openChangelogModal()"
           >
             <Sparkles class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-            <span>Versi 1.0.0-rc.7 · Info Rilis</span>
+            <span>Versi {{ clientAppVersion }} · Info Rilis</span>
+            <span
+              v-if="needRefresh || hasNewVersion"
+              class="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0"
+              title="Pembaruan Baru Tersedia"
+            ></span>
           </button>
         </div>
       </aside>
@@ -1627,10 +1634,16 @@ async function handleSubmitProPayment() {
                   >
                     <span class="flex items-center gap-2 truncate">
                       <Sparkles class="w-3.5 h-3.5 shrink-0" />
-                      <span>Apa yang Baru (v1.0.0-rc.7)</span>
+                      <span>Apa yang Baru (v{{ clientAppVersion }})</span>
                     </span>
-                    <span class="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-mono font-bold shrink-0">
-                      BARU
+                    <span
+                      v-if="needRefresh || hasNewVersion"
+                      class="px-1.5 py-0.5 rounded-md bg-amber-500 text-white text-[10px] font-mono font-bold shrink-0 animate-pulse"
+                    >
+                      UPDATE
+                    </span>
+                    <span v-else class="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-mono font-bold shrink-0">
+                      INFO
                     </span>
                   </button>
 
@@ -1910,10 +1923,16 @@ async function handleSubmitProPayment() {
                   >
                     <span class="flex items-center gap-2 truncate">
                       <Sparkles class="w-3.5 h-3.5 shrink-0" />
-                      <span>Apa yang Baru (v1.0.0-rc.7)</span>
+                      <span>Apa yang Baru (v{{ clientAppVersion }})</span>
                     </span>
-                    <span class="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-mono font-bold shrink-0">
-                      BARU
+                    <span
+                      v-if="needRefresh || hasNewVersion"
+                      class="px-1.5 py-0.5 rounded-md bg-amber-500 text-white text-[10px] font-mono font-bold shrink-0 animate-pulse"
+                    >
+                      UPDATE
+                    </span>
+                    <span v-else class="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-mono font-bold shrink-0">
+                      INFO
                     </span>
                   </button>
 
@@ -2305,10 +2324,16 @@ async function handleSubmitProPayment() {
             <button
               type="button"
               class="w-full py-1.5 px-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/80 text-center text-[11px] font-mono text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center justify-center gap-1.5 transition-colors"
+              :title="`Lihat Informasi Rilis & Changelog v${clientAppVersion}`"
               @click="mobileDrawerOpen = false; notificationStore.openChangelogModal()"
             >
               <Sparkles class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span>Versi 1.0.0-rc.7 · Info Rilis</span>
+              <span>Versi {{ clientAppVersion }} · Info Rilis</span>
+              <span
+                v-if="needRefresh || hasNewVersion"
+                class="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0"
+                title="Pembaruan Baru Tersedia"
+              ></span>
             </button>
           </div>
         </div>
