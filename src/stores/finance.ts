@@ -323,13 +323,11 @@ export const useFinanceStore = defineStore('finance', () => {
   function openAddTransactionModal() {
     editingTransaction.value = null;
     quickModalOpen.value = true;
-    void checkAndSyncIfRemoteChanged();
   }
 
   function openEditTransactionModal(tx: TransactionItem) {
     editingTransaction.value = { ...tx };
     quickModalOpen.value = true;
-    void checkAndSyncIfRemoteChanged();
   }
 
   // Selected Period ('all' or 'YYYY-MM'). Automatically defaults to user's latest active month in Firestore.
@@ -1018,9 +1016,6 @@ export const useFinanceStore = defineStore('finance', () => {
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || '');
     if (!uid || uid === 'guest') return;
 
-    // 1. Always accompany user activity with 1-sync read token check
-    await checkAndSyncIfRemoteChanged(uid);
-
     const rangeKey = `${uid}:${startIso}:${endIso}`;
     if (loadedTransactionPeriods.has(rangeKey)) return;
 
@@ -1119,36 +1114,7 @@ export const useFinanceStore = defineStore('finance', () => {
       txServerPageSize.value = preCachedEntry.pageSize;
       txServerTotalFiltered.value = preCachedEntry.totalFiltered;
       txServerTotalPages.value = preCachedEntry.totalPages;
-
-      // Accompany user activity with 1-sync read token check in background/foreground:
-      // If remote data did NOT change, we return immediately and keep using the cached 25 items!
-      // If remote data DID change, `checkAndSyncIfRemoteChanged` invalidates the cache and we reload from server below.
-      const remoteChanged = await checkAndSyncIfRemoteChanged(uid);
-      if (!remoteChanged && txServerPageMemoryCache.has(cacheKey)) {
-        return;
-      }
-    } else {
-      // Page not yet in cache: still verify 1-sync read token first so our cache token is fresh
-      if (!silent) isTxServerPageLoading.value = true;
-      await checkAndSyncIfRemoteChanged(uid);
-      // Re-check cache in case checkAndSyncIfRemoteChanged or initial load populated it
-      const freshTokenAfterCheck = getSavedUserSyncToken(uid);
-      const cachedAfterCheck = !forceServerReload
-        ? txServerPageMemoryCache.get(cacheKey)
-        : undefined;
-      if (
-        cachedAfterCheck &&
-        freshTokenAfterCheck > 0 &&
-        Math.abs(cachedAfterCheck.syncToken - freshTokenAfterCheck) <= 2000
-      ) {
-        rawServerPaginatedTransactions.value = cachedAfterCheck.items;
-        txServerPage.value = cachedAfterCheck.page;
-        txServerPageSize.value = cachedAfterCheck.pageSize;
-        txServerTotalFiltered.value = cachedAfterCheck.totalFiltered;
-        txServerTotalPages.value = cachedAfterCheck.totalPages;
-        if (!silent) isTxServerPageLoading.value = false;
-        return;
-      }
+      return;
     }
 
     if (!silent) isTxServerPageLoading.value = true;
@@ -1564,7 +1530,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
   let isCheckingSyncToken = false;
   let lastTokenCheckAt = 0;
-  const TOKEN_CHECK_COOLDOWN_MS = 60000; // 60s dedup window to strictly avoid Firestore read quota spikes
+  const TOKEN_CHECK_COOLDOWN_MS = 300000; // 5-minute dedup window to strictly avoid Firestore read quota spikes
 
   async function fetchAllCollectionsFromFirestore(uid: string, remoteSyncToken = 0) {
     const currentMonth = getCurrentMonthPeriod();
@@ -1962,10 +1928,10 @@ export const useFinanceStore = defineStore('finance', () => {
         void authStore.syncSubscriptionFromFirestoreForUser(uid, authStore.user?.email);
       }
 
-      // If remote document has a different timestamp (> 2s tolerance) or local token is missing, invalidate page caches and pull fresh data from server
+      // If remote document has a strictly newer timestamp (> 15s tolerance) or local token is missing, invalidate page caches and pull fresh data
       if (
         remoteSyncToken > 0 &&
-        (localSyncToken <= 0 || Math.abs(remoteSyncToken - localSyncToken) > 2000)
+        (localSyncToken <= 0 || (remoteSyncToken > localSyncToken && remoteSyncToken - localSyncToken > 15000))
       ) {
         invalidateServerPaginationCaches(uid);
         await fetchAllCollectionsFromFirestore(uid, remoteSyncToken);

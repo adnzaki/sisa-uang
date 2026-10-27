@@ -1031,7 +1031,7 @@ export const useAuthStore = defineStore('auth', () => {
       } catch {
         // Ignore poll error
       }
-    }, 15000);
+    }, 60000);
   }
 
   function setExternalSubscriptionStatus(

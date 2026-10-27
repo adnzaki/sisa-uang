@@ -536,7 +536,8 @@ export const useAdminStore = defineStore('admin', () => {
     try {
       await ensureSuperAdminFirebaseSession();
       const targetDb = sisaUangDb || db;
-      const snap = await getDocs(collection(targetDb, 'users'));
+      // Strict quota safety: bound users query to at most 50 documents
+      const snap = await getDocs(query(collection(targetDb, 'users'), limit(50)));
       const proMarkersMap = new Map<
         string,
         { status: 'pending' | 'pro' | 'free'; plan: 'monthly' | 'yearly' | null; expiresAt: string | null }
@@ -545,7 +546,7 @@ export const useAdminStore = defineStore('admin', () => {
 
       try {
         const proSnap = await getDocs(
-          query(collection(targetDb, 'budgets'), where('category', '==', '__SISAUANG_PRO__'))
+          query(collection(targetDb, 'budgets'), where('category', '==', '__SISAUANG_PRO__'), limit(50))
         );
         proSnap.docs.forEach((pd) => {
           const pData = pd.data() as Record<string, any>;
@@ -702,11 +703,13 @@ export const useAdminStore = defineStore('admin', () => {
         });
       });
 
-      // Also hydrate Firestore activity_logs into server registry if server has few logs
+      // Also hydrate Firestore activity_logs into server registry if server has few logs (strictly bounded to latest 50)
       const fbLogs: AdminActivityLogItem[] = [];
-      if (totalLogsCount.value < 5 || force) {
+      if (force) {
         try {
-          const logsSnap = await getDocs(collection(targetDb, 'activity_logs'));
+          const logsSnap = await getDocs(
+            query(collection(targetDb, 'activity_logs'), limit(50))
+          );
           logsSnap.docs.forEach((ld) => {
             const lData = ld.data();
             fbLogs.push({
@@ -795,16 +798,7 @@ export const useAdminStore = defineStore('admin', () => {
       }
       alerts.value = incomingAlerts;
 
-      // Only hydrate users from Firestore on explicit manual user request (!silent)
-      // or very first session load (protected by sessionStorage). Never run automatically on silent calls!
-      const hasSyncedInThisSession =
-        firestoreUsersSyncedInSession ||
-        (typeof sessionStorage !== 'undefined' &&
-          sessionStorage.getItem('sisauang_admin_synced_session') === 'true');
-
-      if (!silent && !hasSyncedInThisSession) {
-        await syncFirestoreUsersToServerRegistry(false);
-      }
+      // Pure in-memory Express server overview: 0 Firestore reads!
     } catch (err: any) {
       const msg =
         err?.response?.data?.error ||

@@ -214,17 +214,6 @@ router.afterEach((to) => {
   } else {
     scrollToPageTopMultiFrame();
   }
-
-  // Activity check for automated schedules (with 5-minute quota cache protection)
-  try {
-    const authStore = useAuthStore();
-    if (authStore.isAuthenticated || auth.currentUser) {
-      const automationStore = useAutomationStore();
-      void automationStore.checkAndTriggerOnActivity();
-    }
-  } catch {
-    // Ignore
-  }
 });
 
 router.beforeEach((to, _from, next) => {

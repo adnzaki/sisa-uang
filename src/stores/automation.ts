@@ -173,41 +173,8 @@ export const useAutomationStore = defineStore('automation', () => {
   // Real-Time Cloud Firestore Sync (Live across multiple devices & tabs)
   // =========================================================================
 
-  function subscribeToAutomations(uidInput?: string) {
-    const authStore = useAuthStore();
-    const uid = sanitizeId(uidInput || authStore.user?.uid || auth.currentUser?.uid || '');
-    if (!uid || uid === 'guest') return;
-
-    if (automationsUnsubscribe) {
-      automationsUnsubscribe();
-      automationsUnsubscribe = null;
-    }
-
-    try {
-      const q = query(collection(db, 'automations'), where('ownerId', '==', uid));
-      automationsUnsubscribe = onSnapshot(
-        q,
-        (snap) => {
-          const freshRules = snap.docs
-            .map((d) => ({
-              id: d.id,
-              ...(d.data() as Omit<AutomationItem, 'id'>),
-            }))
-            .filter((item) => !item.deleted);
-
-          rules.value = freshRules.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-          writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
-          void syncAllToServer(uid, rules.value);
-        },
-        (error) => {
-          if (!isFirestoreOfflineError(error) && !isFirestoreQuotaError(error)) {
-            console.warn('Automations onSnapshot notice:', error?.message || error);
-          }
-        }
-      );
-    } catch {
-      // Ignore snapshot attach errors
-    }
+  function subscribeToAutomations(_uidInput?: string) {
+    // Disabled onSnapshot to protect Firestore read quota from persistent real-time listeners
   }
 
   function unsubscribeFromAutomations() {

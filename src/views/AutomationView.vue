@@ -102,7 +102,7 @@ async function handleManualRefresh() {
 }
 
 onMounted(async () => {
-  await ensureDataReady(true);
+  await ensureDataReady(false);
 });
 
 onUnmounted(() => {
@@ -113,7 +113,7 @@ watch(
   () => authStore.user?.uid,
   async (uid) => {
     if (uid) {
-      await ensureDataReady(true);
+      await ensureDataReady(false);
     }
   },
   { immediate: true }

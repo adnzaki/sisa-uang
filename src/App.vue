@@ -563,18 +563,6 @@ watch(
     if (route.query.denied === 'admin_only') {
       deniedBannerVisible.value = true;
     }
-    if (authStore.isAuthenticated && !authStore.isSuperAdmin && authStore.user?.uid) {
-      void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid);
-    }
-  }
-);
-
-watch(
-  () => financeStore.selectedPeriod,
-  () => {
-    if (authStore.isAuthenticated && !authStore.isSuperAdmin && authStore.user?.uid) {
-      void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid);
-    }
   }
 );
 

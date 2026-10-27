@@ -141,10 +141,6 @@ watch(
   { immediate: true }
 );
 
-onMounted(() => {
-  void financeStore.checkAndSyncIfRemoteChanged(undefined, true);
-});
-
 // All registered monthly periods (combining explicit budgetPeriods + periods that already have budget items)
 const allRegisteredPeriods = computed<string[]>(() => {
   const set = new Set<string>(financeStore.budgetPeriods);
