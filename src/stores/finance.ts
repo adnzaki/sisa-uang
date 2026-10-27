@@ -820,9 +820,11 @@ export const useFinanceStore = defineStore('finance', () => {
   }
 
   const rawServerPaginatedTransactions = ref<TransactionItem[]>([]);
-  const serverPaginatedTransactions = computed<TransactionItem[]>(() =>
-    rawServerPaginatedTransactions.value.map((tx) => enrichTransactionItem(tx))
-  );
+  const serverPaginatedTransactions = computed<TransactionItem[]>(() => {
+    const list = rawServerPaginatedTransactions.value;
+    if (!Array.isArray(list)) return [];
+    return list.map((tx) => enrichTransactionItem(tx));
+  });
   const txServerPage = ref(1);
   const txServerPageSize = ref(25);
   const txServerTotalFiltered = ref(0);
@@ -951,17 +953,17 @@ export const useFinanceStore = defineStore('finance', () => {
       const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       set.add(ym);
     }
-    for (const p of budgetPeriods.value) {
+    for (const p of budgetPeriods.value || []) {
       if (/^\d{4}-\d{2}$/.test(p)) set.add(p);
     }
-    for (const tx of rawTransactions.value) {
-      const m = String(tx.date || '').slice(0, 7);
+    for (const tx of rawTransactions.value || []) {
+      const m = String(tx?.date || '').slice(0, 7);
       if (/^\d{4}-\d{2}$/.test(m)) {
         set.add(m);
       }
     }
-    for (const tx of rawServerPaginatedTransactions.value) {
-      const m = String(tx.date || '').slice(0, 7);
+    for (const tx of rawServerPaginatedTransactions.value || []) {
+      const m = String(tx?.date || '').slice(0, 7);
       if (/^\d{4}-\d{2}$/.test(m)) {
         set.add(m);
       }
@@ -5684,6 +5686,7 @@ export const useFinanceStore = defineStore('finance', () => {
     rawTransactions,
     transactions,
     periodTransactions,
+    rawServerPaginatedTransactions,
     serverPaginatedTransactions,
     txServerPage,
     txServerPageSize,

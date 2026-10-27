@@ -65,9 +65,7 @@ function triggerServerTransactionsFetch(targetPage: number, silent = false) {
 }
 
 onMounted(() => {
-  if (financeStore.rawServerPaginatedTransactions.length === 0) {
-    triggerServerTransactionsFetch(1);
-  }
+  triggerServerTransactionsFetch(1);
 });
 
 const periodFilterOptions = computed<SelectOptionItem[]>(() => [
@@ -75,7 +73,7 @@ const periodFilterOptions = computed<SelectOptionItem[]>(() => [
     value: 'all',
     label: 'Semua Periode',
   },
-  ...financeStore.availablePeriods.map((p) => ({
+  ...(financeStore.availablePeriods || []).map((p) => ({
     value: p,
     label: formatPeriodLabel(p, locale.value === 'id' ? 'id-ID' : 'en-US'),
   })),
@@ -91,11 +89,14 @@ const typeFilterOptions = computed<SelectOptionItem[]>(() => [
 const categoryFilterOptions = computed<SelectOptionItem[]>(() => {
   const seen = new Set<string>();
   const items: SelectOptionItem[] = [{ value: 'all', label: 'Semua Kategori' }];
+  const cats = Array.isArray(financeStore.categories) ? financeStore.categories : [];
+  const txs = Array.isArray(financeStore.transactions) ? financeStore.transactions : [];
 
-  for (const cat of financeStore.categories) {
+  for (const cat of cats) {
+    if (!cat) continue;
     if (typeFilter.value === 'expense' && cat.type !== 'expense') continue;
     if (typeFilter.value === 'income' && cat.type !== 'income') continue;
-    if (!seen.has(cat.name)) {
+    if (cat.name && !seen.has(cat.name)) {
       seen.add(cat.name);
       items.push({
         value: cat.name,
@@ -106,10 +107,12 @@ const categoryFilterOptions = computed<SelectOptionItem[]>(() => {
   }
 
   // Set of names that are in active categories
-  const activeNames = new Set(financeStore.categories.map((c) => c.name.toLowerCase().trim()));
+  const activeNames = new Set(
+    cats.filter((c) => c?.name).map((c) => c.name.toLowerCase().trim())
+  );
 
-  for (const tx of financeStore.transactions) {
-    if (!tx.category) continue;
+  for (const tx of txs) {
+    if (!tx || !tx.category) continue;
     if (typeFilter.value !== 'all' && tx.type !== typeFilter.value) continue;
     if (
       !seen.has(tx.category) &&
@@ -134,7 +137,7 @@ const categoryFilterOptions = computed<SelectOptionItem[]>(() => {
 
 const walletFilterOptions = computed<SelectOptionItem[]>(() => [
   { value: 'all', label: 'Semua Sumber Dana' },
-  ...financeStore.wallets.map((w) => ({
+  ...(financeStore.wallets || []).map((w) => ({
     value: w.id,
     label: w.name,
   })),
@@ -142,18 +145,18 @@ const walletFilterOptions = computed<SelectOptionItem[]>(() => [
 
 const uniqueHolderNames = computed(() => {
   const set = new Set<string>();
-  for (const o of financeStore.ownershipSummary) {
-    set.add(o.displayHolderName);
+  for (const o of financeStore.ownershipSummary || []) {
+    if (o?.displayHolderName) set.add(o.displayHolderName);
   }
-  for (const tx of financeStore.transactions) {
-    if (tx.fundOwnerName) set.add(tx.fundOwnerName);
+  for (const tx of financeStore.transactions || []) {
+    if (tx?.fundOwnerName) set.add(tx.fundOwnerName);
   }
   return Array.from(set);
 });
 
 const holderFilterOptions = computed<SelectOptionItem[]>(() => [
   { value: 'all', label: 'Semua Kepemilikan' },
-  ...uniqueHolderNames.value.map((name) => ({
+  ...(uniqueHolderNames.value || []).map((name) => ({
     value: name,
     label: name,
   })),
@@ -212,8 +215,11 @@ function handleTxPageChange(newPage: number) {
 }
 
 // Server-side items returned for the current page (25 items when 'all', or full month when 'YYYY-MM')
-const displayedTransactions = computed(() => financeStore.serverPaginatedTransactions);
-const totalFilteredTransactions = computed(() => financeStore.txServerTotalFiltered);
+const displayedTransactions = computed<any[]>(() => {
+  const items = financeStore.serverPaginatedTransactions;
+  return Array.isArray(items) ? items : [];
+});
+const totalFilteredTransactions = computed(() => financeStore.txServerTotalFiltered || 0);
 
 function getDateBadge(dateStr: string) {
   return formatTransactionDateBadge(dateStr, locale.value === 'id' ? 'id-ID' : 'en-US');
