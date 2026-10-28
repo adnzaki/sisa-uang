@@ -1021,6 +1021,21 @@ export const useFinanceStore = defineStore('finance', () => {
     const rangeKey = `${uid}:${startIso}:${endIso}`;
     if (loadedTransactionPeriods.has(rangeKey)) return;
 
+    // If this date range is already fully covered by a previously loaded broader range, skip refetching
+    const isAlreadyCovered = Array.from(loadedTransactionPeriods).some((key) => {
+      const parts = key.split(':');
+      if (parts.length >= 3 && parts[0] === uid) {
+        const kStart = parts[1];
+        const kEnd = parts[2];
+        return kStart <= startIso && kEnd >= endIso;
+      }
+      return false;
+    });
+    if (isAlreadyCovered) {
+      loadedTransactionPeriods.add(rangeKey);
+      return;
+    }
+
     const canQuery = await ensureFirestoreSessionForUser(uid);
     if (!canQuery) return;
 
@@ -1123,8 +1138,35 @@ export const useFinanceStore = defineStore('finance', () => {
       currentTxServerFilter.holder !== 'all' ||
       hasSearch;
 
-    // Direct Firestore Search: Query directly from Firestore server (no local cache / localStorage shortcuts)
+    // Search box: Search local storage first, then query Firestore across all periods if not found
     if (hasSearch) {
+      // 1. Search cached transactions in localStorage / Pinia first (without restricting to month)
+      const localMatches = rawTransactions.value
+        .map((tx) => enrichTransactionItem(tx))
+        .filter((tx) => !tx.deleted && matchesClientSubFilters(tx));
+
+      if (localMatches.length > 0) {
+        localMatches.sort((a, b) => {
+          const cmp = String(b.date || '').localeCompare(String(a.date || ''));
+          if (cmp !== 0) return cmp;
+          return String(b.id || '').localeCompare(String(a.id || ''));
+        });
+
+        const totalFiltered = localMatches.length;
+        const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
+        const safePage = Math.min(targetPage, totalPages);
+        const start = (safePage - 1) * pageSize;
+        const pageSlice = localMatches.slice(start, start + pageSize);
+
+        rawServerPaginatedTransactions.value = pageSlice;
+        txServerPage.value = safePage;
+        txServerPageSize.value = pageSize;
+        txServerTotalFiltered.value = totalFiltered;
+        txServerTotalPages.value = totalPages;
+        return;
+      }
+
+      // 2. If not found in localStorage, search directly in Firestore across all periods
       if (!silent) isTxServerPageLoading.value = true;
       try {
         const canQuery = await ensureFirestoreSessionForUser(uid);
@@ -1133,14 +1175,6 @@ export const useFinanceStore = defineStore('finance', () => {
             where('ownerId', '==', uid),
             where('deleted', '==', false),
           ];
-
-          // STRICT MONTH ISOLATION: When month filter is active, constrain Firestore query by date range
-          if (targetPeriod !== 'all' && /^\d{4}-\d{2}$/.test(targetPeriod)) {
-            searchConstraints.push(
-              where('date', '>=', `${targetPeriod}-01`),
-              where('date', '<=', `${targetPeriod}-31\uf8ff`)
-            );
-          }
 
           if (currentTxServerFilter.type !== 'all') {
             searchConstraints.push(where('type', '==', currentTxServerFilter.type));
@@ -1157,7 +1191,6 @@ export const useFinanceStore = defineStore('finance', () => {
 
           let searchSnap;
           try {
-            // Always query directly from Firestore backend server
             searchSnap = await getDocsFromServer(
               query(collection(db, 'transactions'), ...searchConstraints, orderBy('date', 'desc'))
             );
@@ -1180,13 +1213,6 @@ export const useFinanceStore = defineStore('finance', () => {
             }))
             .filter((t: TransactionItem) => !t.deleted);
 
-          // STRICT MONTH ISOLATION: Reject any document outside targetPeriod if month filter is active
-          if (targetPeriod !== 'all') {
-            remoteDocs = remoteDocs.filter(
-              (tx) => String(tx.date || '').slice(0, 7) === targetPeriod
-            );
-          }
-
           remoteDocs.sort((a, b) => {
             const cmp = String(b.date || '').localeCompare(String(a.date || ''));
             if (cmp !== 0) return cmp;
@@ -1197,6 +1223,8 @@ export const useFinanceStore = defineStore('finance', () => {
           const remoteMatches = remoteDocs
             .map((tx) => enrichTransactionItem(tx))
             .filter((tx) => matchesClientSubFilters(tx));
+
+          mergeFetchedTransactionsIntoCache(remoteDocs);
 
           // Pagination: 25 items per page
           const totalFiltered = remoteMatches.length;
@@ -1210,6 +1238,7 @@ export const useFinanceStore = defineStore('finance', () => {
           txServerPageSize.value = pageSize;
           txServerTotalFiltered.value = totalFiltered;
           txServerTotalPages.value = totalPages;
+          saveLocalSnapshot(uid, false);
           return;
         }
 
@@ -1858,11 +1887,11 @@ export const useFinanceStore = defineStore('finance', () => {
     };
 
     const queries: Promise<any>[] = [
-      getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid), limit(25))),
-      getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid), limit(25))),
-      getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid), limit(25))),
+      getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
+      getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
+      getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid))),
       fetchInitialBoundedTransactions(),
-      getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid), limit(25))),
+      getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid))),
     ];
 
     // Only fetch global default categories if not already cached in memory or localStorage
@@ -1871,7 +1900,7 @@ export const useFinanceStore = defineStore('finance', () => {
     if (shouldFetchDefaultCats) {
       queries.push(
         getDocs(
-          query(collection(db, 'categories'), where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID), limit(25))
+          query(collection(db, 'categories'), where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID))
         )
       );
     }
@@ -2446,8 +2475,8 @@ export const useFinanceStore = defineStore('finance', () => {
       // 1. Dashboard ('/' or '/dashboard')
       if (cleanPath === '/' || cleanPath === '/dashboard') {
         const [walletsSnap, holdersSnap, txSnap, budgetSnap] = await Promise.all([
-          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid), limit(25))),
-          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid), limit(25))),
+          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
+          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
           getDocs(
             query(
               collection(db, 'transactions'),
@@ -2456,7 +2485,7 @@ export const useFinanceStore = defineStore('finance', () => {
               limit(25)
             )
           ),
-          getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid), limit(25))),
+          getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid))),
         ]);
 
         const fetchedWallets = walletsSnap.docs
@@ -2496,8 +2525,8 @@ export const useFinanceStore = defineStore('finance', () => {
       // 2. Transactions ('/transactions')
       if (cleanPath === '/transactions') {
         const [walletsSnap, holdersSnap] = await Promise.all([
-          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid), limit(25))),
-          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid), limit(25))),
+          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
+          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
         ]);
 
         const fetchedWallets = walletsSnap.docs
@@ -2520,8 +2549,8 @@ export const useFinanceStore = defineStore('finance', () => {
       // 3. Wallets & Ownership ('/wallets', '/ownership')
       if (cleanPath === '/wallets' || cleanPath === '/ownership') {
         const [walletsSnap, holdersSnap] = await Promise.all([
-          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid), limit(25))),
-          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid), limit(25))),
+          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
+          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
         ]);
 
         const fetchedWallets = walletsSnap.docs
@@ -2542,15 +2571,14 @@ export const useFinanceStore = defineStore('finance', () => {
       // 4. Categories ('/categories')
       if (cleanPath === '/categories') {
         const queries: Promise<any>[] = [
-          getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid), limit(25))),
+          getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid))),
         ];
         if (defaultCategories.value.length === 0 && uid !== DEFAULT_CATEGORY_OWNER_ID) {
           queries.push(
             getDocs(
               query(
                 collection(db, 'categories'),
-                where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID),
-                limit(25)
+                where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID)
               )
             )
           );
@@ -2581,19 +2609,12 @@ export const useFinanceStore = defineStore('finance', () => {
 
       // 5. Budgets ('/budgets')
       if (cleanPath === '/budgets') {
+        const curYear = String(new Date().getFullYear());
         const queries: Promise<any>[] = [
-          getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid), limit(25))),
-          getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid), limit(25))),
-          getDocs(
-            query(
-              collection(db, 'transactions'),
-              where('ownerId', '==', uid),
-              orderBy('date', 'desc'),
-              limit(25)
-            )
-          ),
+          getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid))),
+          getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid))),
         ];
-        const [budgetSnap, catsSnap, txSnap] = await Promise.all(queries);
+        const [budgetSnap, catsSnap] = await Promise.all(queries);
 
         const allBudgetDocs = budgetSnap.docs.map((d: any) => {
           knownFirestoreBudgetDocIds.add(d.id);
@@ -2618,10 +2639,8 @@ export const useFinanceStore = defineStore('finance', () => {
           .sort((a: CategoryItem, b: CategoryItem) => a.name.localeCompare(b.name));
         if (fetchedCats.length > 0) rawUserCategories.value = fetchedCats;
 
-        const txList = txSnap.docs
-          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<TransactionItem, 'id'>) }))
-          .filter((t: TransactionItem) => !t.deleted);
-        mergeFetchedTransactionsIntoCache(txList);
+        // Process data selama setahun berjalan untuk serapan anggaran tahunan dan bulanan
+        await ensureTransactionsForDateRange(`${curYear}-01-01`, `${curYear}-12-31`);
 
         saveLocalSnapshot(uid, false);
         return;
@@ -2629,23 +2648,14 @@ export const useFinanceStore = defineStore('finance', () => {
 
       // 6. Analytics & Report Settings ('/analytics', '/report-settings')
       if (cleanPath === '/analytics' || cleanPath === '/report-settings') {
-        const [txSnap, walletsSnap, holdersSnap] = await Promise.all([
-          getDocs(
-            query(
-              collection(db, 'transactions'),
-              where('ownerId', '==', uid),
-              orderBy('date', 'desc'),
-              limit(25)
-            )
-          ),
-          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid), limit(25))),
-          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid), limit(25))),
-        ]);
+        const curMonth = selectedPeriod.value && /^\d{4}-\d{2}$/.test(selectedPeriod.value)
+          ? selectedPeriod.value
+          : getCurrentMonthPeriod();
 
-        const txList = txSnap.docs
-          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<TransactionItem, 'id'>) }))
-          .filter((t: TransactionItem) => !t.deleted);
-        mergeFetchedTransactionsIntoCache(txList);
+        const [walletsSnap, holdersSnap] = await Promise.all([
+          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
+          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
+        ]);
 
         const fetchedWallets = walletsSnap.docs
           .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletItem, 'id'>) }))
@@ -2658,6 +2668,9 @@ export const useFinanceStore = defineStore('finance', () => {
           .filter((fo: WalletOwnerItem) => !fo.deleted);
         if (fetchedHolders.length > 0) rawWalletOwners.value = fetchedHolders;
         syncWalletTotalBalancesFromHolders();
+
+        // Process data sesuai periode yang dipilih
+        await ensureTransactionsForDateRange(`${curMonth}-01`, `${curMonth}-31`);
 
         saveLocalSnapshot(uid, false);
         return;

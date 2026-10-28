@@ -188,7 +188,7 @@ export const useAutomationStore = defineStore('automation', () => {
       let firestoreRules: AutomationItem[] = [];
       let firestoreFetchSuccess = false;
       try {
-        const q = query(collection(db, 'automations'), where('ownerId', '==', uid), limit(25));
+        const q = query(collection(db, 'automations'), where('ownerId', '==', uid));
         const snap = await getDocs(q);
         firestoreRules = snap.docs
           .map((d) => ({

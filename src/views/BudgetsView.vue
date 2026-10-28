@@ -198,12 +198,19 @@ watch(
   { immediate: true }
 );
 
-// Close detail view if user switches the year dropdown to a different year
-watch(selectedYear, (newYear) => {
-  if (activeBudgetPeriod.value && !activeBudgetPeriod.value.startsWith(`${newYear}-`)) {
-    activeBudgetPeriod.value = null;
-  }
-});
+// Close detail view if user switches the year dropdown to a different year & ensure transactions for the entire year are loaded
+watch(
+  selectedYear,
+  (newYear) => {
+    if (activeBudgetPeriod.value && !activeBudgetPeriod.value.startsWith(`${newYear}-`)) {
+      activeBudgetPeriod.value = null;
+    }
+    if (newYear && /^\d{4}$/.test(newYear)) {
+      void financeStore.ensureTransactionsForDateRange(`${newYear}-01-01`, `${newYear}-12-31`);
+    }
+  },
+  { immediate: true }
+);
 
 // Daftar periode yang ditampilkan sesuai dengan dropdown tahun yang dipilih
 const periodsForSelectedYear = computed(() => {
