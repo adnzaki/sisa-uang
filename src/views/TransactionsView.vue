@@ -478,7 +478,7 @@ function getDateBadge(dateStr: string) {
 
       <!-- Server-Side Pagination (25 transactions per page) when total items > 25 (works for both 'all' and monthly period) -->
       <AppPagination
-        v-if="totalFilteredTransactions > TX_PAGE_SIZE"
+        v-if="totalFilteredTransactions > TX_PAGE_SIZE || financeStore.txServerTotalPages > 1"
         :current-page="financeStore.txServerPage"
         :total-items="totalFilteredTransactions"
         :page-size="TX_PAGE_SIZE"

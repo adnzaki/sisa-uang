@@ -1253,84 +1253,202 @@ export const useFinanceStore = defineStore('finance', () => {
       const canQuery = await ensureFirestoreSessionForUser(uid);
       const activeSyncToken = getSavedUserSyncToken(uid) || Date.now();
 
-      // CASE 1: Specific Monthly Period ('YYYY-MM') -> Fetch all of that month's transactions from Firestore & paginate with pageSize (25 per page)
+      // CASE 1: Specific Monthly Period ('YYYY-MM') -> Server-Side Pagination with Firestore Count & Cursor
       if (targetPeriod !== 'all' && /^\d{4}-\d{2}$/.test(targetPeriod)) {
         const startIso = `${targetPeriod}-01`;
-        const endIso = `${targetPeriod}-31`;
-        const rangeKey = `${uid}:${startIso}:${endIso}`;
+        const endIso = `${targetPeriod}-31\uf8ff`;
+        const filterKey = `${uid}:p:${targetPeriod}:t:${currentTxServerFilter.type}:c:${currentTxServerFilter.category}:w:${currentTxServerFilter.walletId}:h:${currentTxServerFilter.holder}`;
 
-        // Helper to slice and save paginated month results (25 per page)
-        const applyMonthPagination = (allMonthItems: TransactionItem[]) => {
-          const sorted = allMonthItems
-            .filter((tx) => !tx.deleted && String(tx.date || '').slice(0, 7) === targetPeriod)
-            .sort((a, b) => {
-              const cmp = String(b.date || '').localeCompare(String(a.date || ''));
-              if (cmp !== 0) return cmp;
-              return String(b.id || '').localeCompare(String(a.id || ''));
-            })
-            .map((tx) => enrichTransactionItem(tx))
-            .filter((tx) => matchesClientSubFilters(tx));
+        if (!txCursorByFilterKey.has(filterKey)) {
+          txCursorByFilterKey.set(filterKey, new Map());
+        }
+        const cursorMap = txCursorByFilterKey.get(filterKey)!;
 
-          const totalFiltered = sorted.length;
-          const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
-          const safePage = Math.min(Math.max(1, targetPage), totalPages);
-          const start = (safePage - 1) * pageSize;
-          const pageSlice = sorted.slice(start, start + pageSize);
+        const baseConstraints: QueryConstraint[] = [
+          where('ownerId', '==', uid),
+          where('date', '>=', startIso),
+          where('date', '<=', endIso),
+        ];
+        if (currentTxServerFilter.type !== 'all') {
+          baseConstraints.push(where('type', '==', currentTxServerFilter.type));
+        }
+        if (currentTxServerFilter.category !== 'all') {
+          baseConstraints.push(where('category', '==', currentTxServerFilter.category));
+        }
+        if (
+          currentTxServerFilter.walletId !== 'all' &&
+          currentTxServerFilter.type !== 'transfer'
+        ) {
+          baseConstraints.push(where('walletId', '==', currentTxServerFilter.walletId));
+        }
 
-          rawServerPaginatedTransactions.value = pageSlice;
-          txServerPage.value = safePage;
-          txServerPageSize.value = pageSize;
-          txServerTotalFiltered.value = totalFiltered;
-          txServerTotalPages.value = totalPages;
-
-          const safePageCacheKey = buildTxPageCacheKey(uid, {
-            ...currentTxServerFilter,
-            page: safePage,
-          });
-          saveTxServerPageToCache(uid, safePageCacheKey, {
-            items: pageSlice,
-            page: safePage,
-            pageSize,
-            totalFiltered,
-            totalPages,
+        // 1. Cek Firestore: dapatkan total count transaksi untuk periode bulan ini (1 count aggregation read)
+        let totalServerCount = 0;
+        const cachedCountObj = txCountCacheByFilterKey.get(filterKey);
+        if (
+          !forceServerReload &&
+          cachedCountObj &&
+          Math.abs(cachedCountObj.syncToken - activeSyncToken) <= 2000
+        ) {
+          totalServerCount = cachedCountObj.count;
+        } else if (canQuery) {
+          try {
+            const countSnap = await getCountFromServer(
+              query(collection(db, 'transactions'), ...baseConstraints)
+            );
+            totalServerCount = countSnap.data().count;
+          } catch {
+            try {
+              const fallbackCountSnap = await getCountFromServer(
+                query(
+                  collection(db, 'transactions'),
+                  where('ownerId', '==', uid),
+                  where('date', '>=', startIso),
+                  where('date', '<=', endIso)
+                )
+              );
+              totalServerCount = fallbackCountSnap.data().count;
+            } catch {
+              totalServerCount = rawTransactions.value.filter(
+                (t) => !t.deleted && String(t.date || '').slice(0, 7) === targetPeriod
+              ).length;
+            }
+          }
+          txCountCacheByFilterKey.set(filterKey, {
+            count: totalServerCount,
             syncToken: activeSyncToken,
           });
-        };
+        }
 
-        // If this month was already loaded during the current sync token, paginate directly from cached docs (0 extra reads!)
-        if (loadedTransactionPeriods.has(rangeKey) && !forceServerReload) {
-          applyMonthPagination(rawTransactions.value);
+        // 2. Hitung dan hasilkan pagination
+        const totalPages = Math.max(1, Math.ceil(totalServerCount / pageSize));
+        const safePage = Math.min(targetPage, totalPages);
+        const safePageCacheKey = buildTxPageCacheKey(uid, {
+          ...currentTxServerFilter,
+          page: safePage,
+        });
+
+        // Cek jika halaman ini sudah ada di memory cache untuk syncToken ini
+        const safePageCached = !forceServerReload
+          ? txServerPageMemoryCache.get(safePageCacheKey)
+          : undefined;
+        if (
+          safePageCached &&
+          Math.abs(safePageCached.syncToken - activeSyncToken) <= 2000
+        ) {
+          rawServerPaginatedTransactions.value = safePageCached.items;
+          txServerPage.value = safePageCached.page;
+          txServerPageSize.value = safePageCached.pageSize;
+          txServerTotalFiltered.value = totalServerCount;
+          txServerTotalPages.value = totalPages;
           return;
         }
 
+        // 3. Ambil 25 data (atau 26-50 untuk halaman 2) dari Firestore
         if (canQuery) {
           try {
-            const monthQuery = query(
-              collection(db, 'transactions'),
-              where('ownerId', '==', uid),
-              where('date', '>=', startIso),
-              where('date', '<=', `${endIso}\uf8ff`),
-              orderBy('date', 'desc')
+            let startAfterDoc: DocumentSnapshot | undefined =
+              safePage > 1 ? cursorMap.get(safePage - 1) : undefined;
+
+            if (safePage > 1 && !startAfterDoc) {
+              let latestCachedPage = 0;
+              for (const [p, cur] of cursorMap.entries()) {
+                if (p < safePage && p > latestCachedPage) {
+                  latestCachedPage = p;
+                  startAfterDoc = cur;
+                }
+              }
+              const docsToSkip = (safePage - 1 - latestCachedPage) * pageSize;
+              if (docsToSkip > 0) {
+                const skipConstraints: QueryConstraint[] = [
+                  ...baseConstraints,
+                  orderBy('date', 'desc'),
+                ];
+                if (startAfterDoc) {
+                  skipConstraints.push(startAfter(startAfterDoc));
+                }
+                skipConstraints.push(limit(docsToSkip));
+                const skipSnap = await getDocs(
+                  query(collection(db, 'transactions'), ...skipConstraints)
+                );
+                if (skipSnap.docs.length > 0) {
+                  for (let idx = pageSize - 1; idx < skipSnap.docs.length; idx += pageSize) {
+                    const pageNum = latestCachedPage + Math.floor((idx + 1) / pageSize);
+                    cursorMap.set(pageNum, skipSnap.docs[idx]);
+                  }
+                  startAfterDoc = skipSnap.docs[skipSnap.docs.length - 1];
+                  cursorMap.set(safePage - 1, startAfterDoc);
+                }
+              }
+            }
+
+            const pageConstraints: QueryConstraint[] = [
+              ...baseConstraints,
+              orderBy('date', 'desc'),
+            ];
+            if (startAfterDoc) {
+              pageConstraints.push(startAfter(startAfterDoc));
+            }
+            pageConstraints.push(limit(pageSize));
+
+            const pageSnap = await getDocs(
+              query(collection(db, 'transactions'), ...pageConstraints)
             );
-            const snap = await getDocs(monthQuery);
-            const monthDocs: TransactionItem[] = snap.docs
+
+            if (pageSnap.docs.length > 0) {
+              cursorMap.set(safePage, pageSnap.docs[pageSnap.docs.length - 1]);
+            }
+
+            const pageItems: TransactionItem[] = pageSnap.docs
               .map((d: any) => ({
                 id: d.id,
                 ...(d.data() as Omit<TransactionItem, 'id'>),
               }))
               .filter((t: TransactionItem) => !t.deleted);
 
-            loadedTransactionPeriods.add(rangeKey);
-            mergeFetchedTransactionsIntoCache(monthDocs);
+            mergeFetchedTransactionsIntoCache(pageItems);
 
-            applyMonthPagination(monthDocs);
+            const finalTotalFiltered = Math.max(totalServerCount, pageItems.length);
+            const finalTotalPages = Math.max(1, Math.ceil(finalTotalFiltered / pageSize));
+
+            rawServerPaginatedTransactions.value = pageItems;
+            txServerPage.value = safePage;
+            txServerPageSize.value = pageSize;
+            txServerTotalFiltered.value = finalTotalFiltered;
+            txServerTotalPages.value = finalTotalPages;
+
+            saveTxServerPageToCache(uid, safePageCacheKey, {
+              items: pageItems,
+              page: safePage,
+              pageSize,
+              totalFiltered: finalTotalFiltered,
+              totalPages: finalTotalPages,
+              syncToken: activeSyncToken,
+            });
             return;
           } catch {
-            // Fallback to cached period filter if index is building
+            // Fallback to offline slice if composite index is building
           }
         }
 
-        applyMonthPagination(rawTransactions.value);
+        // Offline / cached fallback slice
+        const fallbackMonth = rawTransactions.value
+          .filter((tx) => !tx.deleted && String(tx.date || '').slice(0, 7) === targetPeriod)
+          .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+          .map((tx) => enrichTransactionItem(tx))
+          .filter((tx) => matchesClientSubFilters(tx));
+
+        const finalTotal = Math.max(totalServerCount, fallbackMonth.length);
+        const finalPages = Math.max(1, Math.ceil(finalTotal / pageSize));
+        const safeP = Math.min(targetPage, finalPages);
+        const start = (safeP - 1) * pageSize;
+        const pageSlice = fallbackMonth.slice(start, start + pageSize);
+
+        rawServerPaginatedTransactions.value = pageSlice;
+        txServerPage.value = safeP;
+        txServerPageSize.value = pageSize;
+        txServerTotalFiltered.value = finalTotal;
+        txServerTotalPages.value = finalPages;
         return;
       }
 
