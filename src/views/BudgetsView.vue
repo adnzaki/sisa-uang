@@ -130,16 +130,7 @@ const annualSummary = computed(() => {
   };
 });
 
-// Ensure transactions for the full year are loaded when viewing an active annual budget year
-watch(
-  [selectedYear, isAnnualYearActive],
-  ([yr, isAnnual]) => {
-    if (isAnnual && /^\d{4}$/.test(yr)) {
-      void financeStore.ensureTransactionsForDateRange(`${yr}-01-01`, `${yr}-12-31`);
-    }
-  },
-  { immediate: true }
-);
+
 
 // All registered monthly periods (combining explicit budgetPeriods + periods that already have budget items)
 const allRegisteredPeriods = computed<string[]>(() => {

@@ -866,6 +866,12 @@ export const useFinanceStore = defineStore('finance', () => {
     return Number(raw) || 0;
   }
 
+  function saveUserSyncToken(uid: string, token: number) {
+    if (!uid || token <= 0) return;
+    localStorage.setItem(storageKey('cache_version', uid), CACHE_SCHEMA_VERSION);
+    localStorage.setItem(storageKey('sync_token_v4', uid), String(token));
+  }
+
   function buildTxPageCacheKey(uid: string, filter = currentTxServerFilter): string {
     const cleanSearch = String(filter.search || '').trim().toLowerCase();
     return `${uid}|p:${filter.period}|pg:${filter.page}|lim:${filter.limit}|t:${filter.type}|c:${filter.category}|w:${filter.walletId}|h:${filter.holder}|q:${cleanSearch}`;
@@ -1024,7 +1030,7 @@ export const useFinanceStore = defineStore('finance', () => {
         where('ownerId', '==', uid),
         where('date', '>=', startIso),
         where('date', '<=', `${endIso}\uf8ff`),
-        limit(25)
+        orderBy('date', 'desc')
       );
       const snap = await getDocs(q);
       const fetched: TransactionItem[] = snap.docs
@@ -1038,12 +1044,11 @@ export const useFinanceStore = defineStore('finance', () => {
       mergeFetchedTransactionsIntoCache(fetched);
       saveLocalSnapshot(uid, false);
     } catch {
-      // Fallback: bounded query with limit(25) if composite index is building
+      // Fallback if composite index is building
       try {
         const fallbackQ = query(
           collection(db, 'transactions'),
-          where('ownerId', '==', uid),
-          limit(25)
+          where('ownerId', '==', uid)
         );
         const snap = await getDocs(fallbackQ);
         const fetched: TransactionItem[] = snap.docs
@@ -1051,12 +1056,18 @@ export const useFinanceStore = defineStore('finance', () => {
             id: d.id,
             ...(d.data() as Omit<TransactionItem, 'id'>),
           }))
-          .filter((t: TransactionItem) => !t.deleted);
+          .filter(
+            (t: TransactionItem) =>
+              !t.deleted &&
+              String(t.date || '') >= startIso &&
+              String(t.date || '') <= `${endIso}\uf8ff`
+          );
+
         loadedTransactionPeriods.add(rangeKey);
         mergeFetchedTransactionsIntoCache(fetched);
         saveLocalSnapshot(uid, false);
       } catch {
-        // Ignore fallback errors
+        // Ignore fallback error
       }
     }
   }
@@ -1242,33 +1253,53 @@ export const useFinanceStore = defineStore('finance', () => {
       const canQuery = await ensureFirestoreSessionForUser(uid);
       const activeSyncToken = getSavedUserSyncToken(uid) || Date.now();
 
-      // CASE 1: Specific Monthly Period ('YYYY-MM') -> Fetch ONLY that month's transactions from Firestore & cache
+      // CASE 1: Specific Monthly Period ('YYYY-MM') -> Fetch all of that month's transactions from Firestore & paginate with pageSize (25 per page)
       if (targetPeriod !== 'all' && /^\d{4}-\d{2}$/.test(targetPeriod)) {
         const startIso = `${targetPeriod}-01`;
         const endIso = `${targetPeriod}-31`;
         const rangeKey = `${uid}:${startIso}:${endIso}`;
 
-        // If this month was already loaded during the current sync token, filter from cached month docs (0 extra reads!)
-        if (loadedTransactionPeriods.has(rangeKey) && !forceServerReload) {
-          const cachedMonthDocs = rawTransactions.value
+        // Helper to slice and save paginated month results (25 per page)
+        const applyMonthPagination = (allMonthItems: TransactionItem[]) => {
+          const sorted = allMonthItems
             .filter((tx) => !tx.deleted && String(tx.date || '').slice(0, 7) === targetPeriod)
+            .sort((a, b) => {
+              const cmp = String(b.date || '').localeCompare(String(a.date || ''));
+              if (cmp !== 0) return cmp;
+              return String(b.id || '').localeCompare(String(a.id || ''));
+            })
             .map((tx) => enrichTransactionItem(tx))
             .filter((tx) => matchesClientSubFilters(tx));
 
-          rawServerPaginatedTransactions.value = cachedMonthDocs;
-          txServerPage.value = 1;
-          txServerPageSize.value = Math.max(1, cachedMonthDocs.length);
-          txServerTotalFiltered.value = cachedMonthDocs.length;
-          txServerTotalPages.value = 1;
+          const totalFiltered = sorted.length;
+          const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
+          const safePage = Math.min(Math.max(1, targetPage), totalPages);
+          const start = (safePage - 1) * pageSize;
+          const pageSlice = sorted.slice(start, start + pageSize);
 
-          saveTxServerPageToCache(uid, cacheKey, {
-            items: cachedMonthDocs,
-            page: 1,
-            pageSize: Math.max(1, cachedMonthDocs.length),
-            totalFiltered: cachedMonthDocs.length,
-            totalPages: 1,
+          rawServerPaginatedTransactions.value = pageSlice;
+          txServerPage.value = safePage;
+          txServerPageSize.value = pageSize;
+          txServerTotalFiltered.value = totalFiltered;
+          txServerTotalPages.value = totalPages;
+
+          const safePageCacheKey = buildTxPageCacheKey(uid, {
+            ...currentTxServerFilter,
+            page: safePage,
+          });
+          saveTxServerPageToCache(uid, safePageCacheKey, {
+            items: pageSlice,
+            page: safePage,
+            pageSize,
+            totalFiltered,
+            totalPages,
             syncToken: activeSyncToken,
           });
+        };
+
+        // If this month was already loaded during the current sync token, paginate directly from cached docs (0 extra reads!)
+        if (loadedTransactionPeriods.has(rangeKey) && !forceServerReload) {
+          applyMonthPagination(rawTransactions.value);
           return;
         }
 
@@ -1279,8 +1310,7 @@ export const useFinanceStore = defineStore('finance', () => {
               where('ownerId', '==', uid),
               where('date', '>=', startIso),
               where('date', '<=', `${endIso}\uf8ff`),
-              orderBy('date', 'desc'),
-              limit(25)
+              orderBy('date', 'desc')
             );
             const snap = await getDocs(monthQuery);
             const monthDocs: TransactionItem[] = snap.docs
@@ -1290,49 +1320,17 @@ export const useFinanceStore = defineStore('finance', () => {
               }))
               .filter((t: TransactionItem) => !t.deleted);
 
-            monthDocs.sort((a, b) => {
-              const cmp = String(b.date || '').localeCompare(String(a.date || ''));
-              if (cmp !== 0) return cmp;
-              return String(b.id || '').localeCompare(String(a.id || ''));
-            });
-
             loadedTransactionPeriods.add(rangeKey);
             mergeFetchedTransactionsIntoCache(monthDocs);
 
-            const enrichedAndFiltered = monthDocs
-              .map((tx) => enrichTransactionItem(tx))
-              .filter((tx) => matchesClientSubFilters(tx));
-
-            rawServerPaginatedTransactions.value = enrichedAndFiltered;
-            txServerPage.value = 1;
-            txServerPageSize.value = Math.max(1, enrichedAndFiltered.length);
-            txServerTotalFiltered.value = enrichedAndFiltered.length;
-            txServerTotalPages.value = 1;
-
-            saveTxServerPageToCache(uid, cacheKey, {
-              items: enrichedAndFiltered,
-              page: 1,
-              pageSize: Math.max(1, enrichedAndFiltered.length),
-              totalFiltered: enrichedAndFiltered.length,
-              totalPages: 1,
-              syncToken: activeSyncToken,
-            });
+            applyMonthPagination(monthDocs);
             return;
           } catch {
             // Fallback to cached period filter if index is building
           }
         }
 
-        const fallbackMonth = rawTransactions.value
-          .filter((tx) => !tx.deleted && String(tx.date || '').slice(0, 7) === targetPeriod)
-          .map((tx) => enrichTransactionItem(tx))
-          .filter((tx) => matchesClientSubFilters(tx));
-
-        rawServerPaginatedTransactions.value = fallbackMonth;
-        txServerPage.value = 1;
-        txServerPageSize.value = Math.max(1, fallbackMonth.length);
-        txServerTotalFiltered.value = fallbackMonth.length;
-        txServerTotalPages.value = 1;
+        applyMonthPagination(rawTransactions.value);
         return;
       }
 
@@ -1677,10 +1675,6 @@ export const useFinanceStore = defineStore('finance', () => {
     );
   });
 
-  let isCheckingSyncToken = false;
-  let lastTokenCheckAt = 0;
-  const TOKEN_CHECK_COOLDOWN_MS = 300000; // 5-minute dedup window to strictly avoid Firestore read quota spikes
-
   async function fetchAllCollectionsFromFirestore(uid: string, remoteSyncToken = 0) {
     const currentMonth = getCurrentMonthPeriod();
     const monthStartIso = `${currentMonth}-01`;
@@ -1705,34 +1699,19 @@ export const useFinanceStore = defineStore('finance', () => {
     // Clear stale pagination caches before loading fresh server state
     invalidateServerPaginationCaches(uid);
 
-    // Build bounded transaction query: ONLY fetch current month's transactions + latest 25 transactions (server-side pagination)
-    // Never load the entire transactions collection at startup!
+    // Build bounded transaction query: ONLY fetch latest 25 transactions (strict server-side pagination)
+    // Never load unbounded transactions collection at startup!
     let initialPage1Items: TransactionItem[] = [];
     const fetchInitialBoundedTransactions = async () => {
-      const combinedMap = new Map<string, any>();
       try {
-        const [monthSnap, page1Snap] = await Promise.all([
-          getDocs(
-            query(
-              collection(db, 'transactions'),
-              where('ownerId', '==', uid),
-              where('date', '>=', monthStartIso),
-              where('date', '<=', `${monthEndIso}\uf8ff`)
-            )
-          ),
-          getDocs(
-            query(
-              collection(db, 'transactions'),
-              where('ownerId', '==', uid),
-              orderBy('date', 'desc'),
-              limit(25)
-            )
-          ),
-        ]);
-        monthSnap.docs.forEach((d) => combinedMap.set(d.id, d));
-        page1Snap.docs.forEach((d) => combinedMap.set(d.id, d));
-
-        loadedTransactionPeriods.add(`${uid}:${monthStartIso}:${monthEndIso}`);
+        const page1Snap = await getDocs(
+          query(
+            collection(db, 'transactions'),
+            where('ownerId', '==', uid),
+            orderBy('date', 'desc'),
+            limit(25)
+          )
+        );
 
         if (page1Snap.docs.length > 0) {
           const filterKey = `${uid}:all`;
@@ -1750,22 +1729,22 @@ export const useFinanceStore = defineStore('finance', () => {
             }))
             .filter((t: TransactionItem) => !t.deleted);
         }
-        return { docs: Array.from(combinedMap.values()) };
+        return page1Snap;
       } catch {
         // Fallback if composite index on (ownerId, date) is not yet available
         const boundedSnap = await getDocs(
-          query(collection(db, 'transactions'), where('ownerId', '==', uid), limit(50))
+          query(collection(db, 'transactions'), where('ownerId', '==', uid), limit(25))
         );
         return boundedSnap;
       }
     };
 
     const queries: Promise<any>[] = [
-      getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid), limit(50))),
-      getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid), limit(50))),
-      getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid), limit(100))),
+      getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid), limit(25))),
+      getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid), limit(25))),
+      getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid), limit(25))),
       fetchInitialBoundedTransactions(),
-      getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid), limit(100))),
+      getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid), limit(25))),
     ];
 
     // Only fetch global default categories if not already cached in memory or localStorage
@@ -1774,7 +1753,7 @@ export const useFinanceStore = defineStore('finance', () => {
     if (shouldFetchDefaultCats) {
       queries.push(
         getDocs(
-          query(collection(db, 'categories'), where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID), limit(100))
+          query(collection(db, 'categories'), where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID), limit(25))
         )
       );
     }
@@ -1986,12 +1965,75 @@ export const useFinanceStore = defineStore('finance', () => {
    * - If remote `updatedAt` has NOT changed: returns `false` and keeps all cached pages & collections intact (0 collection reads!).
    * - If remote `updatedAt` HAS changed: invalidates caches, reloads fresh data from server, stores in cache again, and returns `true`.
    */
+  let isCheckingSyncToken = false;
+  let lastTokenCheckAt = 0;
+  const TOKEN_CHECK_COOLDOWN_MS = 5000; // 5s cooldown to prevent redundant token getDoc calls on quick double-clicks
+
+  /**
+   * Cocokkan read token / timestamp pada perangkat lokal dan server Firestore.
+   * Hanya jika terdapat perbedaan timestamp (server lebih baru) barulah menarik data fresh!
+   * Event yang memicu:
+   * - berpindah antar halaman / menu
+   * - menambah / mengubah / menghapus data
+   * - mengklik tombol reload manual
+   * - membuka detail data
+   *
+   * Biaya pemeriksaan: TEPAT 1 READ (hanya dokumen `/users/{uid}`).
+   * Jika timestamp cocok / sama: 0 READ tambahan (seluruh data disajikan dari cache lokal).
+   */
   async function checkAndSyncIfRemoteChanged(
-    _uidInput?: string,
-    _bypassCooldown = false
+    uidInput?: string,
+    force = false
   ): Promise<boolean> {
-    // Zero-polling architecture: disable automatic background remote sync to protect Firestore read quota
-    return false;
+    const authStore = useAuthStore();
+    const uid = sanitizeId(uidInput || authStore.user?.uid || activeOwnerUid.value || '');
+    if (!uid || uid === 'guest') return false;
+
+    const now = Date.now();
+    if (!force && now - lastTokenCheckAt < TOKEN_CHECK_COOLDOWN_MS) {
+      return false;
+    }
+    if (isCheckingSyncToken) return false;
+
+    isCheckingSyncToken = true;
+    lastTokenCheckAt = now;
+
+    try {
+      const canQuery = await ensureFirestoreSessionForUser(uid);
+      if (!canQuery) return false;
+
+      const localSyncToken = getSavedUserSyncToken(uid);
+      const userSnap = await getDoc(doc(db, 'users', uid));
+      if (!userSnap.exists()) return false;
+
+      const uData = userSnap.data();
+      const remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
+
+      // Cocokkan read token / timestamp pada perangkat lokal dan server:
+      const hasDifference =
+        force ||
+        localSyncToken <= 0 ||
+        (remoteSyncToken > 0 && Math.abs(remoteSyncToken - localSyncToken) > 2000);
+
+      if (hasDifference) {
+        // Jika terdapat perbedaan, tarik data timestamp server ke perangkat lalu tarik data fresh
+        saveUserSyncToken(uid, remoteSyncToken > 0 ? remoteSyncToken : Date.now());
+        invalidateServerPaginationCaches(uid);
+        await fetchAllCollectionsFromFirestore(uid, remoteSyncToken);
+        await fetchTransactionsServerPage(undefined, true, true);
+        return true;
+      }
+
+      // Timestamp sama persis -> 0 read tambahan!
+      return false;
+    } catch (err) {
+      if (isFirestoreQuotaError(err)) {
+        useNotificationStore().notifyQuotaExceeded();
+      }
+      return false;
+    } finally {
+      isCheckingSyncToken = false;
+    }
   }
 
   async function initFinanceData(uidInput: string, forceRefresh = false) {
@@ -2186,14 +2228,25 @@ export const useFinanceStore = defineStore('finance', () => {
             }
           }
         } catch (tokenErr) {
-          if (isFirestoreQuotaError(tokenErr)) {
-            useNotificationStore().notifyQuotaExceeded();
-            isLoading.value = false;
-            return;
-          }
+          isLoading.value = false;
+          return;
         }
 
-        // Fetch from Cloud Firestore ONLY when local storage cache is empty (e.g. first login or manual refreshData)
+        // Cocokkan token/timestamp server dengan token lokal yang sudah dipulihkan dari cache:
+        const tokenMatches =
+          remoteSyncToken > 0 &&
+          localSyncToken > 0 &&
+          Math.abs(remoteSyncToken - localSyncToken) <= 2000;
+
+        // Jika cache lokal berhasil dimuat dan timestamp cocok, JANGAN TARIK KOLEKSI! (0 read tambahan).
+        if (hasRestoredLocalCache && tokenMatches && !forceRefresh) {
+          isSyncedWithFirestore.value = true;
+          isLoading.value = false;
+          return;
+        }
+
+        // Jika cache kosong atau timestamp berbeda: simpan timestamp server lalu tarik data baru
+        saveUserSyncToken(uid, remoteSyncToken > 0 ? remoteSyncToken : Date.now());
         await fetchAllCollectionsFromFirestore(uid, remoteSyncToken);
         isLoading.value = false;
       } catch (err) {

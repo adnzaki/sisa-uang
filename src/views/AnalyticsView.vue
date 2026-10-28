@@ -288,13 +288,12 @@ const activeBounds = computed(() => computeBoundsForMode(rangeType.value, anchor
 watch(
   activeBounds,
   (bounds) => {
-    if (bounds.startIso && bounds.endIso) {
+    if (financeStore.rawTransactions.length === 0 && bounds.startIso && bounds.endIso) {
       const today = toIsoDate(new Date());
       const maxEnd = bounds.endIso < today ? today : bounds.endIso;
       void financeStore.ensureTransactionsForDateRange(bounds.startIso, maxEnd);
     }
-  },
-  { immediate: true }
+  }
 );
 
 // Navigate backward (-1) or forward (+1) according to current rangeType

@@ -4,6 +4,7 @@ import { auth } from '../firebase';
 import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
 import { useAutomationStore } from '../stores/automation';
+import { useFinanceStore } from '../stores/finance';
 import DashboardView from '../views/DashboardView.vue';
 import TransactionsView from '../views/TransactionsView.vue';
 import WalletsView from '../views/WalletsView.vue';
@@ -273,3 +274,12 @@ router.beforeEach((to, _from, next) => {
 
   next();
 });
+
+router.afterEach((to) => {
+  const authStore = useAuthStore();
+  if (authStore.isAuthenticated && !authStore.isSuperAdmin && authStore.user?.uid) {
+    const financeStore = useFinanceStore();
+    void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid, false);
+  }
+});
+
