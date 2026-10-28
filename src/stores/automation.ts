@@ -8,6 +8,7 @@ import {
   deleteDoc,
   query,
   where,
+  limit,
   onSnapshot,
   serverTimestamp,
 } from 'firebase/firestore';
@@ -167,7 +168,7 @@ export const useAutomationStore = defineStore('automation', () => {
     // 1. If not forcing refresh, check local storage cache if still valid within TTL
     if (!forceRefresh) {
       const cached = readLocalStorageCache(uid);
-      if (cached.rules.length > 0 && Date.now() < cached.expiresAt) {
+      if (cached && typeof cached.expiresAt === 'number' && cached.expiresAt > 0 && Date.now() < cached.expiresAt) {
         rules.value = cached.rules;
         return cached.rules;
       }
@@ -187,7 +188,7 @@ export const useAutomationStore = defineStore('automation', () => {
       let firestoreRules: AutomationItem[] = [];
       let firestoreFetchSuccess = false;
       try {
-        const q = query(collection(db, 'automations'), where('ownerId', '==', uid));
+        const q = query(collection(db, 'automations'), where('ownerId', '==', uid), limit(50));
         const snap = await getDocs(q);
         firestoreRules = snap.docs
           .map((d) => ({

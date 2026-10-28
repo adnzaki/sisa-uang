@@ -530,15 +530,19 @@ export const useAdminStore = defineStore('admin', () => {
   let firestoreUsersSyncedInSession = false;
 
   async function syncFirestoreUsersToServerRegistry(force = false): Promise<number> {
-    if (!force && firestoreUsersSyncedInSession && users.value.length > 1) {
+    const isAlreadySynced =
+      firestoreUsersSyncedInSession ||
+      (typeof sessionStorage !== 'undefined' &&
+        sessionStorage.getItem('sisauang_admin_synced_session') === 'true');
+    if (!force && isAlreadySynced && users.value.length > 1) {
       return usersSummary.value.totalUsers;
     }
 
     try {
       await ensureSuperAdminFirebaseSession();
       const targetDb = sisaUangDb || db;
-      // Load all Firestore user documents (up to 500)
-      const snap = await getDocs(query(collection(targetDb, 'users'), limit(500)));
+      // Strictly limit Firestore sync query to max 100 documents to protect free read quota
+      const snap = await getDocs(query(collection(targetDb, 'users'), limit(100)));
       const proMarkersMap = new Map<
         string,
         { status: 'pending' | 'pro' | 'free'; plan: 'monthly' | 'yearly' | null; expiresAt: string | null }
@@ -547,7 +551,7 @@ export const useAdminStore = defineStore('admin', () => {
 
       try {
         const proSnap = await getDocs(
-          query(collection(targetDb, 'budgets'), where('category', '==', '__SISAUANG_PRO__'), limit(500))
+          query(collection(targetDb, 'budgets'), where('category', '==', '__SISAUANG_PRO__'), limit(100))
         );
         proSnap.docs.forEach((pd) => {
           const pData = pd.data() as Record<string, any>;
@@ -713,10 +717,7 @@ export const useAdminStore = defineStore('admin', () => {
     error.value = null;
 
     try {
-      if (!silent || usersSummary.value.totalUsers <= 1 || paginatedUsers.value.length <= 1) {
-        await syncFirestoreUsersToServerRegistry(!silent);
-      }
-
+      // Pure in-memory Express server overview: 0 Firestore reads!
       const [overviewRes] = await Promise.all([
         apiClient.get('/admin/overview'),
         fetchAdminUsersPage(undefined, true, true),

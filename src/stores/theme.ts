@@ -251,6 +251,12 @@ export const useThemeStore = defineStore('theme', () => {
     } catch {
       // Ignore
     }
+
+    return Boolean(
+      reportSigners.value.length > 0 ||
+      reportLetterhead.value.organizationName.trim().length > 0 ||
+      reportLetterhead.value.imageDataUrl.length > 0
+    );
   }
 
   function applyRemoteReportSettings(remote: any) {
@@ -369,33 +375,9 @@ export const useThemeStore = defineStore('theme', () => {
     }
   }
 
-  function setupRealtimeFirestoreListener(key: string) {
+  function setupRealtimeFirestoreListener(_key: string) {
     stopRealtimeFirestoreListener();
-    try {
-      activeFirestoreUnsub = onSnapshot(
-        doc(db, 'report_settings', key),
-        (snap) => {
-          // Do not overwrite if user on this local client is actively typing (save timer active)
-          if (snap.exists() && !saveDebounceTimer) {
-            const remoteData = snap.data();
-            applyRemoteReportSettings(remoteData);
-            reportSettingsSyncStatus.value = 'synced';
-            reportSettingsLastSyncedAt.value =
-              remoteData.updatedAt?.toDate?.()?.toISOString?.() ||
-              (typeof remoteData.updatedAt === 'string'
-                ? remoteData.updatedAt
-                : new Date().toISOString());
-          }
-        },
-        (err) => {
-          if (!isFirestoreOfflineError(err)) {
-            console.warn('Firestore report_settings realtime notice:', err);
-          }
-        }
-      );
-    } catch {
-      // Ignore
-    }
+    // Zero-listener architecture: disabled persistent onSnapshot to protect Firestore read quota from idle connections
   }
 
   async function pushReportSettingsToFirestore(ownerUid?: string | null): Promise<boolean> {
@@ -623,11 +605,22 @@ export const useThemeStore = defineStore('theme', () => {
     }
   }
 
+  let reportSettingsLoadedInSessionKey: string | null = null;
+
   function loadReportSignatureConfig(ownerUid?: string | null) {
     const rawKey = ownerUid?.trim() || 'default';
-    currentSignatureOwnerKey.value = sanitizeId(rawKey);
-    readFromLocalStorage();
-    setupRealtimeFirestoreListener(currentSignatureOwnerKey.value);
+    const nextKey = sanitizeId(rawKey);
+    if (reportSettingsLoadedInSessionKey === nextKey) {
+      return;
+    }
+    currentSignatureOwnerKey.value = nextKey;
+    const hasLocal = readFromLocalStorage();
+    reportSettingsLoadedInSessionKey = nextKey;
+    // Fast-path: if local cache already has the configuration, serve directly with 0 remote reads!
+    if (hasLocal) {
+      reportSettingsSyncStatus.value = 'synced';
+      return;
+    }
     void fetchRemoteReportSettings(currentSignatureOwnerKey.value);
   }
 

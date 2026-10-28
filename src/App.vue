@@ -467,8 +467,8 @@ watch(mobileDrawerOpen, (isOpen) => {
 });
 
 function isCurrentSuperAdmin(): boolean {
-  const currentEmail = String(auth.currentUser?.email || authStore.user?.email || '').trim().toLowerCase();
-  return currentEmail === 'vuedevo@gmail.com';
+  const currentEmail = String(authStore.user?.email || '').trim().toLowerCase();
+  return currentEmail === 'vuedevo@gmail.com' || authStore.isSuperAdmin;
 }
 
 onMounted(() => {
@@ -499,7 +499,6 @@ watch(
           void financeStore.refreshData(true);
         } else {
           financeStore.initFinanceData(uid);
-          void financeStore.loadRouteDataFromFirestore(route.path, uid);
         }
       }
       void automationStore.loadAutomations(uid);
@@ -509,15 +508,6 @@ watch(
     }
   },
   { immediate: true }
-);
-
-watch(
-  () => route.path,
-  (newPath) => {
-    if (newPath && authStore.isAuthenticated && !authStore.isSuperAdmin && authStore.user?.uid) {
-      void financeStore.loadRouteDataFromFirestore(newPath, authStore.user.uid);
-    }
-  }
 );
 
 watch(

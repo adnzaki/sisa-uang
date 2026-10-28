@@ -542,17 +542,23 @@ export const useFinanceStore = defineStore('finance', () => {
       }
     }
 
-    // Attempt bridge session for super admin / migrated records if not authenticated yet
+    // Attempt bridge session only for super admin records if not authenticated yet
     if (!current || current.isAnonymous) {
-      try {
-        await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-        return true;
-      } catch (signInErr: any) {
+      if (
+        authStore.isSuperAdmin ||
+        uid === 'admin_vuedevo_01' ||
+        authStore.user?.email?.toLowerCase() === 'vuedevo@gmail.com'
+      ) {
         try {
-          await createUserWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
+          await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
           return true;
-        } catch {
-          // Bridge sign-in was not available
+        } catch (signInErr: any) {
+          try {
+            await createUserWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
+            return true;
+          } catch {
+            // Bridge sign-in was not available
+          }
         }
       }
     }
@@ -1332,6 +1338,30 @@ export const useFinanceStore = defineStore('finance', () => {
 
       // CASE 2: 'all' (Semua Periode) with NO extra text/dropdown subfilters -> Pure Firestore Server-Side Cursor Pagination (25 per page) + Page Cache
       if (!hasClientSubFilters && canQuery) {
+        // Zero-read fast-path: If page 1 is requested and transactions are already cached locally, serve immediately
+        if (!forceServerReload && rawTransactions.value.length > 0 && targetPage === 1) {
+          const sorted = [...rawTransactions.value]
+            .filter((tx) => !tx.deleted)
+            .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+            .map((tx) => enrichTransactionItem(tx))
+            .filter((tx) => matchesClientSubFilters(tx));
+          const pagedItems = sorted.slice(0, pageSize);
+          rawServerPaginatedTransactions.value = pagedItems;
+          txServerPage.value = 1;
+          txServerPageSize.value = pageSize;
+          txServerTotalFiltered.value = sorted.length;
+          txServerTotalPages.value = Math.max(1, Math.ceil(sorted.length / pageSize));
+          saveTxServerPageToCache(uid, cacheKey, {
+            items: pagedItems,
+            page: 1,
+            pageSize,
+            totalFiltered: sorted.length,
+            totalPages: Math.max(1, Math.ceil(sorted.length / pageSize)),
+            syncToken: activeSyncToken,
+          });
+          return;
+        }
+
         const filterKey = `${uid}:all`;
         if (!txCursorByFilterKey.has(filterKey)) {
           txCursorByFilterKey.set(filterKey, new Map());
@@ -1731,11 +1761,11 @@ export const useFinanceStore = defineStore('finance', () => {
     };
 
     const queries: Promise<any>[] = [
-      getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
-      getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
-      getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid))),
+      getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid), limit(50))),
+      getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid), limit(50))),
+      getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid), limit(100))),
       fetchInitialBoundedTransactions(),
-      getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid))),
+      getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid), limit(100))),
     ];
 
     // Only fetch global default categories if not already cached in memory or localStorage
@@ -1744,7 +1774,7 @@ export const useFinanceStore = defineStore('finance', () => {
     if (shouldFetchDefaultCats) {
       queries.push(
         getDocs(
-          query(collection(db, 'categories'), where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID))
+          query(collection(db, 'categories'), where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID), limit(100))
         )
       );
     }
@@ -2117,6 +2147,16 @@ export const useFinanceStore = defineStore('finance', () => {
       // Ignore corrupt cache
     }
 
+    // Zero-read startup: If local cache is valid and refresh is not forced, serve immediately (0 Firestore reads!)
+    if (hasRestoredLocalCache && !forceRefresh) {
+      if (localSyncToken > 0) {
+        restorePersistedTxPageCache(uid, localSyncToken);
+      }
+      isSyncedWithFirestore.value = true;
+      isLoading.value = false;
+      return;
+    }
+
     const canQueryFirestore = await ensureFirestoreSessionForUser(uid);
 
     if (canQueryFirestore) {
@@ -2125,9 +2165,6 @@ export const useFinanceStore = defineStore('finance', () => {
         lastTokenCheckAt = Date.now();
         const authStore = useAuthStore();
 
-        // 1-Read Sync Token Check:
-        // Read ONLY 1 document (`/users/{uid}`) to verify if any other device modified financial data.
-        // If `Math.abs(remoteSyncToken - localSyncToken) <= 2000` (2s clock-skew tolerance), serve directly from localStorage cache (only 1 read total!).
         try {
           const userSnap = await getDoc(doc(db, 'users', uid));
           if (userSnap.exists()) {
@@ -2146,11 +2183,7 @@ export const useFinanceStore = defineStore('finance', () => {
               );
             } else if (uData?.subscriptionStatus === 'free' || uData?.isPro === false) {
               authStore.setExternalSubscriptionStatus('free', null, null);
-            } else {
-              void authStore.syncSubscriptionFromFirestoreForUser(uid, authStore.user?.email);
             }
-          } else {
-            void authStore.syncSubscriptionFromFirestoreForUser(uid, authStore.user?.email);
           }
         } catch (tokenErr) {
           if (isFirestoreQuotaError(tokenErr)) {
@@ -2158,15 +2191,6 @@ export const useFinanceStore = defineStore('finance', () => {
             isLoading.value = false;
             return;
           }
-        }
-
-        if (hasRestoredLocalCache) {
-          if (localSyncToken > 0) {
-            restorePersistedTxPageCache(uid, localSyncToken);
-          }
-          isSyncedWithFirestore.value = true;
-          isLoading.value = false;
-          return;
         }
 
         // Fetch from Cloud Firestore ONLY when local storage cache is empty (e.g. first login or manual refreshData)
@@ -2232,11 +2256,16 @@ export const useFinanceStore = defineStore('finance', () => {
    * with a strict limit of 25 documents per collection.
    * This guarantees cross-device synchronization without manual page reloads or unbounded reads.
    */
-  async function loadRouteDataFromFirestore(routePath: string, uidInput?: string) {
+  async function loadRouteDataFromFirestore(routePath: string, uidInput?: string, forceRefresh = false) {
     const authStore = useAuthStore();
     const uid = sanitizeId(uidInput || authStore.user?.uid || activeOwnerUid.value || '');
     if (!uid || uid === 'guest') return;
     if (authStore.isSuperAdmin) return;
+
+    // Fast-path: if we already have data loaded in memory or local storage, do not hit Firestore
+    if (!forceRefresh && (wallets.value.length > 0 || rawTransactions.value.length > 0 || budgets.value.length > 0)) {
+      return;
+    }
 
     const cleanPath = (routePath || '').split('?')[0].toLowerCase();
     const canQuery = await ensureFirestoreSessionForUser(uid);

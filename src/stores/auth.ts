@@ -922,10 +922,10 @@ export const useAuthStore = defineStore('auth', () => {
         }
       }
 
-      // 2. Also check by email in `/users` if still not Pro and email is available
+      // 2. Also check by email in `/users` if still not Pro and email is available (bounded to limit 1)
       if (resolvedStatus !== 'pro' && rawEmail) {
         try {
-          const emailQ = query(collection(db, 'users'), where('email', '==', rawEmail));
+          const emailQ = query(collection(db, 'users'), where('email', '==', rawEmail), limit(1));
           const emailSnap = await getDocs(emailQ);
           for (const d of emailSnap.docs) {
             const uData = d.data();
@@ -1376,8 +1376,10 @@ export const useAuthStore = defineStore('auth', () => {
           setApiAdminContext(parsed.email, storedToken);
           upsertSavedAccount(parsed, storedToken);
           void registerCurrentDeviceSession(parsed, false);
-          // Reload status pro/free directly from Firestore once when opening the app or performing a full reload
-          void syncSubscriptionFromFirestoreForUser(parsed.uid, parsed.email);
+          // Only check status pro/free from Firestore if unknown or pending (protects Firestore reads on app startup)
+          if (!parsed.subscriptionStatus || parsed.subscriptionStatus === 'pending') {
+            void syncSubscriptionFromFirestoreForUser(parsed.uid, parsed.email);
+          }
           startUserStatusMonitor(parsed);
         } catch {
           localStorage.removeItem(SESSION_STORAGE_KEY);
