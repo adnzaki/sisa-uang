@@ -138,7 +138,46 @@ async function runMigration() {
     process.exit(1);
   }
 
-  // 4. Batch Commit Updates
+  // 4. Pre-flight Check (Tes 1 Dokumen Sebelum Batch Penuh)
+  if (updateList.length > 0) {
+    console.log('\nMelakukan uji coba (pre-flight check) 1 dokumen ke Firestore...');
+    const testItem = updateList[0];
+    const testRef = doc(db, 'transactions', testItem.txId);
+    try {
+      const testBatch = writeBatch(db);
+      testBatch.update(testRef, {
+        categoryId: testItem.categoryId,
+        updatedAt: serverTimestamp(),
+      });
+      await testBatch.commit();
+      console.log('✓ Pre-flight check BERHASIL: Firestore Rules mengizinkan field categoryId.');
+    } catch (testErr: any) {
+      if (testErr.code === 'permission-denied' || testErr.message?.includes('PERMISSION_DENIED')) {
+        console.error('\n================================================================================');
+        console.error('❌ GAGAL: ATURAN SECURITY RULES DI FIREBASE CLOUD BELUM DI-UPDATE / DIPUBLIKASI');
+        console.error('================================================================================');
+        console.error('Penyebab:');
+        console.error('Firestore Security Rules di server Firebase (Google Cloud) saat ini masih versi lama.');
+        console.error('Pada versi lama, skema fungsi "isValidTransaction" memiliki daftar whitelist:');
+        console.error('data.keys().hasOnly([...]) yang BELUM mendaftarkan field "categoryId".');
+        console.error('Oleh karena itu, server Firestore menolak penulisan field "categoryId".\n');
+        console.error('Solusi Cepat (Pilih salah satu):');
+        console.error('1. Melalui Terminal:');
+        console.error('   Jalankan: firebase deploy --only firestore:rules');
+        console.error('2. Melalui Firebase Console:');
+        console.error('   - Buka https://console.firebase.google.com/');
+        console.error('   - Pilih project "sisa-uang-dfb7b" -> Firestore Database -> Tab "Rules"');
+        console.error('   - Hapus aturan lama, lalu tempel (paste) seluruh isi file "firestore.rules"');
+        console.error('   - Klik tombol "Publish" (Publikasikan).');
+        console.error('================================================================================\n');
+        console.error('Setelah aturan di-publish di Firebase, jalankan kembali script ini.');
+        process.exit(1);
+      }
+      throw testErr;
+    }
+  }
+
+  // 5. Batch Commit Updates
   const BATCH_SIZE = 400; // Firestore limit adalah 500 operasi per batch
   const totalBatches = Math.ceil(updateList.length / BATCH_SIZE);
   console.log(`\nMemulai pembaruan ${updateList.length} transaksi dalam ${totalBatches} batch (maks ${BATCH_SIZE} per batch)...`);
@@ -159,7 +198,7 @@ async function runMigration() {
     console.log(`[Batch ${bIndex + 1}/${totalBatches}] Berhasil memperbarui ${chunk.length} transaksi.`);
   }
 
-  // 5. Verifikasi Ulang
+  // 6. Verifikasi Ulang
   console.log('\nMelakukan verifikasi akhir ke Firestore...');
   const verifySnap = await getDocs(collection(db, 'transactions'));
   let missingCatId = 0;
