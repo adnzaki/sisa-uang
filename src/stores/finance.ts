@@ -3933,6 +3933,7 @@ export const useFinanceStore = defineStore('finance', () => {
     toFundOwnerId?: string;
     type: TransactionItem['type'];
     category: string;
+    categoryId?: string;
     amount: number;
     adminFee?: number;
     note: string;
@@ -4288,6 +4289,7 @@ export const useFinanceStore = defineStore('finance', () => {
       toFundOwnerId?: string;
       type: TransactionItem['type'];
       category: string;
+      categoryId?: string;
       amount: number;
       adminFee?: number;
       note: string;

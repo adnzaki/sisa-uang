@@ -268,6 +268,7 @@ service cloud.firestore {
           'toFundOwnerId',
           'toFundOwnerName',
           'category',
+          'categoryId',
           'amount',
           'adminFee',
           'note',
@@ -295,6 +296,7 @@ service cloud.firestore {
         (!('toFundOwnerId' in data) || data.toFundOwnerId == null || (data.toFundOwnerId is string && data.toFundOwnerId.size() <= 128)) &&
         (!('toFundOwnerName' in data) || data.toFundOwnerName == null || (data.toFundOwnerName is string && data.toFundOwnerName.size() <= 60)) &&
         data.category is string && data.category.size() >= 1 && data.category.size() <= 50 &&
+        (!('categoryId' in data) || data.categoryId == null || (data.categoryId is string && data.categoryId.size() <= 128)) &&
         (data.amount is int || data.amount is float) && data.amount > 0 &&
         (!('adminFee' in data) || data.adminFee == null || ((data.adminFee is int || data.adminFee is float) && data.adminFee >= 0)) &&
         (!('note' in data) || data.note == null || (data.note is string && data.note.size() <= 200)) &&
@@ -759,6 +761,7 @@ service cloud.firestore {
               'toFundOwnerId',
               'toFundOwnerName',
               'category',
+              'categoryId',
               'amount',
               'adminFee',
               'note',

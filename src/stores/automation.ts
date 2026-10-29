@@ -369,6 +369,22 @@ export const useAutomationStore = defineStore('automation', () => {
     const isEdit = Boolean(payload.id);
     const existingRule = isEdit ? rules.value.find((r) => r.id === id) : undefined;
 
+    // Resolve categoryId by matching category name and type in user's active/default categories
+    const matchedCategory =
+      financeStore.categories.find(
+        (c) =>
+          !c.deleted &&
+          c.name.trim().toLowerCase() === safeCategory.trim().toLowerCase() &&
+          (payload.type === 'transfer' || !c.type || c.type === payload.type)
+      ) ||
+      financeStore.categories.find(
+        (c) =>
+          !c.deleted &&
+          c.name.trim().toLowerCase() === safeCategory.trim().toLowerCase()
+      );
+    const resolvedCategoryId =
+      matchedCategory?.id || (payload as any).categoryId || existingRule?.categoryId || undefined;
+
     const updatedItem: AutomationItem = {
       id,
       ownerId: uid,
@@ -383,6 +399,7 @@ export const useAutomationStore = defineStore('automation', () => {
       toFundOwnerId: payload.type === 'transfer' ? (payload.toFundOwnerId || undefined) : undefined,
       toFundOwnerName: payload.type === 'transfer' ? (payload.toFundOwnerName || undefined) : undefined,
       category: safeCategory,
+      categoryId: resolvedCategoryId,
       amount: numericAmount,
       adminFee: payload.type === 'transfer' ? numericAdminFee : 0,
       note: safeNote,
@@ -447,6 +464,10 @@ export const useAutomationStore = defineStore('automation', () => {
         deletedAt: null,
         updatedAt: serverTimestamp(),
       };
+
+      if (resolvedCategoryId) {
+        docData.categoryId = resolvedCategoryId;
+      }
 
       if (!isEdit) {
         docData.createdAt = serverTimestamp();
@@ -614,6 +635,7 @@ export const useAutomationStore = defineStore('automation', () => {
         toFundOwnerId: rule.toFundOwnerId,
         type: rule.type,
         category: rule.category,
+        categoryId: rule.categoryId,
         amount: rule.amount,
         adminFee: rule.adminFee || 0,
         note: defaultNote,

@@ -12,6 +12,7 @@ export interface AutomationItem {
   toFundOwnerId?: string;
   toFundOwnerName?: string;
   category: string;
+  categoryId?: string;
   amount: number;
   adminFee?: number;
   note: string;
