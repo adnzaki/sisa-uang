@@ -206,9 +206,10 @@ service cloud.firestore {
 
     function isValidBudget(data) {
       return data.keys().hasAll(['ownerId', 'category', 'limitAmount', 'spentAmount', 'period', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['ownerId', 'category', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'category', 'categoryId', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.category is string && data.category.size() >= 1 && data.category.size() <= 50 &&
+        (!('categoryId' in data) || data.categoryId == null || (data.categoryId is string && data.categoryId.size() <= 128)) &&
         (data.limitAmount is int || data.limitAmount is float) && data.limitAmount > 0 &&
         (data.spentAmount is int || data.spentAmount is float) && data.spentAmount >= 0 &&
         data.period is string && data.period.size() >= 6 && data.period.size() <= 40 &&
@@ -621,15 +622,15 @@ service cloud.firestore {
         isValidBudget(incoming()) &&
         (incoming().ownerId == existing().ownerId || isAdmin()) &&
         (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
-        incoming().updatedAt == request.time &&
+        (incoming().updatedAt == request.time || (isAdmin() && incoming().updatedAt == existing().updatedAt)) &&
         (
           (
             existing().ownerId == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['category', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['category', 'categoryId', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
             isNotBlocked()
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['ownerId', 'category', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['ownerId', 'category', 'categoryId', 'limitAmount', 'spentAmount', 'period', 'deleted', 'deletedAt', 'createdAt', 'updatedAt']) &&
             isAdmin()
           )
         );

@@ -107,6 +107,7 @@ export interface BudgetItem {
   id: string;
   ownerId: string;
   category: string;
+  categoryId?: string;
   limitAmount: number;
   spentAmount: number;
   period: string;
@@ -421,6 +422,7 @@ export const useFinanceStore = defineStore('finance', () => {
     uid: string,
     payload: {
       category: string;
+      categoryId?: string;
       limitAmount: number;
       spentAmount: number;
       period: string;
@@ -432,8 +434,20 @@ export const useFinanceStore = defineStore('finance', () => {
     const existsOnServer =
       knownFirestoreBudgetDocIds.has(docId) || budgets.value.some((b) => b.id === docId);
 
+    // Resolve categoryId if not provided and not a system marker
+    let resolvedCategoryId = payload.categoryId;
+    if (!resolvedCategoryId && payload.category && !payload.category.startsWith('__')) {
+      const cleanCatLower = payload.category.trim().toLowerCase();
+      const matchedCat = categories.value.find(
+        (c) => !c.deleted && c.name.trim().toLowerCase() === cleanCatLower
+      );
+      if (matchedCat) {
+        resolvedCategoryId = matchedCat.id;
+      }
+    }
+
     if (existsOnServer) {
-      batch.update(refDoc, {
+      const updateData: Record<string, any> = {
         category: payload.category,
         limitAmount: payload.limitAmount,
         spentAmount: payload.spentAmount,
@@ -441,9 +455,13 @@ export const useFinanceStore = defineStore('finance', () => {
         deleted: payload.deleted ?? false,
         deletedAt: payload.deletedAt ?? null,
         updatedAt: serverTimestamp(),
-      });
+      };
+      if (resolvedCategoryId) {
+        updateData.categoryId = resolvedCategoryId;
+      }
+      batch.update(refDoc, updateData);
     } else {
-      batch.set(refDoc, {
+      const setData: Record<string, any> = {
         ownerId: uid,
         category: payload.category,
         limitAmount: payload.limitAmount,
@@ -453,7 +471,11 @@ export const useFinanceStore = defineStore('finance', () => {
         deletedAt: payload.deletedAt ?? null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      });
+      };
+      if (resolvedCategoryId) {
+        setData.categoryId = resolvedCategoryId;
+      }
+      batch.set(refDoc, setData);
       knownFirestoreBudgetDocIds.add(docId);
     }
   }
@@ -4892,6 +4914,7 @@ export const useFinanceStore = defineStore('finance', () => {
   async function saveBudget(payload: {
     id?: string | null;
     category: string;
+    categoryId?: string;
     limitAmount: number;
     period?: string;
   }) {
@@ -4941,11 +4964,19 @@ export const useFinanceStore = defineStore('finance', () => {
         );
     const targetId = existing ? existing.id : sanitizeId(`su_bg_${Date.now()}`);
 
+    // Resolve categoryId
+    const cleanCatLower = safeCategory.trim().toLowerCase();
+    const matchedCategory = categories.value.find(
+      (c) => !c.deleted && c.name.trim().toLowerCase() === cleanCatLower
+    );
+    const resolvedCategoryId =
+      payload.categoryId || matchedCategory?.id || existing?.categoryId || undefined;
+
     await ensureFirestoreSessionForUser(uid);
     try {
       const batch = writeBatch(db);
       if (existing) {
-        batch.update(doc(db, 'budgets', targetId), {
+        const updateData: Record<string, any> = {
           category: safeCategory,
           limitAmount: numericLimit,
           spentAmount: existing.spentAmount || 0,
@@ -4953,9 +4984,13 @@ export const useFinanceStore = defineStore('finance', () => {
           deleted: false,
           deletedAt: null,
           updatedAt: serverTimestamp(),
-        });
+        };
+        if (resolvedCategoryId) {
+          updateData.categoryId = resolvedCategoryId;
+        }
+        batch.update(doc(db, 'budgets', targetId), updateData);
       } else {
-        batch.set(doc(db, 'budgets', targetId), {
+        const setData: Record<string, any> = {
           ownerId: uid,
           category: safeCategory,
           limitAmount: numericLimit,
@@ -4965,7 +5000,11 @@ export const useFinanceStore = defineStore('finance', () => {
           deletedAt: null,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
-        });
+        };
+        if (resolvedCategoryId) {
+          setData.categoryId = resolvedCategoryId;
+        }
+        batch.set(doc(db, 'budgets', targetId), setData);
       }
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -4976,6 +5015,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
     if (existing) {
       existing.category = safeCategory;
+      if (resolvedCategoryId) existing.categoryId = resolvedCategoryId;
       existing.limitAmount = numericLimit;
       existing.period = period;
     } else {
@@ -4983,6 +5023,7 @@ export const useFinanceStore = defineStore('finance', () => {
         id: targetId,
         ownerId: uid,
         category: safeCategory,
+        categoryId: resolvedCategoryId,
         limitAmount: numericLimit,
         spentAmount: 0,
         period,
@@ -5710,6 +5751,11 @@ export const useFinanceStore = defineStore('finance', () => {
     const annualDocId =
       existingAnnualDoc?.id || sanitizeId(`su_bgy_cat_${uid}_${yStr}_${catSlug}`);
 
+    const matchedCategory = categories.value.find(
+      (c) => !c.deleted && c.name.trim().toLowerCase() === catNorm
+    );
+    const resolvedCategoryId = matchedCategory?.id || existingAnnualDoc?.categoryId || undefined;
+
     await ensureFirestoreSessionForUser(uid);
     try {
       const batch = writeBatch(db);
@@ -5720,6 +5766,7 @@ export const useFinanceStore = defineStore('finance', () => {
       }
       upsertBudgetDocInBatch(batch, annualDocId, uid, {
         category: safeCategory,
+        categoryId: resolvedCategoryId,
         limitAmount: annualTotal,
         spentAmount: existingAnnualDoc?.spentAmount || 0,
         period: annualPeriodKey,
@@ -5746,6 +5793,7 @@ export const useFinanceStore = defineStore('finance', () => {
           }
           upsertBudgetDocInBatch(batch, mDocId, uid, {
             category: safeCategory,
+            categoryId: resolvedCategoryId,
             limitAmount: monthVal,
             spentAmount: existingMonthDoc?.spentAmount || 0,
             period: periodKey,
@@ -5773,12 +5821,14 @@ export const useFinanceStore = defineStore('finance', () => {
     // Update local state optimistically
     if (existingAnnualDoc) {
       existingAnnualDoc.category = safeCategory;
+      if (resolvedCategoryId) existingAnnualDoc.categoryId = resolvedCategoryId;
       existingAnnualDoc.limitAmount = annualTotal;
     } else {
       budgets.value.push({
         id: annualDocId,
         ownerId: uid,
         category: safeCategory,
+        categoryId: resolvedCategoryId,
         limitAmount: annualTotal,
         spentAmount: 0,
         period: annualPeriodKey,
@@ -5799,6 +5849,7 @@ export const useFinanceStore = defineStore('finance', () => {
       if (monthVal > 0) {
         if (existingIdx >= 0) {
           budgets.value[existingIdx].category = safeCategory;
+          if (resolvedCategoryId) budgets.value[existingIdx].categoryId = resolvedCategoryId;
           budgets.value[existingIdx].limitAmount = monthVal;
         } else {
           const mDocId = sanitizeId(`su_bgy_m_${uid}_${yStr}_${mm}_${catSlug}`);
@@ -5806,6 +5857,7 @@ export const useFinanceStore = defineStore('finance', () => {
             id: mDocId,
             ownerId: uid,
             category: safeCategory,
+            categoryId: resolvedCategoryId,
             limitAmount: monthVal,
             spentAmount: 0,
             period: periodKey,
