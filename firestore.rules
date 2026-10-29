@@ -173,6 +173,7 @@ service cloud.firestore {
           'toFundOwnerName',
           'type',
           'category',
+          'categoryId',
           'amount',
           'adminFee',
           'note',
@@ -193,6 +194,7 @@ service cloud.firestore {
         (!('toFundOwnerName' in data) || (data.toFundOwnerName is string && data.toFundOwnerName.size() <= 60)) &&
         data.type is string && (data.type == 'income' || data.type == 'expense' || data.type == 'transfer') &&
         data.category is string && data.category.size() >= 1 && data.category.size() <= 50 &&
+        (!('categoryId' in data) || (data.categoryId is string && data.categoryId.size() <= 128)) &&
         (data.amount is int || data.amount is float) && data.amount > 0 &&
         (!('adminFee' in data) || ((data.adminFee is int || data.adminFee is float) && data.adminFee >= 0)) &&
         data.note is string && data.note.size() <= 200 &&
@@ -537,7 +539,7 @@ service cloud.firestore {
         isValidTransaction(incoming()) &&
         (incoming().ownerId == existing().ownerId || isAdmin()) &&
         (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
-        incoming().updatedAt == request.time &&
+        (incoming().updatedAt == request.time || (isAdmin() && incoming().updatedAt == existing().updatedAt)) &&
         (
           (
             existing().ownerId == request.auth.uid &&
@@ -552,6 +554,7 @@ service cloud.firestore {
               'toFundOwnerName',
               'type',
               'category',
+              'categoryId',
               'amount',
               'adminFee',
               'note',
@@ -577,6 +580,7 @@ service cloud.firestore {
               'toFundOwnerName',
               'type',
               'category',
+              'categoryId',
               'amount',
               'adminFee',
               'note',

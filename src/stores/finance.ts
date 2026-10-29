@@ -92,6 +92,7 @@ export interface TransactionItem {
   toFundOwnerName?: string;
   type: 'income' | 'expense' | 'transfer';
   category: string;
+  categoryId?: string;
   amount: number;
   adminFee?: number;
   note: string;
@@ -4076,6 +4077,39 @@ export const useFinanceStore = defineStore('finance', () => {
     const feeTxId = sanitizeId(`su_tx_fee_${Date.now()}`);
     const feeNote = sanitizeString(`Admin ${safeNote}`, MAX_NOTE_LENGTH, 'Biaya Admin Transfer');
 
+    // Resolve categoryId by matching category name and type in user's active/default categories
+    const matchedCategory =
+      categories.value.find(
+        (c) =>
+          !c.deleted &&
+          c.name.trim().toLowerCase() === safeCategory.trim().toLowerCase() &&
+          (payload.type === 'transfer' || !c.type || c.type === payload.type)
+      ) ||
+      categories.value.find(
+        (c) =>
+          !c.deleted &&
+          c.name.trim().toLowerCase() === safeCategory.trim().toLowerCase()
+      );
+    const resolvedCategoryId = matchedCategory?.id || (payload as any).categoryId || undefined;
+
+    const matchedAdminFeeCat =
+      numericAdminFee > 0
+        ? categories.value.find(
+            (c) =>
+              !c.deleted &&
+              (c.name.trim().toLowerCase() === 'biaya admin' ||
+                c.name.trim().toLowerCase() === 'bea admin') &&
+              c.type === 'expense'
+          ) ||
+          categories.value.find(
+            (c) =>
+              !c.deleted &&
+              (c.name.trim().toLowerCase() === 'biaya admin' ||
+                c.name.trim().toLowerCase() === 'bea admin')
+          )
+        : undefined;
+    const resolvedFeeCatId = matchedAdminFeeCat?.id || 'su_cat_130';
+
     try {
       const batch = writeBatch(db);
       const firestoreTxData: Record<string, any> = {
@@ -4094,6 +4128,9 @@ export const useFinanceStore = defineStore('finance', () => {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
+      if (resolvedCategoryId) {
+        firestoreTxData.categoryId = resolvedCategoryId;
+      }
       if (payload.type === 'transfer' && destWallet) {
         firestoreTxData.toWalletId = destWallet.id;
         firestoreTxData.toWalletName = destWallet.name;
@@ -4105,7 +4142,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
       // If transfer includes an admin fee, record a separate Bea Admin expense transaction so it complies with live Firestore schema rules
       if (payload.type === 'transfer' && numericAdminFee > 0) {
-        batch.set(doc(db, 'transactions', feeTxId), {
+        const feeData: Record<string, any> = {
           ownerId: uid,
           walletId: wallet.id,
           walletName: wallet.name,
@@ -4120,7 +4157,11 @@ export const useFinanceStore = defineStore('finance', () => {
           deletedAt: null,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
-        });
+        };
+        if (resolvedFeeCatId) {
+          feeData.categoryId = resolvedFeeCatId;
+        }
+        batch.set(doc(db, 'transactions', feeTxId), feeData);
       }
 
       if (sourceHolder) {
@@ -4166,6 +4207,7 @@ export const useFinanceStore = defineStore('finance', () => {
       fundOwnerName: sourceHolder?.holderName || 'Pribadi',
       type: payload.type,
       category: safeCategory,
+      categoryId: resolvedCategoryId,
       amount: numericAmount,
       note: safeNote,
       date: safeDate,
@@ -4411,6 +4453,22 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     const txPath = `transactions/${txId}`;
+
+    // Resolve categoryId by matching category name and type in user's active/default categories
+    const matchedCategory =
+      categories.value.find(
+        (c) =>
+          !c.deleted &&
+          c.name.trim().toLowerCase() === safeCategory.trim().toLowerCase() &&
+          (payload.type === 'transfer' || !c.type || c.type === payload.type)
+      ) ||
+      categories.value.find(
+        (c) =>
+          !c.deleted &&
+          c.name.trim().toLowerCase() === safeCategory.trim().toLowerCase()
+      );
+    const resolvedCategoryId = matchedCategory?.id || (payload as any).categoryId || oldTx.categoryId || undefined;
+
     try {
       const batch = writeBatch(db);
       const updatePayload: Record<string, any> = {
@@ -4425,6 +4483,9 @@ export const useFinanceStore = defineStore('finance', () => {
         date: safeDate,
         updatedAt: serverTimestamp(),
       };
+      if (resolvedCategoryId) {
+        updatePayload.categoryId = resolvedCategoryId;
+      }
       if (payload.type === 'transfer' && newDestWallet) {
         updatePayload.toWalletId = newDestWallet.id;
         updatePayload.toWalletName = newDestWallet.name;
@@ -4476,6 +4537,7 @@ export const useFinanceStore = defineStore('finance', () => {
         fundOwnerName: newSourceHolder?.holderName || 'Pribadi',
         type: payload.type,
         category: safeCategory,
+        categoryId: resolvedCategoryId,
         amount: numericAmount,
         note: safeNote,
         date: safeDate,
