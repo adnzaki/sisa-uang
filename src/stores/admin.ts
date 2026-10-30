@@ -77,18 +77,13 @@ export function isAdminUserProActive(u: {
   uid?: string;
   [key: string]: any;
 }): boolean {
-  const normUsername = String(u.username || '').toLowerCase().replace(/^@+/, '');
-  const normEmail = String(u.email || '').toLowerCase();
-  const isKnownProUser =
-    normUsername === 'akundemo' ||
-    normEmail.includes('akundemo') ||
-    u.uid === 'akundemo' ||
-    normUsername === 'adnanzaki' ||
-    normUsername === 'adnanzaki.nabung' ||
-    normEmail === 'adnzaki@outlook.com' ||
-    normEmail === 'azzackey@gmail.com' ||
-    u.uid === 'ci4_user_1' ||
-    u.uid === 'ci4_user_60';
+  if (u.isExplicitlyDeactivated === true) {
+    return false;
+  }
+
+  // Authoritative Pro status: true only if marked isPro === true OR subscriptionStatus === 'pro'
+  const markedPro = u.isPro === true || u.subscriptionStatus === 'pro';
+  if (!markedPro) return false;
 
   if (u.subscriptionExpiresAt) {
     const cleanDate = String(u.subscriptionExpiresAt).slice(0, 10);
@@ -99,18 +94,6 @@ export function isAdminUserProActive(u: {
         return false;
       }
     }
-  }
-
-  if (isKnownProUser && !u.isExplicitlyDeactivated) {
-    return true;
-  }
-
-  // Authoritative Pro status: true if marked isPro === true OR subscriptionStatus === 'pro'
-  const markedPro = u.isPro === true || u.subscriptionStatus === 'pro';
-  if (!markedPro) return false;
-
-  if (u.isExplicitlyDeactivated === true && u.isPro !== true && u.subscriptionStatus !== 'pro') {
-    return false;
   }
 
   return true;
@@ -644,8 +627,7 @@ export const useAdminStore = defineStore('admin', () => {
           !isPending &&
           (markerInfo?.status === 'pro' ||
             fbUser.subscriptionStatus === 'pro' ||
-            fbUser.isPro === true ||
-            String(fbUser.username || '').toLowerCase().replace(/^@+/, '') === 'akundemo') &&
+            fbUser.isPro === true) &&
           isAdminUserProActive({
             uid: d.id,
             username: fbUser.username,
@@ -658,7 +640,7 @@ export const useAdminStore = defineStore('admin', () => {
               markerInfo?.status === 'pro' || fbUser.subscriptionStatus === 'pro' || fbUser.isPro === true
                 ? 'pro'
                 : fbUser.subscriptionStatus,
-            isPro: true,
+            isPro: fbUser.isPro === true || fbUser.subscriptionStatus === 'pro' || markerInfo?.status === 'pro',
             isExplicitlyDeactivated,
             subscriptionExpiresAt: markerInfo?.expiresAt || fbUser.subscriptionExpiresAt,
           });

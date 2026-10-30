@@ -2020,47 +2020,6 @@ export const useFinanceStore = defineStore('finance', () => {
       };
     });
 
-    // Check if Firestore has an explicit SisaUang Pro marker document for this user
-    const proMarkerDocs = allBudgetDocsRaw.filter(
-      (b: BudgetItem) => b.category === '__SISAUANG_PRO__'
-    );
-    if (proMarkerDocs.length > 0) {
-      const authStore = useAuthStore();
-      const normUsername = String(authStore.user?.username || '').toLowerCase().replace(/^@+/, '');
-      const normEmail = String(authStore.user?.email || '').toLowerCase();
-      const matchesUser =
-        authStore.user?.uid === uid ||
-        normUsername === 'akundemo' ||
-        normEmail.includes('akundemo') ||
-        uid === 'akundemo';
-
-      if (matchesUser) {
-        const activeMarker = proMarkerDocs.find(
-          (b: BudgetItem) => !b.deleted && String(b.period || '') !== 'pro-inactive'
-        );
-
-        if (activeMarker) {
-          const rawPeriod = String(activeMarker.period || '');
-          if (rawPeriod.startsWith('P:')) {
-            const planCode = rawPeriod.slice(2, 3);
-            const plan: 'monthly' | 'yearly' = planCode === 'Y' ? 'yearly' : 'monthly';
-            authStore.setExternalSubscriptionStatus('pending', plan, null, false);
-          } else {
-            let plan: 'monthly' | 'yearly' = 'monthly';
-            let expiresAt: string | null = null;
-            if (rawPeriod.startsWith('Y:')) {
-              plan = 'yearly';
-              expiresAt = rawPeriod.slice(2) || null;
-            } else if (rawPeriod.startsWith('M:')) {
-              plan = 'monthly';
-              expiresAt = rawPeriod.slice(2) || null;
-            }
-            authStore.setExternalSubscriptionStatus('pro', plan, expiresAt, false);
-          }
-        }
-      }
-    }
-
     const allActiveBudgetDocs = allBudgetDocsRaw.filter(
       (b: BudgetItem) => !b.deleted && b.category !== '__SISAUANG_PRO__'
     );

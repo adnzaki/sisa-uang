@@ -315,20 +315,16 @@ async function syncUsersFromFirestore(_force = false): Promise<number> {
       if (!uid) continue;
 
       const isSuper = email === SUPER_ADMIN_EMAIL || uid === 'admin_vuedevo_01';
-      const normUsername = String(data.username || '').toLowerCase().replace(/^@+/, '');
-      const isKnownPro =
-        normUsername === 'akundemo' ||
-        email.includes('akundemo') ||
-        uid === 'ci4_user_68' ||
-        normUsername === 'adnanzaki' ||
-        email === 'adnzaki@outlook.com' ||
-        uid === 'ci4_user_1' ||
-        normUsername === 'adnanzaki.nabung' ||
-        email === 'azzackey@gmail.com' ||
-        uid === 'ci4_user_60';
-
       const isDeactivated = Boolean(data.isExplicitlyDeactivated === true);
-      const isPro = !isDeactivated && (data.isPro === true || data.subscriptionStatus === 'pro' || isKnownPro);
+      const isPro =
+        !isDeactivated &&
+        (data.isPro === true || data.subscriptionStatus === 'pro') &&
+        isUserSubscriptionActive({
+          isPro: true,
+          subscriptionStatus: 'pro',
+          subscriptionExpiresAt: data.subscriptionExpiresAt,
+          isExplicitlyDeactivated: isDeactivated,
+        });
       const isPending = !isDeactivated && !isPro && data.subscriptionStatus === 'pending';
 
       const existing = usersStore.get(uid);
@@ -1173,14 +1169,6 @@ async function startServer() {
     }
 
     failedLoginTracker.delete(identifierRaw);
-    const normMatchedUser = String(matchedUser.username || '').toLowerCase().replace(/^@+/, '');
-    const normMatchedEmail = String(matchedUser.email || '').toLowerCase();
-    if (normMatchedUser === 'akundemo' || normMatchedEmail.includes('akundemo') || matchedUser.uid === 'akundemo') {
-      matchedUser.subscriptionStatus = 'pro';
-      matchedUser.isPro = true;
-      matchedUser.isExplicitlyDeactivated = false;
-      matchedUser.subscriptionPlan = matchedUser.subscriptionPlan || 'yearly';
-    }
     matchedUser.updatedAt = nowIso();
     appendLog(
       matchedUser.uid,
@@ -1629,13 +1617,12 @@ async function startServer() {
       ? String(req.body.subscriptionExpiresAt).slice(0, 10)
       : null;
 
-    const normUsername = username.toLowerCase().replace(/^@+/, '');
-    const isKnownPro = normUsername === 'akundemo' || email.includes('akundemo') || uid === 'akundemo';
-    const isIncomingPro = incomingSubStatus === 'pro' || isKnownPro;
-    const isPro = isIncomingPro || (isSuperAdmin && incomingSubStatus !== 'free');
+    const isDeactivated = Boolean(req.body?.isExplicitlyDeactivated === true);
+    const isPro = !isDeactivated && incomingSubStatus === 'pro';
+    const isPending = !isDeactivated && !isPro && incomingSubStatus === 'pending';
     const effectiveStatus: 'free' | 'pending' | 'pro' = isPro
       ? 'pro'
-      : incomingSubStatus === 'pending'
+      : isPending
         ? 'pending'
         : 'free';
 
@@ -1651,13 +1638,16 @@ async function startServer() {
         existing.isExplicitlyDeactivated = false;
         if (incomingPlan) existing.subscriptionPlan = incomingPlan;
         if (incomingExpiresAt) existing.subscriptionExpiresAt = incomingExpiresAt;
-      } else if (incomingSubStatus === 'pending') {
+      } else if (isPending) {
         existing.subscriptionStatus = 'pending';
         existing.isPro = false;
         if (incomingPlan) existing.subscriptionPlan = incomingPlan;
-      } else if (incomingSubStatus === 'free' && !existing.isPro) {
+      } else {
         existing.subscriptionStatus = 'free';
         existing.isPro = false;
+        existing.subscriptionPlan = null;
+        existing.subscriptionExpiresAt = null;
+        existing.isExplicitlyDeactivated = isDeactivated;
       }
       if (passwordHash) {
         existing.passwordHash = passwordHash;
