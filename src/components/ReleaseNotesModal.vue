@@ -8,23 +8,28 @@ import {
   Zap,
   CreditCard,
   Crown,
+  Database,
+  RotateCcw,
+  SunMoon,
+  TrendingUp,
 } from 'lucide-vue-next';
 import { useNotificationStore } from '../stores/notification';
 import { useAuthStore } from '../stores/auth';
 import AppModal from './AppModal.vue';
 
-const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0_rc_7';
-const RELEASE_VERSION = '1.0.0-rc.7';
+const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0';
+const RELEASE_VERSION = '1.0.0';
 const RELEASE_DATE = 'Oktober 2026';
 
 const notificationStore = useNotificationStore();
 const authStore = useAuthStore();
 
-const activeFilter = ref<'all' | 'automation' | 'duitku'>('all');
+type ChangelogCategory = 'all' | 'database' | 'payment' | 'ui' | 'system';
+const activeFilter = ref<ChangelogCategory>('all');
 
 export interface ChangelogItem {
   id: string;
-  category: 'automation' | 'duitku';
+  category: 'database' | 'payment' | 'ui' | 'system';
   badge: string;
   badgeColor: 'emerald' | 'indigo' | 'amber' | 'rose' | 'sky';
   isProExclusive?: boolean;
@@ -36,51 +41,135 @@ export interface ChangelogItem {
 
 const changelogItems: ChangelogItem[] = [
   {
-    id: 'scheduled-transactions-automation',
-    category: 'automation',
-    badge: 'OTOMATISASI TRANSAKSI',
+    id: 'database-operations-optimization',
+    category: 'database',
+    badge: 'OPTIMASI DATABASE',
     badgeColor: 'emerald',
-    title: 'Menambahkan Fitur Otomatisasi Transaksi Terjadwal',
+    title: 'Mengoptimalkan Proses Operasi Database Firestore',
     summary:
-      'Kemudahan mencatat transaksi rutin tanpa perlu input berulang. Atur jadwal transaksi berkala untuk pemasukan, pengeluaran, maupun transfer dana secara otomatis dan terkontrol:',
+      'Penataan ulang menyeluruh pada arsitektur pembacaan data Cloud Firestore untuk menghemat konsumsi kuota document reads hingga lebih dari 95% secara drastis:',
     details: [
-      'Penjadwalan Tanggal Fleksibel: Tentukan tanggal eksekusi bulanan (misalnya setiap tanggal 1, 15, atau 25) serta jam pelaksanaan transaksi sesuai rutinitas keuangan Anda.',
-      'Dua Mode Eksekusi (Otomatis & Konfirmasi): Pilihan mode "Tanpa Konfirmasi" untuk pencatatan otomatis di latar belakang, atau mode "Dengan Konfirmasi" untuk meninjau dan menyetujui transaksi sebelum dicatat ke buku kas.',
-      'Mendukung Seluruh Jenis Transaksi & Kepemilikan Dana: Catat pemasukan gaji, pengeluaran tagihan/kontrakan, hingga transfer antar sumber dana lengkap dengan alokasi kepemilikan dana (fund owner) dan biaya admin transfer.',
-      'Manajemen Kendali Penuh: Fitur aktif/non-aktifkan jadwal, tunda eksekusi (snooze), lewati periode berjalan (skip), serta pencatatan audit log otomatis setiap kali transaksi terjadwal berhasil dieksekusi.',
+      'Pemberhentian Background Polling Otomatis: Mematikan proses background looping dan kueri otomatis berkala saat aplikasi dalam posisi idle sehingga kuota reads tidak terbuang sia-sia.',
+      'Penerapan Batas Limit Kueri Ketat: Mencegah penarikan dokumen tak terbatas (unbounded queries) pada seluruh koleksi utama dengan menerapkan pembatasan dokumen proporsional.',
+      'Zero-Read Idle State: Menjamin tidak ada penarikan data diam-diam dari Firestore ketika perangkat pengguna sedang aktif namun tidak sedang digunakan.',
     ],
-    icon: Zap,
+    icon: Database,
   },
   {
-    id: 'duitku-payment-gateway-trial',
-    category: 'duitku',
-    badge: 'INTEGRASI PEMBAYARAN',
-    badgeColor: 'indigo',
-    title: 'Menambahkan Uji Coba Pembayaran Melalui Payment Gateway Duitku',
+    id: 'sync-and-data-loading-system',
+    category: 'database',
+    badge: 'SINKRONISASI DATA',
+    badgeColor: 'sky',
+    title: 'Mengoptimalkan Sistem Sinkronisasi dan Pemuatan Data',
     summary:
-      'Integrasi gateway pembayaran resmi Duitku untuk menghadirkan proses aktivasi dan langganan SisaUang Pro yang instan, terverifikasi otomatis, dan aman:',
+      'Mekanisme sinkronisasi data cerdas berbasis pencocokan read token dan timestamp antara server Firestore dan perangkat lokal:',
     details: [
-      'Kanal Pembayaran Digital Lengkap: Uji coba transaksi pembayaran dengan berbagai kanal modern, termasuk QRIS dinamis serta Virtual Account bank-bank nasional terkemuka.',
-      'Aktivasi Status Pro Otomatis: Sinkronisasi status akun secara real-time melalui webhook callback terenkripsi sehingga akses paket Pro langsung aktif seketika setelah pembayaran terverifikasi tanpa perlu konfirmasi manual.',
-      'Uji Coba Lingkungan Sandbox: Memastikan kestabilan, keamanan enkripsi signature SHA256, dan kenyamanan alur pembayaran checkout in-site sebelum dirilis ke lingkungan produksi penuh.',
+      'Validasi Timestamp Efisien (1 Read Token): Pengecekan status perubahan server hanya membaca 1 dokumen pengguna (/users/{uid}) untuk memastikan efisiensi maksimal.',
+      'Penarikan Data Terarah (Event-Driven): Penarikan data baru dari server hanya dipicu pada event penting: berpindah antar halaman/menu, mutasi data (tambah/ubah/hapus), reload manual, atau saat membuka detail data.',
+      'Zero-Read Cache Restoration: Jika timestamp perangkat lokal cocok dengan server, seluruh koleksi disajikan instan langsung dari cache lokal tanpa konsumsi kuota reads tambahan.',
+    ],
+    icon: RotateCcw,
+  },
+  {
+    id: 'payment-gateway-modernization',
+    category: 'payment',
+    badge: 'PAYMENT GATEWAY',
+    badgeColor: 'indigo',
+    title: 'Memperbarui Sistem Payment Gateway Duitku V2',
+    summary:
+      'Pembaruan alur pembayaran in-site checkout langganan SisaUang Pro dengan kanal Virtual Account otomatis 24 jam yang lebih andal, aman, dan terverifikasi instan:',
+    details: [
+      'Dukungan 10 Bank Virtual Account Resmi: Mandiri, Permata, BRI (BRIVA), BNI, BSI, BNC (Neo), CIMB Niaga, Danamon, Maybank, dan Bank Sahabat Sampoerna.',
+      'Penonaktifan Sementara QRIS & E-Wallet: Kanal QRIS dan dompet digital (OVO, DANA, ShopeePay) dinonaktifkan sementara dengan keterangan status transparan hingga gateway aktif.',
+      'Penghapusan Kanal yang Tidak Didukung: Menghilangkan opsi BCA VA yang belum didukung serta mematikan simulasi pembayaran manual demi kepatuhan gateway resmi.',
     ],
     icon: CreditCard,
   },
+  {
+    id: 'theme-toggle-and-dark-mode-fix',
+    category: 'ui',
+    badge: 'TAMPILAN & TEMA',
+    badgeColor: 'amber',
+    title: 'Memperbaiki Tombol Dark/Light Mode di Halaman Publik',
+    summary:
+      'Perbaikan menyeluruh pada fungsi penggantian tema gelap/terang serta kenyamanan kontras visual di seluruh landing page dan komponen checkout:',
+    details: [
+      'Reaktivitas Tombol Tema Publik: Memperbaiki aksi tombol toggle tema di navbar publik sehingga transisi dark/light mode berjalan mulus dan reaktif seketika.',
+      'Penyelarasan Warna Komponen Checkout: Memperbaiki styling kartu pilihan pembayaran agar memiliki kontras warna yang nyaman, tajam, dan tidak tampak putih pada mode gelap.',
+      'Konsistensi Preferensi Tema: Menjaga persistensi tema yang dipilih pengguna di seluruh sesi penjelajahan publik maupun dashboard utama.',
+    ],
+    icon: SunMoon,
+  },
+  {
+    id: 'budget-absorption-calculation-fix',
+    category: 'ui',
+    badge: 'KALKULASI ANGGARAN',
+    badgeColor: 'emerald',
+    title: 'Memperbaiki Perhitungan Serapan Anggaran pada Halaman Ringkasan',
+    summary:
+      'Kalkulasi realisasi belanja dan persentase serapan anggaran pada dashboard kini langsung terhitung akurat dan presisi tanpa perlu mengunjungi menu Anggaran terlebih dahulu:',
+    details: [
+      'Sinkronisasi Otomatis Periode Ringkasan: Sistem secara otomatis memuat data transaksi periode terpilih saat halaman Ringkasan pertama kali dibuka.',
+      'Perhitungan Realisasi Pengeluaran Akurat: Nilai total serapan anggaran dan status sisa batas belanja per kategori disinkronkan langsung dari transaksi riil.',
+      'Pencocokan Kategori yang Lebih Tangguh: Mendukung pencocokan kategori berbasis ID unik dan nama secara fleksibel untuk menjaga keakuratan histori anggaran.',
+    ],
+    icon: TrendingUp,
+  },
+  {
+    id: 'server-side-pagination-system',
+    category: 'system',
+    badge: 'PAGINASI TRANSAKSI',
+    badgeColor: 'sky',
+    title: 'Memperbaiki Sistem Pagination Berbasis Server-Side',
+    summary:
+      'Mekanisme paginasi server-side yang tangguh pada riwayat transaksi tanpa membatasi jumlah data transaksi bulanan pengguna:',
+    details: [
+      'Paginasi 25 Data per Halaman: Mengambil 25 transaksi terakhir terlebih dahulu ke state lokal tanpa menarik seluruh riwayat transaksi sekaligus.',
+      'Navigasi Halaman Dinamis: Berpindah halaman memicu pengambilan data secara presisi (misal halaman 2 mengambil data ke 26-50) menggunakan cursor Firestore.',
+      'Dukungan Penuh Filter Periode Bulanan: Pagination tetap muncul dan bekerja sempurna saat filter periode bulanan (misal Juli) diaktifkan, berapapun jumlah transaksinya.',
+    ],
+    icon: Layers,
+  },
+  {
+    id: 'automation-cache-system-fix',
+    category: 'system',
+    badge: 'PENJADWALAN & CACHE',
+    badgeColor: 'indigo',
+    title: 'Memperbaiki Sistem Cache pada Fitur Penjadwalan Transaksi',
+    summary:
+      'Optimalisasi pengelolaan cache memori dan persistensi lokal pada modul otomatisasi transaksi berulang:',
+    details: [
+      'Pencegahan Pembacaan Berulang: Memperbaiki sistem cache agar tidak melakukan refetch jadwal transaksi yang tidak mengalami perubahan.',
+      'Eksekusi Tepat Waktu: Memastikan transaksi rutin berulang (bulanan) tereksekusi sesuai tanggal dan jam yang ditetapkan tanpa menduplikasi data.',
+      'Penyelarasan Status Jadwal: Sinkronisasi instan status jadwal (aktif, tunda, lewati) ke cache lokal dan server secara aman dan konsisten.',
+    ],
+    icon: Zap,
+  },
 ];
 
-const filterTabs = [
+const filterTabs = computed(() => [
   { id: 'all' as const, label: 'Semua Pembaruan', count: changelogItems.length },
   {
-    id: 'automation' as const,
-    label: 'Otomatisasi Transaksi',
-    count: changelogItems.filter((i) => i.category === 'automation').length,
+    id: 'database' as const,
+    label: 'Database & Sinkronisasi',
+    count: changelogItems.filter((i) => i.category === 'database').length,
   },
   {
-    id: 'duitku' as const,
-    label: 'Payment Gateway Duitku',
-    count: changelogItems.filter((i) => i.category === 'duitku').length,
+    id: 'payment' as const,
+    label: 'Payment Gateway',
+    count: changelogItems.filter((i) => i.category === 'payment').length,
   },
-];
+  {
+    id: 'ui' as const,
+    label: 'Tampilan & Kalkulasi',
+    count: changelogItems.filter((i) => i.category === 'ui').length,
+  },
+  {
+    id: 'system' as const,
+    label: 'Sistem & Paginasi',
+    count: changelogItems.filter((i) => i.category === 'system').length,
+  },
+]);
 
 const filteredChangelog = computed(() => {
   if (activeFilter.value === 'all') return changelogItems;
@@ -96,7 +185,7 @@ function markChangelogSeenAndClose() {
   notificationStore.closeChangelogModal();
 }
 
-// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.0-rc.7 changelog yet
+// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.0 changelog yet
 watch(
   () => [authStore.isReady, authStore.isAuthenticated, authStore.requiresOtp] as const,
   ([ready, authenticated, needOtp]) => {
@@ -140,7 +229,7 @@ watch(
             </span>
           </div>
           <p class="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-            Release Candidate 7 · {{ RELEASE_DATE }}
+            Versi Final 1.0.0 · {{ RELEASE_DATE }}
           </p>
         </div>
       </div>
@@ -157,7 +246,7 @@ watch(
               class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-[11px] font-bold uppercase tracking-wider"
             >
               <Rocket class="w-3.5 h-3.5" />
-              <span>Rilis Baru · v{{ RELEASE_VERSION }}</span>
+              <span>Rilis Final · v{{ RELEASE_VERSION }}</span>
             </span>
             <span
               class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 text-slate-200 text-[11px] font-mono"
@@ -169,10 +258,10 @@ watch(
 
           <div class="space-y-1.5">
             <h3 class="text-base sm:text-lg font-bold tracking-tight text-white">
-              Catatan Pembaruan Sisa Uang v{{ RELEASE_VERSION }}
+              Catatan Pembaruan Sisa Uang v{{ RELEASE_VERSION }} (Final)
             </h3>
             <p class="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Pembaruan versi <strong class="text-emerald-300 font-mono">{{ RELEASE_VERSION }}</strong> menghadirkan fitur <strong>Otomatisasi Transaksi</strong> terjadwal untuk kemudahan pencatatan transaksi rutin berkala secara otomatis, serta integrasi <strong>Uji Coba Pembayaran Melalui Payment Gateway Duitku</strong> untuk proses aktivasi dan langganan SisaUang Pro yang instan dan terverifikasi otomatis.
+              Pembaruan versi final <strong class="text-emerald-300 font-mono">v{{ RELEASE_VERSION }}</strong> menghadirkan stabilitas tingkat produksi dengan optimasi efisiensi operasi database, pembaruan sistem payment gateway resmi, paginasi transaksi server-side yang tangguh, perbaikan kalkulasi serapan anggaran, serta penyempurnaan UI dan cache penjadwalan transaksi.
             </p>
           </div>
         </div>

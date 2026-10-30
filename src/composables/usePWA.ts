@@ -12,7 +12,7 @@ const KNOWN_BUILD_HASH_KEY = 'sisa_uang_known_build_hash';
 
 // Compile-time client version injected via Vite define (__APP_VERSION__)
 export const COMPILED_CLIENT_VERSION =
-  typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.0-rc.7';
+  typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.0';
 
 /**
  * Semver comparison helper (supports semver + Release Candidate format like 1.0.0-rc.7 vs 1.0.0-rc.6)

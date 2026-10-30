@@ -69,7 +69,7 @@ async function handleManualCheckUpdate() {
     if (hasUpdate || hasNewVersion.value || needRefresh.value) {
       notificationStore.notifySuccess(
         'Pembaruan Versi Tersedia!',
-        `Versi baru (${latestServerVersion.value || '1.0.0-rc.7'}) telah siap! Versi aktif saat ini: ${clientAppVersion.value}. Gunakan tombol "Bersihkan Cache & Reload Penuh" untuk menerapkan versi terbaru.`
+        `Versi baru (${latestServerVersion.value || '1.0.0'}) telah siap! Versi aktif saat ini: ${clientAppVersion.value}. Gunakan tombol "Bersihkan Cache & Reload Penuh" untuk menerapkan versi terbaru.`
       );
     } else {
       notificationStore.notifySuccess(
@@ -772,7 +772,7 @@ function handleGoToAddAccount() {
                 v-if="hasNewVersion || needRefresh"
                 class="px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold flex items-center gap-1"
               >
-                <span>Update Tersedia: v{{ latestServerVersion || '1.0.0-rc.7' }}</span>
+                <span>Update Tersedia: v{{ latestServerVersion || '1.0.0' }}</span>
               </span>
               <span
                 v-else
@@ -790,7 +790,7 @@ function handleGoToAddAccount() {
               <div class="flex items-center gap-2">
                 <Sparkles class="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
                 <span>
-                  <strong>Versi baru v{{ latestServerVersion || '1.0.0-rc.7' }} siap dipasang!</strong>
+                  <strong>Versi baru v{{ latestServerVersion || '1.0.0' }} siap dipasang!</strong>
                   (Versi aktif saat ini: v{{ clientAppVersion }})
                 </span>
               </div>

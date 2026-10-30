@@ -1,7 +1,7 @@
 {
   "name": "sisa-uang",
   "private": true,
-  "version": "1.0.0-rc.7",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "NODE_ENV=development tsx server.ts",
