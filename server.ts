@@ -9,6 +9,18 @@ import nodemailer from 'nodemailer';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { initializeApp as initServerFirebaseApp } from 'firebase/app';
+import {
+  getFirestore as getServerFirestore,
+  doc as serverFsDoc,
+  updateDoc as serverFsUpdateDoc,
+  serverTimestamp as serverFsTimestamp,
+} from 'firebase/firestore';
+import {
+  getAuth as getServerAuth,
+  signInWithEmailAndPassword as serverFsSignIn,
+} from 'firebase/auth';
+import firebaseServerConfig from './firebase-applet-config.json';
 import { getPrerenderDataForPath, injectPrerenderedHtml } from './src/prerender/injector';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -17,6 +29,44 @@ const __dirname = path.dirname(__filename);
 const SUPER_ADMIN_EMAIL = 'vuedevo@gmail.com';
 const SUPER_ADMIN_USERNAME = 'vuedevo';
 const WORKSPACE_ADMIN_EMAIL = 'adnanzaki65@admin.sd.belajar.id';
+
+// Initialize server-side Firebase connection for admin operations (e.g. instant Pro activation in Firestore)
+let serverDb: any = null;
+let serverAuth: any = null;
+try {
+  const serverFirebaseApp = initServerFirebaseApp(firebaseServerConfig, 'server_admin_worker');
+  serverDb = getServerFirestore(serverFirebaseApp, firebaseServerConfig.firestoreDatabaseId);
+  serverAuth = getServerAuth(serverFirebaseApp);
+} catch (e: any) {
+  console.warn('[Server Firebase Init Notice]', e?.message || e);
+}
+
+async function activateProUserInFirestore(
+  uid: string,
+  plan: 'monthly' | 'yearly',
+  expiresAt: string
+): Promise<boolean> {
+  if (!serverDb || !serverAuth || !uid) return false;
+  try {
+    if (!serverAuth.currentUser) {
+      await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
+    }
+    await serverFsUpdateDoc(serverFsDoc(serverDb, 'users', uid), {
+      isPro: true,
+      subscriptionStatus: 'pro',
+      subscriptionPlan: plan,
+      subscriptionExpiresAt: expiresAt,
+      isExplicitlyDeactivated: false,
+      updatedAt: serverFsTimestamp(),
+    });
+    console.log(`[Firestore Admin Sync] Successfully persisted Pro status for users/${uid} in Cloud Firestore`);
+    return true;
+  } catch (err: any) {
+    console.error(`[Firestore Admin Sync Error] Failed to update users/${uid} in Firestore:`, err?.message || err);
+    return false;
+  }
+}
+
 // Salted SHA-256 hash of 'sisa-uang-v1:' + super admin password
 let superAdminPasswordHash = '2759b5f6c9e3ae92ca8cd9129ab6d6336d569e8e4f84c0996839347b84c1b7e8';
 
@@ -3474,6 +3524,7 @@ async function startServer() {
           matchedUser.subscriptionExpiresAt = expiresAt;
           matchedUser.updatedAt = nowIso();
           savePersistedUsersCache();
+          await activateProUserInFirestore(matchedUser.uid, plan, expiresAt);
         }
 
         appendLog(
@@ -3575,6 +3626,7 @@ async function startServer() {
           matchedUser.subscriptionExpiresAt = expiresAt;
           matchedUser.updatedAt = nowIso();
           savePersistedUsersCache();
+          await activateProUserInFirestore(matchedUser.uid, plan, expiresAt);
 
           appendLog(
             matchedUser.uid,

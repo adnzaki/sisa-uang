@@ -419,6 +419,11 @@ async function checkPaymentStatus(showFeedback = true) {
         authStore.user.subscriptionStatus = 'pro';
         authStore.user.subscriptionPlan = selectedPlan.value;
       }
+      try {
+        await authStore.syncSubscriptionFromFirestoreForUser(authStore.user?.uid, authStore.user?.email);
+      } catch (syncErr) {
+        console.warn('Post-checkout Firestore sync notice:', syncErr);
+      }
       step.value = 'success';
       emit('success', {
         plan: selectedPlan.value,
