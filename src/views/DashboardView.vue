@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import {
@@ -25,22 +25,57 @@ import { useThemeStore } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 
+const { t, locale } = useI18n();
+const financeStore = useFinanceStore();
+const themeStore = useThemeStore();
+const authStore = useAuthStore();
+
 const isRefreshing = ref(false);
+
+async function syncDashboardPeriodTransactions(targetPeriod?: string) {
+  const period = targetPeriod || financeStore.selectedPeriod;
+  const uid = authStore.user?.uid;
+  if (!uid || uid === 'guest') return;
+
+  if (!period || period === 'all') {
+    const curYear = String(new Date().getFullYear());
+    await financeStore.ensureTransactionsForDateRange(`${curYear}-01-01`, `${curYear}-12-31`);
+  } else if (/^\d{4}-\d{2}$/.test(period)) {
+    await financeStore.ensureTransactionsForDateRange(`${period}-01`, `${period}-31`);
+  }
+}
+
+onMounted(() => {
+  void syncDashboardPeriodTransactions();
+});
+
+watch(
+  () => financeStore.selectedPeriod,
+  (newPeriod) => {
+    void syncDashboardPeriodTransactions(newPeriod);
+  },
+  { immediate: true }
+);
+
+watch(
+  () => authStore.user?.uid,
+  (newUid) => {
+    if (newUid) {
+      void syncDashboardPeriodTransactions();
+    }
+  }
+);
 
 async function handleManualRefresh() {
   if (isRefreshing.value) return;
   isRefreshing.value = true;
   try {
     await financeStore.refreshData();
+    await syncDashboardPeriodTransactions();
   } finally {
     isRefreshing.value = false;
   }
 }
-
-const { t, locale } = useI18n();
-const financeStore = useFinanceStore();
-const themeStore = useThemeStore();
-const authStore = useAuthStore();
 
 const recentTransactions = computed(() => financeStore.periodTransactions.slice(0, 5));
 

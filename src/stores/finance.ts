@@ -337,12 +337,6 @@ export const useFinanceStore = defineStore('finance', () => {
   const selectedPeriod = ref<string>(getCurrentMonthPeriod());
   const hasAutoSelectedPeriod = ref(false);
 
-  watch(selectedPeriod, (newPeriod) => {
-    if (newPeriod && newPeriod !== 'all' && /^\d{4}-\d{2}$/.test(newPeriod)) {
-      void ensureTransactionsForDateRange(`${newPeriod}-01`, `${newPeriod}-31`);
-    }
-  });
-
   // Extract millisecond timestamp from Firestore Timestamp, serialized object, or ISO string
   function extractTimestampMillis(val: any): number {
     if (!val) return 0;
@@ -1109,6 +1103,20 @@ export const useFinanceStore = defineStore('finance', () => {
       }
     }
   }
+
+  // Automatically ensure transactions for the active period are loaded into memory and cache
+  watch(
+    selectedPeriod,
+    (newPeriod) => {
+      if (newPeriod && newPeriod !== 'all' && /^\d{4}-\d{2}$/.test(newPeriod)) {
+        void ensureTransactionsForDateRange(`${newPeriod}-01`, `${newPeriod}-31`);
+      } else if (newPeriod === 'all') {
+        const curYear = String(new Date().getFullYear());
+        void ensureTransactionsForDateRange(`${curYear}-01-01`, `${curYear}-12-31`);
+      }
+    },
+    { immediate: true }
+  );
 
   /**
    * Server-Side Paginated Transaction Loader for `/transactions` with 1-Sync Read Token Cache:
@@ -2101,6 +2109,15 @@ export const useFinanceStore = defineStore('finance', () => {
     isSyncedWithFirestore.value = true;
     saveLocalSnapshot(uid, true, effectiveSyncToken);
 
+    // Pastikan transaksi periode aktif langsung dimuat agar serapan anggaran di ringkasan akurat
+    const activeTargetPeriod = selectedPeriod.value || getCurrentMonthPeriod();
+    if (activeTargetPeriod && activeTargetPeriod !== 'all' && /^\d{4}-\d{2}$/.test(activeTargetPeriod)) {
+      void ensureTransactionsForDateRange(`${activeTargetPeriod}-01`, `${activeTargetPeriod}-31`);
+    } else {
+      const curYear = String(new Date().getFullYear());
+      void ensureTransactionsForDateRange(`${curYear}-01-01`, `${curYear}-12-31`);
+    }
+
     // If initialPage1Items were fetched, also pre-populate Page 1 cache if total count <= 24
     if (initialPage1Items.length > 0 && initialPage1Items.length < 25) {
       const defaultPage1Key = buildTxPageCacheKey(uid, {
@@ -2366,6 +2383,15 @@ export const useFinanceStore = defineStore('finance', () => {
       }
       isSyncedWithFirestore.value = true;
       isLoading.value = false;
+
+      // Pastikan transaksi periode aktif langsung dimuat agar serapan anggaran di ringkasan akurat
+      const activeTargetPeriod = selectedPeriod.value || getCurrentMonthPeriod();
+      if (activeTargetPeriod && activeTargetPeriod !== 'all' && /^\d{4}-\d{2}$/.test(activeTargetPeriod)) {
+        void ensureTransactionsForDateRange(`${activeTargetPeriod}-01`, `${activeTargetPeriod}-31`);
+      } else {
+        const curYear = String(new Date().getFullYear());
+        void ensureTransactionsForDateRange(`${curYear}-01-01`, `${curYear}-12-31`);
+      }
       return;
     }
 
@@ -2541,6 +2567,13 @@ export const useFinanceStore = defineStore('finance', () => {
               b.category !== '__SISAUANG_PRO__'
           );
         }
+
+        const activeTargetMonth =
+          selectedPeriod.value && /^\d{4}-\d{2}$/.test(selectedPeriod.value)
+            ? selectedPeriod.value
+            : getCurrentMonthPeriod();
+        await ensureTransactionsForDateRange(`${activeTargetMonth}-01`, `${activeTargetMonth}-31`);
+
         saveLocalSnapshot(uid, false);
         return;
       }
@@ -2849,13 +2882,14 @@ export const useFinanceStore = defineStore('finance', () => {
           );
 
     return relevantBudgets.map((b) => {
+      const bCat = (b.category || '').trim().toLowerCase();
       const txSpent = transactions.value
-        .filter(
-          (t) =>
-            t.type === 'expense' &&
-            String(t.date || '').slice(0, 7) === b.period &&
-            t.category.trim().toLowerCase() === b.category.trim().toLowerCase()
-        )
+        .filter((t) => {
+          if (t.type !== 'expense') return false;
+          if (String(t.date || '').slice(0, 7) !== b.period) return false;
+          if (b.categoryId && t.categoryId && b.categoryId === t.categoryId) return true;
+          return (t.category || '').trim().toLowerCase() === bCat;
+        })
         .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
       const effectiveSpent = txSpent;
