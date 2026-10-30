@@ -280,7 +280,7 @@ const PRICING_SECTION_HTML = `
           <span>Halaman Pembayaran Terintegrasi (Tanpa Redirect Luar)</span>
         </div>
         <p class="text-[11px] text-slate-500 leading-relaxed">
-          Transaksi diproses langsung di dalam portal ini bekerja sama dengan Midtrans Payment Gateway. Didukung QRIS, BCA, Mandiri, BRI, BNI, GoPay, dan Kartu Kredit.
+          Transaksi diproses langsung di dalam portal ini bekerja sama dengan Duitku Payment Gateway. Didukung 10 Virtual Account Bank resmi (Mandiri, Permata, BRI, BNI, BSI, BNC, CIMB Niaga, Danamon, Maybank, Sampoerna) otomatis 24 jam.
         </p>
       </div>
     </div>
@@ -316,7 +316,7 @@ const FAQ_SECTION_HTML = `
             Bagaimana mekanisme pembayaran langganan dilakukan?
           </div>
           <div class="p-4 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-            Pembayaran dilakukan langsung di dalam website SisaUang melalui payment gateway resmi Midtrans. Anda dapat memilih metode QRIS (GoPay, ShopeePay, BCA, Mandiri), Transfer Virtual Account, atau Kartu Kredit/Debit tanpa perlu berpindah ke website pihak ketiga.
+            Pembayaran dilakukan langsung di dalam website SisaUang melalui payment gateway resmi Duitku V2. Anda dapat memilih salah satu dari 10 Virtual Account Bank resmi (Mandiri, Permata, BRI, BNI, BSI, BNC, CIMB Niaga, Danamon, Maybank, Sampoerna) dengan verifikasi otomatis instan 24 jam.
           </div>
         </div>
 

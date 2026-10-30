@@ -117,12 +117,13 @@ function handlePageNavClick() {
           <!-- Theme Toggle -->
           <button
             type="button"
-            class="p-2 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-            title="Ganti Tema"
-            @click="themeStore.setTheme(themeStore.theme === 'dark' ? 'light' : 'dark')"
+            class="p-2 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            :title="themeStore.resolvedTheme === 'dark' ? 'Beralih ke Mode Terang' : 'Beralih ke Mode Gelap'"
+            :aria-label="themeStore.resolvedTheme === 'dark' ? 'Beralih ke Mode Terang' : 'Beralih ke Mode Gelap'"
+            @click="themeStore.toggleTheme()"
           >
-            <Sun v-if="themeStore.theme === 'dark'" class="w-4 h-4" />
-            <Moon v-else class="w-4 h-4" />
+            <Sun v-if="themeStore.resolvedTheme === 'dark'" class="w-4 h-4 text-amber-400" />
+            <Moon v-else class="w-4 h-4 text-slate-600" />
           </button>
 
           <!-- If Authenticated -->
@@ -146,7 +147,7 @@ function handlePageNavClick() {
             </RouterLink>
             <button
               type="button"
-              class="hidden sm:inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs transition-colors"
+              class="hidden sm:inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
               @click="triggerCheckout"
             >
               <span>Berlangganan Pro</span>
@@ -157,7 +158,8 @@ function handlePageNavClick() {
           <!-- Mobile Hamburger Toggle -->
           <button
             type="button"
-            class="md:hidden p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+            class="md:hidden p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+            aria-label="Toggle Menu"
             @click="mobileMenuOpen = !mobileMenuOpen"
           >
             <X v-if="mobileMenuOpen" class="w-6 h-6" />
@@ -217,7 +219,23 @@ function handlePageNavClick() {
         </RouterLink>
       </nav>
 
-      <div class="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-col gap-2">
+      <!-- Mobile Theme Toggle -->
+      <div class="pt-2 border-t border-slate-100 dark:border-slate-800">
+        <button
+          type="button"
+          class="flex items-center justify-between w-full px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-medium text-slate-700 dark:text-slate-200 cursor-pointer transition-colors"
+          @click="themeStore.toggleTheme()"
+        >
+          <span class="text-xs font-medium">Tema Tampilan</span>
+          <span class="inline-flex items-center gap-1.5 text-xs font-semibold px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
+            <Sun v-if="themeStore.resolvedTheme === 'dark'" class="w-3.5 h-3.5 text-amber-400" />
+            <Moon v-else class="w-3.5 h-3.5 text-slate-600" />
+            <span>{{ themeStore.resolvedTheme === 'dark' ? 'Mode Gelap' : 'Mode Terang' }}</span>
+          </span>
+        </button>
+      </div>
+
+      <div class="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-col gap-2">
         <template v-if="authStore.isAuthenticated">
           <RouterLink
             :to="authStore.isSuperAdmin ? '/control-panel' : '/dashboard'"

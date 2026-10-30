@@ -59,17 +59,56 @@ const fullName = ref(authStore.user?.displayName || '');
 const email = ref(authStore.user?.email || 'vuedevo@gmail.com');
 const phone = ref('085129634505');
 
-// Duitku Payment Channels:
+// Duitku Payment Channels
+// 10 Supported Virtual Accounts:
+// M2: Mandiri VA
+// BT: Permata Bank VA
+// BR: BRI VA (BRIVA)
+// I1: BNI VA
+// BV: BSI VA
+// NC: BNC (Bank Neo Commerce) VA
+// B1: CIMB Niaga VA
+// DM: Danamon VA
+// VA: Maybank VA
+// S1: Sampoerna VA
+//
+// Disabled Temporarily (Belum Aktif):
 // SP: QRIS
-// BC: BCA Virtual Account
-// M2: Mandiri Virtual Account
-// B1: BNI Virtual Account
-// BR: BRI Virtual Account
-// BT: Permata Virtual Account
 // OV: OVO
 // DA: DANA
-// VC: Credit/Debit Card
-const paymentMethod = ref<string>('SP');
+// SL: ShopeePay
+const paymentMethod = ref<string>('M2');
+
+export interface PaymentChannelItem {
+  code: string;
+  name: string;
+  shortName: string;
+  sub: string;
+  bankName: string;
+  category: 'va' | 'qris' | 'ewallet';
+  disabled?: boolean;
+  disabledNote?: string;
+}
+
+const supportedVaChannels: PaymentChannelItem[] = [
+  { code: 'M2', name: 'Bank Mandiri', shortName: 'Mandiri', sub: 'Livin by Mandiri / ATM', bankName: 'Bank Mandiri', category: 'va' },
+  { code: 'BT', name: 'Permata Bank', shortName: 'Permata', sub: 'PermataME / ATM Bersama', bankName: 'Permata Bank', category: 'va' },
+  { code: 'BR', name: 'Bank BRI', shortName: 'BRI (BRIVA)', sub: 'BRImo / ATM BRI', bankName: 'Bank BRI', category: 'va' },
+  { code: 'I1', name: 'Bank BNI', shortName: 'BNI', sub: 'BNI Mobile / ATM BNI', bankName: 'Bank BNI', category: 'va' },
+  { code: 'BV', name: 'Bank Syariah Indonesia', shortName: 'BSI', sub: 'BSI Mobile / ATM BSI', bankName: 'Bank Syariah Indonesia', category: 'va' },
+  { code: 'NC', name: 'Bank Neo Commerce', shortName: 'BNC (Neo)', sub: 'Neobank App / ATM', bankName: 'Bank Neo Commerce', category: 'va' },
+  { code: 'B1', name: 'CIMB Niaga', shortName: 'CIMB Niaga', sub: 'OCTO Mobile / Clicks', bankName: 'CIMB Niaga', category: 'va' },
+  { code: 'DM', name: 'Bank Danamon', shortName: 'Danamon', sub: 'D-Bank PRO / ATM Danamon', bankName: 'Bank Danamon', category: 'va' },
+  { code: 'VA', name: 'Maybank Indonesia', shortName: 'Maybank', sub: 'M2U ID / ATM Maybank', bankName: 'Maybank Indonesia', category: 'va' },
+  { code: 'S1', name: 'Bank Sahabat Sampoerna', shortName: 'Sampoerna', sub: 'Sampoerna Mobile / ATM', bankName: 'Bank Sahabat Sampoerna', category: 'va' },
+];
+
+const disabledChannels: PaymentChannelItem[] = [
+  { code: 'SP', name: 'QRIS Instan', shortName: 'QRIS', sub: 'Pindai barcode semua aplikasi', bankName: 'QRIS Nasional', category: 'qris', disabled: true, disabledNote: 'Sementara belum aktif' },
+  { code: 'OV', name: 'OVO E-Wallet', shortName: 'OVO', sub: 'Pembayaran instan via OVO', bankName: 'OVO', category: 'ewallet', disabled: true, disabledNote: 'Sementara belum aktif' },
+  { code: 'DA', name: 'DANA E-Wallet', shortName: 'DANA', sub: 'Pembayaran instan via DANA', bankName: 'DANA', category: 'ewallet', disabled: true, disabledNote: 'Sementara belum aktif' },
+  { code: 'SL', name: 'ShopeePay', shortName: 'ShopeePay', sub: 'Pembayaran instan ShopeePay', bankName: 'ShopeePay', category: 'ewallet', disabled: true, disabledNote: 'Sementara belum aktif' },
+];
 
 // Steps: 'form' | 'payment' | 'success'
 const step = ref<'form' | 'payment' | 'success'>('form');
@@ -106,23 +145,28 @@ const invoiceData = ref<{
   planName: '',
   amount: 215000,
   formattedAmount: 'Rp 215.000',
-  methodLabel: 'QRIS (Gopay / ShopeePay / BCA / Mandiri / OVO / Dana)',
+  methodLabel: 'Mandiri Virtual Account',
   customerName: '',
   customerEmail: '',
   customerPhone: '',
   paidAt: '',
 });
 
-const channelLabels: Record<string, { label: string; sub: string; category: 'qris' | 'va' | 'ewallet' | 'card' }> = {
-  SP: { label: 'QRIS Instan', sub: 'BCA, Mandiri, Gopay, ShopeePay, OVO, Dana', category: 'qris' },
-  BC: { label: 'BCA Virtual Account', sub: 'BCA Mobile / myBCA / ATM', category: 'va' },
-  M2: { label: 'Mandiri VA', sub: 'Livin by Mandiri / ATM Mandiri', category: 'va' },
-  B1: { label: 'BNI Virtual Account', sub: 'BNI Mobile / ATM BNI', category: 'va' },
-  BR: { label: 'BRI Virtual Account', sub: 'BRImo / ATM BRI', category: 'va' },
-  BT: { label: 'Permata Bank VA', sub: 'PermataME / ATM Bersama', category: 'va' },
-  OV: { label: 'OVO E-Wallet', sub: 'Pembayaran instan via OVO', category: 'ewallet' },
-  DA: { label: 'DANA E-Wallet', sub: 'Pembayaran instan via DANA', category: 'ewallet' },
-  VC: { label: 'Kartu Kredit / Debit', sub: 'Visa / Mastercard Online', category: 'card' },
+const channelLabels: Record<string, { label: string; sub: string; bank: string; category: 'qris' | 'va' | 'ewallet' }> = {
+  M2: { label: 'Mandiri Virtual Account', sub: 'Livin by Mandiri / ATM', bank: 'Bank Mandiri', category: 'va' },
+  BT: { label: 'Permata Bank VA', sub: 'PermataME / ATM Bersama', bank: 'Permata Bank', category: 'va' },
+  BR: { label: 'BRI Virtual Account', sub: 'BRImo / ATM BRI (BRIVA)', bank: 'Bank BRI', category: 'va' },
+  I1: { label: 'BNI Virtual Account', sub: 'BNI Mobile / ATM BNI', bank: 'Bank BNI', category: 'va' },
+  BV: { label: 'BSI Virtual Account', sub: 'BSI Mobile / ATM BSI', bank: 'Bank Syariah Indonesia', category: 'va' },
+  NC: { label: 'BNC Virtual Account', sub: 'Neobank App / ATM', bank: 'Bank Neo Commerce', category: 'va' },
+  B1: { label: 'CIMB Niaga VA', sub: 'OCTO Mobile / OCTO Clicks', bank: 'CIMB Niaga', category: 'va' },
+  DM: { label: 'Danamon Virtual Account', sub: 'D-Bank PRO / ATM Danamon', bank: 'Bank Danamon', category: 'va' },
+  VA: { label: 'Maybank Virtual Account', sub: 'M2U ID / ATM Maybank', bank: 'Maybank Indonesia', category: 'va' },
+  S1: { label: 'Sampoerna Virtual Account', sub: 'Sampoerna Mobile / ATM', bank: 'Bank Sahabat Sampoerna', category: 'va' },
+  SP: { label: 'QRIS Instan', sub: 'Semua Bank & E-Wallet', bank: 'QRIS Nasional', category: 'qris' },
+  OV: { label: 'OVO E-Wallet', sub: 'Pembayaran instan via OVO', bank: 'OVO', category: 'ewallet' },
+  DA: { label: 'DANA E-Wallet', sub: 'Pembayaran instan via DANA', bank: 'DANA', category: 'ewallet' },
+  SL: { label: 'ShopeePay', sub: 'Pembayaran instan ShopeePay', bank: 'ShopeePay', category: 'ewallet' },
 };
 
 const currentPrice = computed(() => {
@@ -246,6 +290,13 @@ async function proceedToPayment() {
   }
   if (!phone.value.trim()) {
     errorMessage.value = 'Mohon masukkan nomor WhatsApp / telepon yang aktif.';
+    return;
+  }
+
+  const selectedVa = supportedVaChannels.find((ch) => ch.code === paymentMethod.value);
+  if (!selectedVa) {
+    errorMessage.value =
+      'Metode pembayaran QRIS dan e-Wallet sementara belum aktif. Silakan pilih salah satu dari 10 Virtual Account yang didukung.';
     return;
   }
 
@@ -538,155 +589,121 @@ function handleClose() {
           </div>
         </div>
 
-        <!-- Payment Method Choice via Duitku Channels -->
-        <div class="space-y-2.5">
-          <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-            Kanal Pembayaran Duitku V2
-          </label>
-          <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
-            <!-- QRIS (SP) -->
-            <button
-              type="button"
-              class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
-              :class="
-                paymentMethod === 'SP'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
-                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
-              "
-              @click="paymentMethod = 'SP'"
-            >
-              <QrCode class="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-              <span class="font-bold">QRIS Instan</span>
-              <span class="text-[10px] text-slate-500">Semua E-Wallet/Bank</span>
-            </button>
+        <!-- Payment Method Choice: 10 Supported Virtual Accounts (Active) & Disabled Channels -->
+        <div class="space-y-4">
+          <!-- Active 10 Virtual Accounts -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between">
+              <label class="block text-xs font-semibold text-slate-800 dark:text-slate-200">
+                Pilih Bank Virtual Account (10 Bank Didukung)
+              </label>
+              <span class="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/70 px-2 py-0.5 rounded-md border border-emerald-200/70 dark:border-emerald-800/70">
+                <CheckCircle2 class="w-3 h-3" />
+                <span>Aktif &amp; Otomatis</span>
+              </span>
+            </div>
+            <p class="text-[11px] text-slate-500 dark:text-slate-400">
+              Verifikasi pembayaran otomatis instan 24 jam tanpa perlu unggah bukti transfer.
+            </p>
 
-            <!-- BCA VA (BC) -->
-            <button
-              type="button"
-              class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
-              :class="
-                paymentMethod === 'BC'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
-                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
-              "
-              @click="paymentMethod = 'BC'"
-            >
-              <Building2 class="w-5 h-5 text-blue-600 dark:text-blue-400" />
-              <span class="font-bold">BCA VA</span>
-              <span class="text-[10px] text-slate-500">Virtual Account</span>
-            </button>
+            <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs pt-1">
+              <button
+                v-for="ch in supportedVaChannels"
+                :key="ch.code"
+                type="button"
+                class="p-2.5 rounded-xl border flex flex-col justify-between text-left transition-all duration-150 relative cursor-pointer group"
+                :class="
+                  paymentMethod === ch.code
+                    ? 'border-emerald-600 dark:border-emerald-500 bg-emerald-50/90 dark:bg-emerald-950/60 text-emerald-950 dark:text-emerald-100 font-semibold ring-2 ring-emerald-500/40 shadow-xs'
+                    : 'border-slate-200 dark:border-slate-700/80 hover:border-slate-300 dark:hover:border-slate-600 bg-slate-50/80 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
+                "
+                @click="paymentMethod = ch.code"
+              >
+                <div class="flex items-center justify-between w-full mb-1.5">
+                  <Building2
+                    class="w-4 h-4 transition-colors"
+                    :class="
+                      paymentMethod === ch.code
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-slate-500 dark:text-slate-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400'
+                    "
+                  />
+                  <span
+                    v-if="paymentMethod === ch.code"
+                    class="w-4 h-4 rounded-full bg-emerald-600 dark:bg-emerald-500 text-white dark:text-slate-950 flex items-center justify-center shrink-0"
+                  >
+                    <Check class="w-2.5 h-2.5 stroke-[3]" />
+                  </span>
+                  <span
+                    v-else
+                    class="text-[9px] font-mono px-1 py-0.5 rounded font-semibold text-slate-500 dark:text-slate-400 bg-slate-200/60 dark:bg-slate-700/60 uppercase"
+                  >
+                    VA
+                  </span>
+                </div>
+                <div>
+                  <div
+                    class="font-bold text-xs leading-tight transition-colors"
+                    :class="
+                      paymentMethod === ch.code
+                        ? 'text-emerald-950 dark:text-emerald-100'
+                        : 'text-slate-900 dark:text-slate-100 group-hover:text-emerald-600 dark:group-hover:text-emerald-400'
+                    "
+                  >
+                    {{ ch.shortName }}
+                  </div>
+                  <div
+                    class="text-[10px] truncate mt-0.5"
+                    :class="
+                      paymentMethod === ch.code
+                        ? 'text-emerald-700 dark:text-emerald-300'
+                        : 'text-slate-500 dark:text-slate-400'
+                    "
+                  >
+                    {{ ch.sub }}
+                  </div>
+                </div>
+              </button>
+            </div>
+          </div>
 
-            <!-- Mandiri VA (M2) -->
-            <button
-              type="button"
-              class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
-              :class="
-                paymentMethod === 'M2'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
-                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
-              "
-              @click="paymentMethod = 'M2'"
-            >
-              <Building2 class="w-5 h-5 text-amber-600 dark:text-amber-400" />
-              <span class="font-bold">Mandiri VA</span>
-              <span class="text-[10px] text-slate-500">Virtual Account</span>
-            </button>
+          <!-- Disabled Payment Methods Notice & Placeholders -->
+          <div class="p-3 rounded-xl bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/60 space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-1.5 text-xs font-semibold text-amber-800 dark:text-amber-300">
+                <AlertCircle class="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span>QRIS &amp; E-Wallet (Sementara Dinonaktifkan)</span>
+              </div>
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-200/60 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200">
+                Belum Aktif
+              </span>
+            </div>
+            <p class="text-[11px] text-amber-900/80 dark:text-amber-300/80 leading-relaxed">
+              Metode pembayaran <strong>QRIS</strong> dan <strong>e-Wallet (OVO, DANA, ShopeePay)</strong> dinonaktifkan sementara karena belum aktif di gateway. Silakan gunakan salah satu dari <strong>10 Virtual Account</strong> di atas.
+            </p>
 
-            <!-- BNI VA (B1) -->
-            <button
-              type="button"
-              class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
-              :class="
-                paymentMethod === 'B1'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
-                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
-              "
-              @click="paymentMethod = 'B1'"
-            >
-              <Building2 class="w-5 h-5 text-orange-600 dark:text-orange-400" />
-              <span class="font-bold">BNI VA</span>
-              <span class="text-[10px] text-slate-500">Virtual Account</span>
-            </button>
-
-            <!-- BRI VA (BR) -->
-            <button
-              type="button"
-              class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
-              :class="
-                paymentMethod === 'BR'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
-                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
-              "
-              @click="paymentMethod = 'BR'"
-            >
-              <Building2 class="w-5 h-5 text-cyan-600 dark:text-cyan-400" />
-              <span class="font-bold">BRI VA</span>
-              <span class="text-[10px] text-slate-500">Virtual Account</span>
-            </button>
-
-            <!-- Permata VA (BT) -->
-            <button
-              type="button"
-              class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
-              :class="
-                paymentMethod === 'BT'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
-                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
-              "
-              @click="paymentMethod = 'BT'"
-            >
-              <Building2 class="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-              <span class="font-bold">Permata VA</span>
-              <span class="text-[10px] text-slate-500">Virtual Account</span>
-            </button>
-
-            <!-- OVO (OV) -->
-            <button
-              type="button"
-              class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
-              :class="
-                paymentMethod === 'OV'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
-                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
-              "
-              @click="paymentMethod = 'OV'"
-            >
-              <Smartphone class="w-5 h-5 text-purple-600 dark:text-purple-400" />
-              <span class="font-bold">OVO</span>
-              <span class="text-[10px] text-slate-500">E-Wallet</span>
-            </button>
-
-            <!-- DANA (DA) -->
-            <button
-              type="button"
-              class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
-              :class="
-                paymentMethod === 'DA'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
-                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
-              "
-              @click="paymentMethod = 'DA'"
-            >
-              <Smartphone class="w-5 h-5 text-sky-600 dark:text-sky-400" />
-              <span class="font-bold">DANA</span>
-              <span class="text-[10px] text-slate-500">E-Wallet</span>
-            </button>
-
-            <!-- Kartu Kredit (VC) -->
-            <button
-              type="button"
-              class="p-3 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-colors"
-              :class="
-                paymentMethod === 'VC'
-                  ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold ring-1 ring-emerald-500'
-                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
-              "
-              @click="paymentMethod = 'VC'"
-            >
-              <CreditCard class="w-5 h-5 text-rose-600 dark:text-rose-400" />
-              <span class="font-bold">Kartu Kredit</span>
-              <span class="text-[10px] text-slate-500">Visa / Mastercard</span>
-            </button>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
+              <div
+                v-for="item in disabledChannels"
+                :key="item.code"
+                class="p-2 rounded-lg border border-dashed border-amber-300/60 dark:border-amber-800/60 bg-white/60 dark:bg-slate-900/40 text-slate-400 dark:text-slate-500 flex flex-col justify-between cursor-not-allowed select-none opacity-65"
+              >
+                <div class="flex items-center justify-between mb-1">
+                  <component :is="item.type === 'qris' ? QrCode : Smartphone" class="w-3.5 h-3.5 text-slate-400" />
+                  <span class="text-[9px] font-semibold text-amber-700 dark:text-amber-400">
+                    Tidak Aktif
+                  </span>
+                </div>
+                <div>
+                  <div class="font-semibold text-xs text-slate-500 dark:text-slate-400">
+                    {{ item.name }}
+                  </div>
+                  <div class="text-[9px] text-slate-400 truncate">
+                    {{ item.disabledNote }}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -786,15 +803,15 @@ function handleClose() {
           </div>
 
           <p class="text-xs text-slate-500 dark:text-slate-400 max-w-sm">
-            Mendukung <strong>BCA, Mandiri, BRI, BNI, GoPay, ShopeePay, OVO, Dana, LinkAja</strong>, dan seluruh aplikasi berlogo QRIS.
+            Mendukung <strong>Mandiri, BRI, BNI, Permata, GoPay, ShopeePay, OVO, Dana, LinkAja</strong>, dan seluruh aplikasi berlogo QRIS.
           </p>
         </div>
 
-        <!-- 2. Virtual Account Channel (BC, M2, B1, BR, BT) -->
-        <div v-else-if="invoiceData.vaNumber || ['BC', 'M2', 'B1', 'BR', 'BT'].includes(paymentMethod)" class="space-y-4">
+        <!-- 2. Virtual Account Channel (10 Supported Banks) -->
+        <div v-else-if="invoiceData.vaNumber || supportedVaChannels.some(v => v.code === paymentMethod)" class="space-y-4">
           <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-3">
             <div class="text-xs text-slate-500 dark:text-slate-400 flex items-center justify-between">
-              <span>Nomor Virtual Account ({{ channelLabels[paymentMethod]?.label || 'Duitku VA' }})</span>
+              <span>Nomor Virtual Account ({{ channelLabels[paymentMethod]?.label || 'Virtual Account' }})</span>
               <span class="text-[10px] uppercase font-bold text-emerald-600">Otomatis Aktif</span>
             </div>
             <div class="flex items-center justify-between gap-3">
@@ -820,10 +837,10 @@ function handleClose() {
           <div class="text-xs text-slate-600 dark:text-slate-400 space-y-1.5 pl-1">
             <div class="font-semibold text-slate-800 dark:text-slate-200">Panduan Pembayaran:</div>
             <ol class="list-decimal pl-4 space-y-1">
-              <li>Buka aplikasi m-Banking Anda, pilih menu <strong>Transfer &gt; Virtual Account</strong>.</li>
-              <li>Masukkan nomor VA di atas. Pastikan nama akun penerima adalah <strong>DUITKU / SISAUANG PRO</strong>.</li>
+              <li>Buka aplikasi m-Banking atau ATM <strong>{{ channelLabels[paymentMethod]?.bank || 'bank Anda' }}</strong>, pilih menu <strong>Transfer &gt; Virtual Account</strong>.</li>
+              <li>Masukkan nomor Virtual Account di atas. Pastikan nama akun penerima adalah <strong>DUITKU / SISAUANG PRO</strong>.</li>
               <li>Konfirmasi pembayaran sejumlah <strong>{{ invoiceData.formattedAmount }}</strong>.</li>
-              <li>Setelah berhasil, sistem SisaUang akan langsung mengaktifkan status Pro dalam beberapa detik.</li>
+              <li>Setelah berhasil, sistem SisaUang akan langsung mengaktifkan status Pro dalam beberapa detik secara otomatis.</li>
             </ol>
           </div>
         </div>
@@ -903,7 +920,7 @@ function handleClose() {
         </div>
 
         <!-- Official Duitku Invoice Card -->
-        <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 space-y-3 text-xs">
+        <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 space-y-3 text-xs">
           <div class="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800">
             <div>
               <div class="font-bold text-slate-900 dark:text-slate-100">BUKTI TRANSAKSI DUITKU</div>

@@ -3022,40 +3022,14 @@ async function startServer() {
     const datetime = now.toISOString().replace('T', ' ').slice(0, 19);
 
     const fallbackPaymentMethods = [
-      {
-        paymentMethod: 'SP',
-        paymentName: 'QRIS (Gopay / ShopeePay / BCA / Mandiri / Dana / OVO)',
-        paymentImage: 'https://images.duitku.com/hotlink-ok/SP.PNG',
-        totalFee: '0',
-        category: 'qris',
-      },
-      {
-        paymentMethod: 'BC',
-        paymentName: 'BCA Virtual Account',
-        paymentImage: 'https://images.duitku.com/hotlink-ok/BC.PNG',
-        totalFee: '0',
-        category: 'va',
-      },
+      // 10 Supported Active Virtual Accounts
       {
         paymentMethod: 'M2',
         paymentName: 'Mandiri Virtual Account',
         paymentImage: 'https://images.duitku.com/hotlink-ok/M2.PNG',
         totalFee: '0',
         category: 'va',
-      },
-      {
-        paymentMethod: 'B1',
-        paymentName: 'BNI Virtual Account',
-        paymentImage: 'https://images.duitku.com/hotlink-ok/B1.PNG',
-        totalFee: '0',
-        category: 'va',
-      },
-      {
-        paymentMethod: 'BR',
-        paymentName: 'BRI Virtual Account',
-        paymentImage: 'https://images.duitku.com/hotlink-ok/BR.PNG',
-        totalFee: '0',
-        category: 'va',
+        status: 'active',
       },
       {
         paymentMethod: 'BT',
@@ -3063,27 +3037,102 @@ async function startServer() {
         paymentImage: 'https://images.duitku.com/hotlink-ok/BT.PNG',
         totalFee: '0',
         category: 'va',
+        status: 'active',
+      },
+      {
+        paymentMethod: 'BR',
+        paymentName: 'BRI Virtual Account (BRIVA)',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/BR.PNG',
+        totalFee: '0',
+        category: 'va',
+        status: 'active',
+      },
+      {
+        paymentMethod: 'I1',
+        paymentName: 'BNI Virtual Account',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/I1.PNG',
+        totalFee: '0',
+        category: 'va',
+        status: 'active',
+      },
+      {
+        paymentMethod: 'BV',
+        paymentName: 'BSI Virtual Account',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/BV.PNG',
+        totalFee: '0',
+        category: 'va',
+        status: 'active',
+      },
+      {
+        paymentMethod: 'NC',
+        paymentName: 'BNC (Bank Neo Commerce) Virtual Account',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/NC.PNG',
+        totalFee: '0',
+        category: 'va',
+        status: 'active',
+      },
+      {
+        paymentMethod: 'B1',
+        paymentName: 'CIMB Niaga Virtual Account',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/B1.PNG',
+        totalFee: '0',
+        category: 'va',
+        status: 'active',
+      },
+      {
+        paymentMethod: 'DM',
+        paymentName: 'Danamon Virtual Account',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/DM.PNG',
+        totalFee: '0',
+        category: 'va',
+        status: 'active',
+      },
+      {
+        paymentMethod: 'VA',
+        paymentName: 'Maybank Virtual Account',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/VA.PNG',
+        totalFee: '0',
+        category: 'va',
+        status: 'active',
+      },
+      {
+        paymentMethod: 'S1',
+        paymentName: 'Sampoerna Virtual Account',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/S1.PNG',
+        totalFee: '0',
+        category: 'va',
+        status: 'active',
+      },
+      // Disabled Payment Channels (Temporarily inactive)
+      {
+        paymentMethod: 'SP',
+        paymentName: 'QRIS Instan (Sementara Belum Aktif)',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/SP.PNG',
+        totalFee: '0',
+        category: 'qris',
+        status: 'inactive',
+        disabled: true,
+        disabledReason: 'Sementara belum aktif',
       },
       {
         paymentMethod: 'OV',
-        paymentName: 'OVO E-Wallet',
+        paymentName: 'OVO E-Wallet (Sementara Belum Aktif)',
         paymentImage: 'https://images.duitku.com/hotlink-ok/OV.PNG',
         totalFee: '0',
         category: 'ewallet',
+        status: 'inactive',
+        disabled: true,
+        disabledReason: 'Sementara belum aktif',
       },
       {
         paymentMethod: 'DA',
-        paymentName: 'DANA E-Wallet',
+        paymentName: 'DANA E-Wallet (Sementara Belum Aktif)',
         paymentImage: 'https://images.duitku.com/hotlink-ok/DA.PNG',
         totalFee: '0',
         category: 'ewallet',
-      },
-      {
-        paymentMethod: 'VC',
-        paymentName: 'Kartu Kredit / Debit Online (Visa / Mastercard)',
-        paymentImage: 'https://images.duitku.com/hotlink-ok/VC.PNG',
-        totalFee: '0',
-        category: 'card',
+        status: 'inactive',
+        disabled: true,
+        disabledReason: 'Sementara belum aktif',
       },
     ];
 
@@ -3108,9 +3157,24 @@ async function startServer() {
       if (response.ok) {
         const data: any = await response.json();
         if (Array.isArray(data?.paymentFee) && data.paymentFee.length > 0) {
+          // Filter out BCA VA (BC) completely and mark QRIS/e-wallets as disabled
+          const sanitizedMethods = data.paymentFee
+            .filter((p: any) => p && p.paymentMethod !== 'BC')
+            .map((p: any) => {
+              if (['SP', 'NQ', 'OV', 'DA', 'SL', 'LA', 'SA', 'OL'].includes(p.paymentMethod)) {
+                return {
+                  ...p,
+                  disabled: true,
+                  status: 'inactive',
+                  disabledReason: 'Sementara belum aktif',
+                };
+              }
+              return p;
+            });
+
           res.json({
             success: true,
-            paymentMethods: data.paymentFee,
+            paymentMethods: sanitizedMethods,
             source: 'duitku_live',
           });
           return;
@@ -3135,11 +3199,33 @@ async function startServer() {
       const customerName = String(req.body?.customerName || 'Pelanggan SisaUang').trim().slice(0, 80);
       const customerEmail = String(req.body?.customerEmail || 'vuedevo@gmail.com').trim().toLowerCase().slice(0, 100);
       const customerPhone = String(req.body?.customerPhone || '085129634505').trim().slice(0, 30);
-      const paymentMethod = String(req.body?.paymentMethod || 'SP').trim();
+      const paymentMethod = String(req.body?.paymentMethod || 'M2').trim();
       const userUid = req.body?.userUid ? String(req.body.userUid).trim() : undefined;
 
       if (!userUid && !customerEmail) {
         res.status(401).json({ error: 'Pengguna wajib login terlebih dahulu sebelum melakukan checkout pembayaran.' });
+        return;
+      }
+
+      // Enforce supported 10 Virtual Accounts and reject BCA / disabled methods
+      const SUPPORTED_VA_CODES = ['M2', 'BT', 'BR', 'I1', 'BV', 'NC', 'B1', 'DM', 'VA', 'S1'];
+
+      if (paymentMethod === 'BC') {
+        res.status(400).json({ error: 'Metode pembayaran BCA Virtual Account tidak didukung.' });
+        return;
+      }
+
+      if (paymentMethod === 'SP' || ['NQ', 'OV', 'DA', 'SL', 'LA', 'SA', 'OL'].includes(paymentMethod)) {
+        res.status(400).json({
+          error: 'Metode pembayaran QRIS dan e-Wallet sementara belum aktif. Silakan gunakan salah satu dari 10 Virtual Account yang didukung.',
+        });
+        return;
+      }
+
+      if (!SUPPORTED_VA_CODES.includes(paymentMethod)) {
+        res.status(400).json({
+          error: `Metode pembayaran ${paymentMethod} tidak didukung. Pilihan Virtual Account: Mandiri, Permata, BRI, BNI, BSI, BNC, CIMB Niaga, Danamon, Maybank, Sampoerna.`,
+        });
         return;
       }
 

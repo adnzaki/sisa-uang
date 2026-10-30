@@ -93,7 +93,7 @@ const faqs = [
   },
   {
     q: 'Bagaimana mekanisme pembayaran langganan dilakukan?',
-    a: 'Pembayaran dilakukan langsung di dalam website SisaUang melalui payment gateway resmi Duitku V2. Anda dapat memilih metode QRIS Instan (BCA, Mandiri, BRI, BNI, GoPay, ShopeePay, OVO, Dana), Transfer Virtual Account otomatis, atau Kartu Kredit/Debit secara aman.',
+    a: 'Pembayaran dilakukan langsung di dalam website SisaUang melalui payment gateway resmi Duitku V2. Anda dapat memilih salah satu dari 10 Virtual Account Bank resmi (Mandiri, Permata, BRI, BNI, BSI, BNC, CIMB Niaga, Danamon, Maybank, Sampoerna) dengan verifikasi otomatis instan 24 jam.',
   },
   {
     q: 'Apakah ada jaminan pengembalian dana (refund policy)?',
@@ -498,7 +498,7 @@ const faqs = [
               <span>Halaman Pembayaran Resmi Terintegrasi Duitku V2</span>
             </div>
             <p class="text-[11px] text-slate-500 leading-relaxed">
-              Transaksi diproses langsung dengan enkripsi berstandar perbankan melalui Duitku Payment Gateway. Didukung QRIS Instan, Virtual Account BCA, Mandiri, BRI, BNI, Permata, OVO, Dana, dan Kartu Kredit.
+              Transaksi diproses langsung dengan enkripsi berstandar perbankan melalui Duitku Payment Gateway. Didukung 10 Virtual Account Bank resmi (Mandiri, Permata, BRI, BNI, BSI, BNC, CIMB Niaga, Danamon, Maybank, Sampoerna) dengan aktivasi instan otomatis 24 jam.
             </p>
           </div>
         </div>

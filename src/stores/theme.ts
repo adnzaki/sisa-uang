@@ -941,10 +941,17 @@ export const useThemeStore = defineStore('theme', () => {
     document.documentElement.classList.toggle('money-font-mono', numberFont.value === 'mono');
   }
 
+  const isDark = computed(() => resolvedTheme.value === 'dark');
+
   function setTheme(mode: ThemeMode) {
     themeMode.value = mode;
     localStorage.setItem('sisa_uang_theme', mode);
     applyThemeToDom();
+  }
+
+  function toggleTheme() {
+    const nextMode: ThemeMode = resolvedTheme.value === 'dark' ? 'light' : 'dark';
+    setTheme(nextMode);
   }
 
   function setCurrency(code: CurrencyCode) {
@@ -1009,6 +1016,9 @@ export const useThemeStore = defineStore('theme', () => {
   return {
     themeMode,
     resolvedTheme,
+    theme: resolvedTheme,
+    isDark,
+    toggleTheme,
     currency,
     numberFont,
     moneyFont: numberFont,
