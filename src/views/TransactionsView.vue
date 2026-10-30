@@ -73,7 +73,7 @@ const periodFilterOptions = computed<SelectOptionItem[]>(() => [
     value: 'all',
     label: 'Semua Periode',
   },
-  ...(financeStore.availablePeriods || []).map((p) => ({
+  ...(Array.isArray(financeStore.availablePeriods) ? financeStore.availablePeriods : []).map((p) => ({
     value: p,
     label: formatPeriodLabel(p, locale.value === 'id' ? 'id-ID' : 'en-US'),
   })),
@@ -137,18 +137,20 @@ const categoryFilterOptions = computed<SelectOptionItem[]>(() => {
 
 const walletFilterOptions = computed<SelectOptionItem[]>(() => [
   { value: 'all', label: 'Semua Sumber Dana' },
-  ...(financeStore.wallets || []).map((w) => ({
-    value: w.id,
-    label: w.name,
+  ...(Array.isArray(financeStore.wallets) ? financeStore.wallets : []).map((w) => ({
+    value: w?.id || '',
+    label: w?.name || 'Sumber Dana',
   })),
 ]);
 
 const uniqueHolderNames = computed(() => {
   const set = new Set<string>();
-  for (const o of financeStore.ownershipSummary || []) {
+  const summary = Array.isArray(financeStore.ownershipSummary) ? financeStore.ownershipSummary : [];
+  for (const o of summary) {
     if (o?.displayHolderName) set.add(o.displayHolderName);
   }
-  for (const tx of financeStore.transactions || []) {
+  const txs = Array.isArray(financeStore.transactions) ? financeStore.transactions : [];
+  for (const tx of txs) {
     if (tx?.fundOwnerName) set.add(tx.fundOwnerName);
   }
   return Array.from(set);
@@ -156,7 +158,7 @@ const uniqueHolderNames = computed(() => {
 
 const holderFilterOptions = computed<SelectOptionItem[]>(() => [
   { value: 'all', label: 'Semua Kepemilikan' },
-  ...(uniqueHolderNames.value || []).map((name) => ({
+  ...(Array.isArray(uniqueHolderNames.value) ? uniqueHolderNames.value : []).map((name) => ({
     value: name,
     label: name,
   })),

@@ -1001,15 +1001,17 @@ export const useFinanceStore = defineStore('finance', () => {
     return Array.from(set).sort((a, b) => b.localeCompare(a));
   });
 
-  function mergeFetchedTransactionsIntoCache(incomingList: TransactionItem[]) {
-    if (incomingList.length === 0) return;
+  function mergeFetchedTransactionsIntoCache(incomingList?: TransactionItem[] | null) {
+    if (!incomingList || !Array.isArray(incomingList) || incomingList.length === 0) return;
     const map = new Map<string, TransactionItem>();
-    for (const existing of rawTransactions.value) {
-      if (!existing.deleted) {
+    const currentList = Array.isArray(rawTransactions.value) ? rawTransactions.value : [];
+    for (const existing of currentList) {
+      if (existing && !existing.deleted) {
         map.set(existing.id, existing);
       }
     }
     for (const item of incomingList) {
+      if (!item) continue;
       if (!item.deleted) {
         map.set(item.id, item);
       } else {
@@ -1038,7 +1040,8 @@ export const useFinanceStore = defineStore('finance', () => {
     const rangeKey = `${uid}:${startIso}:${endIso}`;
     if (loadedTransactionPeriods.has(rangeKey)) return;
 
-    // If this date range is already fully covered by a previously loaded broader range, skip refetching
+    // If this date range is already fully covered by a previously loaded broader range,
+    // only skip if we actually have transaction records for this range or if the range was verified empty
     const isAlreadyCovered = Array.from(loadedTransactionPeriods).some((key) => {
       const parts = key.split(':');
       if (parts.length >= 3 && parts[0] === uid) {
@@ -1048,7 +1051,10 @@ export const useFinanceStore = defineStore('finance', () => {
       }
       return false;
     });
-    if (isAlreadyCovered) {
+    const hasTransactionsInRange = (rawTransactions.value || []).some(
+      (t) => !t.deleted && String(t.date || '') >= startIso && String(t.date || '') <= `${endIso}\uf8ff`
+    );
+    if (isAlreadyCovered && hasTransactionsInRange) {
       loadedTransactionPeriods.add(rangeKey);
       return;
     }
@@ -1171,10 +1177,26 @@ export const useFinanceStore = defineStore('finance', () => {
 
     // Search box: Search local storage first, then query Firestore across all periods if not found
     if (hasSearch) {
-      // 1. Search cached transactions in localStorage / Pinia first (without restricting to month)
-      const localMatches = rawTransactions.value
+      // 1. Search cached transactions in localStorage / Pinia first (across all periods)
+      let candidateTransactions = Array.isArray(rawTransactions.value) ? [...rawTransactions.value] : [];
+      if (candidateTransactions.length === 0 && typeof window !== 'undefined') {
+        try {
+          const rawLocal = localStorage.getItem(storageKey('transactions', uid));
+          if (rawLocal) {
+            const parsed = JSON.parse(rawLocal);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              candidateTransactions = parsed;
+              mergeFetchedTransactionsIntoCache(parsed);
+            }
+          }
+        } catch {
+          // Ignore parse error
+        }
+      }
+
+      const localMatches = candidateTransactions
         .map((tx) => enrichTransactionItem(tx))
-        .filter((tx) => !tx.deleted && matchesClientSubFilters(tx));
+        .filter((tx) => !tx.deleted && matchesClientSubFilters(tx, true));
 
       if (localMatches.length > 0) {
         localMatches.sort((a, b) => {
@@ -1789,9 +1811,13 @@ export const useFinanceStore = defineStore('finance', () => {
     }
   }
 
-  function matchesClientSubFilters(tx: TransactionItem): boolean {
-    // STRICT PERIOD ISOLATION: If a period is chosen (e.g. '2026-07'), NEVER accept any transaction from a different month!
+  function matchesClientSubFilters(tx: TransactionItem, ignorePeriod = false): boolean {
+    const hasSearch = Boolean(currentTxServerFilter.search && currentTxServerFilter.search.trim());
+
+    // STRICT PERIOD ISOLATION: When not searching and not explicitly ignoring period, filter by period
     if (
+      !ignorePeriod &&
+      !hasSearch &&
       currentTxServerFilter.period &&
       currentTxServerFilter.period !== 'all' &&
       String(tx.date || '').slice(0, 7) !== currentTxServerFilter.period
@@ -1824,7 +1850,6 @@ export const useFinanceStore = defineStore('finance', () => {
     ) {
       return false;
     }
-    const hasSearch = Boolean(currentTxServerFilter.search && currentTxServerFilter.search.trim());
     if (hasSearch) {
       const q = currentTxServerFilter.search.trim().toLowerCase();
       return (
@@ -2499,10 +2524,13 @@ export const useFinanceStore = defineStore('finance', () => {
     }
   }
 
+  const lastRouteLoadTimeByPath = new Map<string, number>();
+
   /**
    * Route-Specific Firestore Data Reload:
-   * When opening any route/menu, reloads only the required collection data from Firestore
-   * with a strict limit of 25 documents per collection.
+   * When opening any route/menu, reloads only the required collection data from Firestore.
+   * - Transactions are limited to 25 items with server-side pagination.
+   * - Budgets and Analytics load data scoped to the selected period / year.
    * This guarantees cross-device synchronization without manual page reloads or unbounded reads.
    */
   async function loadRouteDataFromFirestore(routePath: string, uidInput?: string, forceRefresh = false) {
@@ -2511,12 +2539,14 @@ export const useFinanceStore = defineStore('finance', () => {
     if (!uid || uid === 'guest') return;
     if (authStore.isSuperAdmin) return;
 
-    // Fast-path: if we already have data loaded in memory or local storage, do not hit Firestore
-    if (!forceRefresh && (wallets.value.length > 0 || rawTransactions.value.length > 0 || budgets.value.length > 0)) {
+    const cleanPath = (routePath || '').split('?')[0].toLowerCase();
+    const now = Date.now();
+    const lastLoad = lastRouteLoadTimeByPath.get(cleanPath) || 0;
+    if (!forceRefresh && now - lastLoad < 2500) {
       return;
     }
+    lastRouteLoadTimeByPath.set(cleanPath, now);
 
-    const cleanPath = (routePath || '').split('?')[0].toLowerCase();
     const canQuery = await ensureFirestoreSessionForUser(uid);
     if (!canQuery) return;
 

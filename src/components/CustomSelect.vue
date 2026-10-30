@@ -23,6 +23,7 @@ const props = withDefaults(
     allowCustomValue?: boolean;
   }>(),
   {
+    options: () => [],
     placeholder: 'Pilih opsi...',
     searchable: false,
     searchPlaceholder: 'Ketik untuk mencari...',
@@ -160,7 +161,8 @@ function updatePopoverPosition() {
 }
 
 const normalizedOptions = computed<SelectOptionItem[]>(() => {
-  return props.options.map((opt) => {
+  const opts = Array.isArray(props.options) ? props.options : [];
+  return opts.map((opt) => {
     if (typeof opt === 'object' && opt !== null && 'value' in opt) {
       return opt;
     }
@@ -172,19 +174,21 @@ const normalizedOptions = computed<SelectOptionItem[]>(() => {
 });
 
 const selectedOption = computed<SelectOptionItem | undefined>(() => {
-  return normalizedOptions.value.find((opt) => opt.value === props.modelValue);
+  return normalizedOptions.value.find((opt) => opt && opt.value === props.modelValue);
 });
 
 const filteredOptions = computed<SelectOptionItem[]>(() => {
+  const norm = Array.isArray(normalizedOptions.value) ? normalizedOptions.value : [];
   if (!props.searchable || !searchQuery.value.trim()) {
-    return normalizedOptions.value;
+    return norm;
   }
   const q = searchQuery.value.trim().toLowerCase();
-  return normalizedOptions.value.filter(
+  return norm.filter(
     (opt) =>
-      opt.label.toLowerCase().includes(q) ||
-      String(opt.value).toLowerCase().includes(q) ||
-      (opt.sublabel && opt.sublabel.toLowerCase().includes(q))
+      opt &&
+      (String(opt.label || '').toLowerCase().includes(q) ||
+        String(opt.value ?? '').toLowerCase().includes(q) ||
+        (opt.sublabel && String(opt.sublabel).toLowerCase().includes(q)))
   );
 });
 
@@ -455,7 +459,7 @@ onBeforeUnmount(() => {
               </button>
             </div>
             <div class="px-1 pt-1.5 flex items-center justify-between text-[10px] text-slate-400">
-              <span>Menampilkan {{ filteredOptions.length }} dari {{ normalizedOptions.length }} pilihan</span>
+              <span>Menampilkan {{ (filteredOptions || []).length }} dari {{ (normalizedOptions || []).length }} pilihan</span>
               <span v-if="searchQuery">Tekan Enter untuk memilih</span>
             </div>
           </div>
@@ -467,7 +471,7 @@ onBeforeUnmount(() => {
             class="overflow-y-auto overscroll-contain p-1.5 space-y-0.5"
           >
             <div
-              v-if="filteredOptions.length === 0"
+              v-if="(filteredOptions || []).length === 0"
               class="py-5 px-3 text-center space-y-2"
             >
               <p class="text-xs text-slate-500 dark:text-slate-400">
