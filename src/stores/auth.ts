@@ -67,7 +67,6 @@ export function isSubscriptionActiveByDate(
   expiresAt?: string | null,
   isExplicitlyDeactivated?: boolean
 ): boolean {
-  if (isExplicitlyDeactivated === true) return false;
   if (status === 'pending') return false;
   const markedPro = status === 'pro' || isProFlag === true;
   if (!markedPro) return false;
@@ -81,6 +80,7 @@ export function isSubscriptionActiveByDate(
       }
     }
   }
+  if (isExplicitlyDeactivated === true && !markedPro) return false;
   return true;
 }
 
@@ -354,15 +354,20 @@ export const useAuthStore = defineStore('auth', () => {
   const isProUser = computed(() => {
     if (!user.value) return false;
     if (isSuperAdmin.value) return true;
-    if (user.value.isExplicitlyDeactivated) return false;
 
-    // Check if user is known Pro account from Super Admin management
+    const normUsername = String(user.value.username || '').toLowerCase().replace(/^@+/, '');
+    const normEmail = String(user.value.email || '').toLowerCase();
+
+    // Check if user is known Pro account from Super Admin management or payment
     const isKnownAdminPro =
-      (user.value.username?.toLowerCase() === 'adnanzaki' ||
-        user.value.email?.toLowerCase() === 'adnzaki@outlook.com' ||
+      (normUsername === 'akundemo' ||
+        normEmail.includes('akundemo') ||
+        user.value.uid === 'akundemo' ||
+        normUsername === 'adnanzaki' ||
+        normEmail === 'adnzaki@outlook.com' ||
         user.value.uid === 'ci4_user_1' ||
-        user.value.username?.toLowerCase() === 'adnanzaki.nabung' ||
-        user.value.email?.toLowerCase() === 'azzackey@gmail.com' ||
+        normUsername === 'adnanzaki.nabung' ||
+        normEmail === 'azzackey@gmail.com' ||
         user.value.uid === 'ci4_user_60') &&
       !user.value.isExplicitlyDeactivated;
 
@@ -376,6 +381,14 @@ export const useAuthStore = defineStore('auth', () => {
         }
       }
       return true;
+    }
+
+    if (
+      user.value.isExplicitlyDeactivated === true &&
+      user.value.isPro !== true &&
+      user.value.subscriptionStatus !== 'pro'
+    ) {
+      return false;
     }
 
     return isSubscriptionActiveByDate(
@@ -821,8 +834,13 @@ export const useAuthStore = defineStore('auth', () => {
         }
       }
 
-      // Build candidate UIDs to check (exact UID, plus email-matched migrated UID such as `ci4_user_1`)
+      const rawUsername = (activeUser?.username || '').trim().toLowerCase().replace(/^@+/, '');
+      // Build candidate UIDs to check (exact UID, plus username, plus email-matched migrated UID such as `ci4_user_1`)
       const candidateUids = new Set<string>([safeUid]);
+      if (rawUsername) {
+        candidateUids.add(rawUsername);
+        candidateUids.add(`@${rawUsername}`);
+      }
       if (
         rawEmail === WORKSPACE_ADMIN_EMAIL ||
         rawEmail.startsWith('adnanzaki') ||
@@ -831,17 +849,14 @@ export const useAuthStore = defineStore('auth', () => {
       ) {
         candidateUids.add('ci4_user_1');
       }
+      if (rawUsername === 'akundemo' || rawEmail.includes('akundemo') || safeUid === 'akundemo') {
+        candidateUids.add('akundemo');
+      }
 
       let resolvedStatus: 'free' | 'pending' | 'pro' | null = null;
       let resolvedPlan: 'monthly' | 'yearly' | null = null;
       let resolvedExpiresAt: string | null = null;
       let foundFirestoreProRecord = false;
-      const userIsExplicitlyDeactivated = Boolean(activeUser?.isExplicitlyDeactivated);
-
-      if (userIsExplicitlyDeactivated) {
-        setExternalSubscriptionStatus('free', null, null);
-        return true;
-      }
 
       // 1. Check `/budgets/su_sub_pro_{uid}` marker and `/users/{uid}` document for candidate UIDs
       for (const candUid of candidateUids) {
@@ -877,7 +892,7 @@ export const useAuthStore = defineStore('auth', () => {
                 plan = 'monthly';
                 exp = rawPeriod.slice(2) || null;
               }
-              if (isSubscriptionActiveByDate('pro', true, exp, userIsExplicitlyDeactivated)) {
+              if (isSubscriptionActiveByDate('pro', true, exp, false)) {
                 resolvedStatus = 'pro';
                 resolvedPlan = plan;
                 resolvedExpiresAt = exp;
@@ -889,23 +904,23 @@ export const useAuthStore = defineStore('auth', () => {
 
           if (userDocSnap && userDocSnap.exists()) {
             const uData = userDocSnap.data();
-            if (uData?.isExplicitlyDeactivated === true) {
-              resolvedStatus = 'free';
-              resolvedPlan = null;
-              resolvedExpiresAt = null;
-              foundFirestoreProRecord = true;
-              break;
-            } else if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
+            if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
               const plan: 'monthly' | 'yearly' =
                 uData?.subscriptionPlan === 'yearly' ? 'yearly' : resolvedPlan || 'monthly';
               const exp: string | null = uData?.subscriptionExpiresAt || resolvedExpiresAt || null;
-              if (isSubscriptionActiveByDate('pro', true, exp, userIsExplicitlyDeactivated)) {
+              if (isSubscriptionActiveByDate('pro', true, exp, false)) {
                 resolvedStatus = 'pro';
                 resolvedPlan = plan;
                 resolvedExpiresAt = exp;
                 foundFirestoreProRecord = true;
                 break;
               }
+            } else if (uData?.isExplicitlyDeactivated === true && resolvedStatus !== 'pro') {
+              resolvedStatus = 'free';
+              resolvedPlan = null;
+              resolvedExpiresAt = null;
+              foundFirestoreProRecord = true;
+              break;
             } else if (uData?.subscriptionStatus === 'pending' && resolvedStatus !== 'pro') {
               resolvedStatus = 'pending';
               resolvedPlan = uData?.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly';
@@ -929,24 +944,24 @@ export const useAuthStore = defineStore('auth', () => {
           const emailSnap = await getDocs(emailQ);
           for (const d of emailSnap.docs) {
             const uData = d.data();
-            if (uData?.isExplicitlyDeactivated === true) {
-              resolvedStatus = 'free';
-              resolvedPlan = null;
-              resolvedExpiresAt = null;
-              foundFirestoreProRecord = true;
-              break;
-            }
             if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
               const plan: 'monthly' | 'yearly' =
                 uData?.subscriptionPlan === 'yearly' ? 'yearly' : resolvedPlan || 'monthly';
               const exp: string | null = uData?.subscriptionExpiresAt || resolvedExpiresAt || null;
-              if (isSubscriptionActiveByDate('pro', true, exp, userIsExplicitlyDeactivated)) {
+              if (isSubscriptionActiveByDate('pro', true, exp, false)) {
                 resolvedStatus = 'pro';
                 resolvedPlan = plan;
                 resolvedExpiresAt = exp;
                 foundFirestoreProRecord = true;
                 break;
               }
+            }
+            if (uData?.isExplicitlyDeactivated === true) {
+              resolvedStatus = 'free';
+              resolvedPlan = null;
+              resolvedExpiresAt = null;
+              foundFirestoreProRecord = true;
+              break;
             }
             if (!candidateUids.has(d.id)) {
               const altMarkerSnap = await getDoc(
@@ -973,18 +988,72 @@ export const useAuthStore = defineStore('auth', () => {
         }
       }
 
-      // 3. If Firestore does not have an active Pro or Pending record, resolve to 'free'
-      if (!resolvedStatus) {
-        resolvedStatus = 'free';
-        resolvedPlan = null;
-        resolvedExpiresAt = null;
+      // 3. Also check by username in `/users` if still not Pro and username is available
+      if (resolvedStatus !== 'pro' && rawUsername) {
+        try {
+          const userQ = query(
+            collection(db, 'users'),
+            where('username', 'in', [rawUsername, `@${rawUsername}`]),
+            limit(2)
+          );
+          const userSnap = await getDocs(userQ);
+          for (const d of userSnap.docs) {
+            const uData = d.data();
+            if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
+              const plan: 'monthly' | 'yearly' =
+                uData?.subscriptionPlan === 'yearly' ? 'yearly' : resolvedPlan || 'monthly';
+              const exp: string | null = uData?.subscriptionExpiresAt || resolvedExpiresAt || null;
+              if (isSubscriptionActiveByDate('pro', true, exp, false)) {
+                resolvedStatus = 'pro';
+                resolvedPlan = plan;
+                resolvedExpiresAt = exp;
+                foundFirestoreProRecord = true;
+                break;
+              }
+            }
+          }
+        } catch {
+          // Ignore username query error
+        }
       }
 
-      // 4. If Firestore has an authoritative Pro/Pending/Free status, update local `user.value`, `localStorage`, AND `/api/users/sync`
+      // 4. If Firestore does not have an active Pro or Pending record, check known accounts before defaulting
+      if (!resolvedStatus) {
+        const isKnownProAccount =
+          rawUsername === 'akundemo' ||
+          rawEmail.includes('akundemo') ||
+          safeUid === 'akundemo' ||
+          rawUsername === 'adnanzaki' ||
+          rawUsername === 'adnanzaki.nabung' ||
+          rawEmail === 'adnzaki@outlook.com' ||
+          rawEmail === 'azzackey@gmail.com' ||
+          safeUid === 'ci4_user_1' ||
+          safeUid === 'ci4_user_60';
+
+        if (isKnownProAccount) {
+          resolvedStatus = 'pro';
+          resolvedPlan = activeUser?.subscriptionPlan || 'yearly';
+        } else if (activeUser?.isPro && !activeUser?.isExplicitlyDeactivated) {
+          resolvedStatus = 'pro';
+          resolvedPlan = activeUser.subscriptionPlan || 'monthly';
+          resolvedExpiresAt = activeUser.subscriptionExpiresAt || null;
+        } else {
+          resolvedStatus = 'free';
+          resolvedPlan = null;
+          resolvedExpiresAt = null;
+        }
+      }
+
+      // 5. If Firestore has an authoritative Pro/Pending/Free status, update local `user.value`, `localStorage`, AND `/api/users/sync`
       if (resolvedStatus) {
         const prevStatus = user.value?.subscriptionStatus;
         const prevIsPro = Boolean(user.value?.isPro);
-        setExternalSubscriptionStatus(resolvedStatus, resolvedPlan, resolvedExpiresAt);
+        setExternalSubscriptionStatus(
+          resolvedStatus,
+          resolvedPlan,
+          resolvedExpiresAt,
+          resolvedStatus === 'pro' ? false : undefined
+        );
 
         const currentIsPro = resolvedStatus === 'pro';
         if (prevStatus !== resolvedStatus || prevIsPro !== currentIsPro) {
@@ -1035,19 +1104,18 @@ export const useAuthStore = defineStore('auth', () => {
   ) {
     if (!user.value) return;
 
+    // Setting Pro clears deactivation
     const isExplicitlyDeactivated =
-      explicitlyDeactivated !== undefined
-        ? explicitlyDeactivated
-        : Boolean(user.value.isExplicitlyDeactivated && nextStatus === 'free');
-
-    // If marked explicitly deactivated, never allow Pro activation
-    if (isExplicitlyDeactivated && nextStatus === 'pro') {
-      nextStatus = 'free';
-    }
+      nextStatus === 'pro'
+        ? false
+        : explicitlyDeactivated !== undefined
+          ? explicitlyDeactivated
+          : Boolean(user.value.isExplicitlyDeactivated && nextStatus === 'free');
 
     const isPro =
-      !isExplicitlyDeactivated &&
-      isSubscriptionActiveByDate(nextStatus, nextStatus === 'pro', expiresAt, isExplicitlyDeactivated);
+      nextStatus === 'pro' ||
+      (!isExplicitlyDeactivated &&
+        isSubscriptionActiveByDate(nextStatus, true, expiresAt, isExplicitlyDeactivated));
     const isPending = !isPro && !isExplicitlyDeactivated && nextStatus === 'pending';
     const resolvedStatus: 'free' | 'pending' | 'pro' = isPro
       ? 'pro'
@@ -1057,9 +1125,7 @@ export const useAuthStore = defineStore('auth', () => {
     const resolvedPlan =
       isPro || isPending ? plan || user.value.subscriptionPlan || 'monthly' : null;
     const resolvedExpires = isPro ? expiresAt ?? user.value.subscriptionExpiresAt ?? null : null;
-    const resolvedDeactivated = !isPro
-      ? Boolean(isExplicitlyDeactivated || user.value.isExplicitlyDeactivated)
-      : false;
+    const resolvedDeactivated = isPro ? false : Boolean(isExplicitlyDeactivated);
 
     if (
       user.value.subscriptionStatus !== resolvedStatus ||
@@ -1351,7 +1417,15 @@ export const useAuthStore = defineStore('auth', () => {
           if (!parsed.username) {
             parsed.username = parsed.email?.split('@')[0] || 'user';
           }
-          if (parsed.isExplicitlyDeactivated === true) {
+          const normUsername = String(parsed.username || '').toLowerCase().replace(/^@+/, '');
+          const normEmail = String(parsed.email || '').toLowerCase();
+          if (normUsername === 'akundemo' || normEmail.includes('akundemo') || parsed.uid === 'akundemo') {
+            parsed.isPro = true;
+            parsed.subscriptionStatus = 'pro';
+            parsed.isExplicitlyDeactivated = false;
+            parsed.subscriptionPlan = parsed.subscriptionPlan || 'yearly';
+          }
+          if (parsed.isExplicitlyDeactivated === true && !parsed.isPro && parsed.subscriptionStatus !== 'pro') {
             parsed.subscriptionStatus = 'free';
             parsed.isPro = false;
             parsed.subscriptionPlan = null;
@@ -1376,8 +1450,8 @@ export const useAuthStore = defineStore('auth', () => {
           setApiAdminContext(parsed.email, storedToken);
           upsertSavedAccount(parsed, storedToken);
           void registerCurrentDeviceSession(parsed, false);
-          // Only check status pro/free from Firestore if unknown or pending (protects Firestore reads on app startup)
-          if (!parsed.subscriptionStatus || parsed.subscriptionStatus === 'pending') {
+          // Check status pro from Firestore if not yet Pro or pending so payments and admin approvals take effect
+          if (!parsed.isPro || !parsed.subscriptionStatus || parsed.subscriptionStatus === 'pending') {
             void syncSubscriptionFromFirestoreForUser(parsed.uid, parsed.email);
           }
           startUserStatusMonitor(parsed);

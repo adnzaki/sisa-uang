@@ -462,9 +462,7 @@ async function checkPaymentStatus(showFeedback = true) {
     if (data.isPaid === true && (data.duitkuStatus?.statusCode === '00' || data.order?.status === 'SUCCESS')) {
       stopPolling();
       if (authStore.user) {
-        authStore.user.isPro = true;
-        authStore.user.subscriptionStatus = 'pro';
-        authStore.user.subscriptionPlan = selectedPlan.value;
+        authStore.setExternalSubscriptionStatus('pro', selectedPlan.value, null, false);
       }
       try {
         await authStore.syncSubscriptionFromFirestoreForUser(authStore.user?.uid, authStore.user?.email);
