@@ -4,6 +4,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   getDocsFromServer,
   setDoc,
@@ -2385,12 +2386,17 @@ export const useFinanceStore = defineStore('finance', () => {
         const authStore = useAuthStore();
 
         try {
-          const userSnap = await getDoc(doc(db, 'users', uid));
+          const userDocRef = doc(db, 'users', uid);
+          const userSnap = await getDocFromServer(userDocRef).catch(() => getDoc(userDocRef));
           if (userSnap.exists()) {
             confirmedUserDocsInFirestore.add(uid);
             const uData = userSnap.data();
             remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
-            if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
+            const isExplicitlyDeactivated = uData?.isExplicitlyDeactivated === true;
+            const isPro = !isExplicitlyDeactivated && (uData?.subscriptionStatus === 'pro' || uData?.isPro === true);
+            const isPending = !isExplicitlyDeactivated && !isPro && uData?.subscriptionStatus === 'pending';
+
+            if (isPro) {
               authStore.setExternalSubscriptionStatus(
                 'pro',
                 uData?.subscriptionPlan === 'yearly'
@@ -2399,10 +2405,17 @@ export const useFinanceStore = defineStore('finance', () => {
                 uData?.subscriptionExpiresAt || authStore.user?.subscriptionExpiresAt || null,
                 false
               );
-            } else if (uData?.isExplicitlyDeactivated === true && !authStore.user?.isPro) {
+            } else if (isExplicitlyDeactivated) {
               authStore.setExternalSubscriptionStatus('free', null, null, true);
-            } else if ((uData?.subscriptionStatus === 'free' || uData?.isPro === false) && !authStore.user?.isPro) {
-              authStore.setExternalSubscriptionStatus('free', null, null);
+            } else if (isPending) {
+              authStore.setExternalSubscriptionStatus(
+                'pending',
+                uData?.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly',
+                null
+              );
+            } else {
+              // Direct check against Firestore: unconditionally set to free for any non-pro account
+              authStore.setExternalSubscriptionStatus('free', null, null, false);
             }
           }
         } catch (tokenErr) {

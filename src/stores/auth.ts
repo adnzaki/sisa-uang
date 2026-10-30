@@ -15,7 +15,9 @@ import {
 import {
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
+  getDocsFromServer,
   setDoc,
   updateDoc,
   serverTimestamp,
@@ -311,8 +313,7 @@ export const useAuthStore = defineStore('auth', () => {
               const targetEmail = (email || '').toLowerCase();
               const isMatch =
                 (uid && currentUid === uid) ||
-                (targetEmail && currentEmail === targetEmail) ||
-                (currentEmail && targetEmail && (currentEmail.includes('adnzaki') || currentEmail.includes('adnanzaki')) && (targetEmail.includes('adnzaki') || targetEmail.includes('adnanzaki')));
+                (targetEmail && currentEmail === targetEmail);
               if (isMatch) {
                 setExternalSubscriptionStatus('free', null, null, true);
               }
@@ -355,10 +356,13 @@ export const useAuthStore = defineStore('auth', () => {
     if (!user.value) return false;
     if (isSuperAdmin.value) return true;
 
+    // Strict evaluation: Any free, pending, deactivated, or non-pro status is immediately false
     if (
       user.value.isExplicitlyDeactivated === true ||
       user.value.subscriptionStatus === 'free' ||
-      (!user.value.isPro && user.value.subscriptionStatus !== 'pro')
+      user.value.subscriptionStatus === 'pending' ||
+      user.value.isPro === false ||
+      (user.value.subscriptionStatus !== 'pro' && user.value.isPro !== true)
     ) {
       return false;
     }
@@ -810,7 +814,7 @@ export const useAuthStore = defineStore('auth', () => {
       let userDocData: Record<string, any> | null = null;
       try {
         const userDocRef = doc(db, 'users', safeUid);
-        const userDocSnap = await getDoc(userDocRef);
+        const userDocSnap = await getDocFromServer(userDocRef).catch(() => getDoc(userDocRef));
         if (userDocSnap.exists()) {
           userDocData = userDocSnap.data() as Record<string, any>;
         }
@@ -818,11 +822,11 @@ export const useAuthStore = defineStore('auth', () => {
         // Fallback to query by exact email if UID lookup fails
       }
 
-      // If document was not found by safeUid, query specifically by this user's exact email
+      // If document was not found by safeUid, query specifically by this user's exact email directly from server
       if (!userDocData && rawEmail) {
         try {
           const emailQ = query(collection(db, 'users'), where('email', '==', rawEmail), limit(1));
-          const emailSnap = await getDocs(emailQ);
+          const emailSnap = await getDocsFromServer(emailQ).catch(() => getDocs(emailQ));
           if (!emailSnap.empty) {
             userDocData = emailSnap.docs[0].data() as Record<string, any>;
           }
@@ -984,22 +988,15 @@ export const useAuthStore = defineStore('auth', () => {
         // Deep-clean localStorage caches so stale PRO markers never revive PRO on user activity
         try {
           const uidsToClean = new Set<string>([user.value.uid]);
-          const userEmail = (user.value.email || '').toLowerCase();
-          if (userEmail.includes('adnzaki') || userEmail.startsWith('adnanzaki')) {
-            uidsToClean.add('ci4_user_1');
-          }
 
-          // 1. Sanitize all saved accounts in localStorage
+          // 1. Sanitize the current account in saved accounts in localStorage
           const savedAccountsRaw = localStorage.getItem(SAVED_ACCOUNTS_STORAGE_KEY);
           if (savedAccountsRaw) {
             const list = JSON.parse(savedAccountsRaw);
             if (Array.isArray(list)) {
               let changed = false;
               list.forEach((acc: any) => {
-                if (
-                  uidsToClean.has(acc.uid) ||
-                  (acc.email && acc.email.toLowerCase() === userEmail)
-                ) {
+                if (acc && acc.uid === user.value?.uid) {
                   acc.subscriptionStatus = 'free';
                   acc.isPro = false;
                   acc.subscriptionPlan = null;
@@ -1091,13 +1088,13 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       // First check if a migrated user document already exists by email in /users
-      const snap = await getDoc(userDocRef);
+      const snap = await getDocFromServer(userDocRef).catch(() => getDoc(userDocRef));
       if (!snap.exists()) {
-        // Check if there is an existing migrated user doc with this EXACT email
+        // Check if there is an existing migrated user doc with this EXACT email directly on server
         let migratedSnapDoc: any = null;
         try {
           const emailQ = query(collection(db, 'users'), where('email', '==', safeEmail), limit(1));
-          const emailMatches = await getDocs(emailQ);
+          const emailMatches = await getDocsFromServer(emailQ).catch(() => getDocs(emailQ));
           if (!emailMatches.empty) {
             migratedSnapDoc = emailMatches.docs[0];
           }
@@ -1406,39 +1403,40 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       const usersCol = collection(db, 'users');
-      // 1. Query by email (if identifier contains @, check email first)
+      // 1. Query by email directly from server (if identifier contains @, check email first)
       if (clean.includes('@')) {
-        const byEmailSnap = await getDocs(query(usersCol, where('email', '==', clean)));
+        const qEmail = query(usersCol, where('email', '==', clean));
+        const byEmailSnap = await getDocsFromServer(qEmail).catch(() => getDocs(qEmail));
         if (!byEmailSnap.empty) {
           return mapFirestoreUserDoc(byEmailSnap.docs[0], clean);
         }
       }
 
-      // 2. Query by username (exact and normalized underscore form)
-      const byUsernameSnap = await getDocs(query(usersCol, where('username', '==', clean)));
+      // 2. Query by username directly from server (exact and normalized underscore form)
+      const qUser = query(usersCol, where('username', '==', clean));
+      const byUsernameSnap = await getDocsFromServer(qUser).catch(() => getDocs(qUser));
       if (!byUsernameSnap.empty) {
         return mapFirestoreUserDoc(byUsernameSnap.docs[0], clean);
       }
       if (normalizedUsername !== clean) {
-        const byNormSnap = await getDocs(query(usersCol, where('username', '==', normalizedUsername)));
+        const qNorm = query(usersCol, where('username', '==', normalizedUsername));
+        const byNormSnap = await getDocsFromServer(qNorm).catch(() => getDocs(qNorm));
         if (!byNormSnap.empty) {
           return mapFirestoreUserDoc(byNormSnap.docs[0], normalizedUsername);
         }
       }
 
-      // 3. If not @ and not found by username field, check displayName or synthetic email using indexed queries with limit(1)
+      // 3. If not @ and not found by username field, check displayName or synthetic email directly from server
       // STRICT QUOTA PROTECTION: Never call getDocs(usersCol) without where/limit constraints!
       if (!clean.includes('@')) {
-        const byDisplaySnap = await getDocs(
-          query(usersCol, where('displayName', '==', clean), limit(1))
-        );
+        const qDisplay = query(usersCol, where('displayName', '==', clean), limit(1));
+        const byDisplaySnap = await getDocsFromServer(qDisplay).catch(() => getDocs(qDisplay));
         if (!byDisplaySnap.empty) {
           return mapFirestoreUserDoc(byDisplaySnap.docs[0], clean);
         }
 
-        const bySyntheticEmailSnap = await getDocs(
-          query(usersCol, where('email', '==', `${clean}@sisa-uang.id`), limit(1))
-        );
+        const qSynthetic = query(usersCol, where('email', '==', `${clean}@sisa-uang.id`), limit(1));
+        const bySyntheticEmailSnap = await getDocsFromServer(qSynthetic).catch(() => getDocs(qSynthetic));
         if (!bySyntheticEmailSnap.empty) {
           return mapFirestoreUserDoc(bySyntheticEmailSnap.docs[0], clean);
         }
@@ -2179,6 +2177,8 @@ export const useAuthStore = defineStore('auth', () => {
       upsertSavedAccount(user.value || profile, googleAdminToken);
       await registerCurrentDeviceSession(user.value || profile, true);
       startUserStatusMonitor(user.value || profile);
+      // Strictly query authoritative subscription from Firestore server
+      await syncSubscriptionFromFirestoreForUser(profile.uid, profile.email);
 
       await recordAuditLog(
         'google_login',
