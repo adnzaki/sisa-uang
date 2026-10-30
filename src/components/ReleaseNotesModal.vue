@@ -47,11 +47,11 @@ const changelogItems: ChangelogItem[] = [
     badgeColor: 'emerald',
     title: 'Mengoptimalkan Proses Operasi Database Firestore',
     summary:
-      'Penataan ulang menyeluruh pada arsitektur pembacaan data Cloud Firestore untuk menghemat konsumsi kuota document reads hingga lebih dari 95% secara drastis:',
+      'Penataan ulang menyeluruh pada arsitektur pembacaan data Cloud Firestore untuk meningkatkan performa aplikasi:',
     details: [
-      'Pemberhentian Background Polling Otomatis: Mematikan proses background looping dan kueri otomatis berkala saat aplikasi dalam posisi idle sehingga kuota reads tidak terbuang sia-sia.',
+      'Pemberhentian Background Polling Otomatis: Mematikan proses background looping dan kueri otomatis berkala saat aplikasi dalam posisi idle.',
       'Penerapan Batas Limit Kueri Ketat: Mencegah penarikan dokumen tak terbatas (unbounded queries) pada seluruh koleksi utama dengan menerapkan pembatasan dokumen proporsional.',
-      'Zero-Read Idle State: Menjamin tidak ada penarikan data diam-diam dari Firestore ketika perangkat pengguna sedang aktif namun tidak sedang digunakan.',
+      'Zero-Read Idle State: Menjamin tidak ada penarikan data diam-diam dari database Firestore ketika perangkat pengguna sedang aktif namun tidak sedang digunakan.',
     ],
     icon: Database,
   },
@@ -64,9 +64,9 @@ const changelogItems: ChangelogItem[] = [
     summary:
       'Mekanisme sinkronisasi data cerdas berbasis pencocokan read token dan timestamp antara server Firestore dan perangkat lokal:',
     details: [
-      'Validasi Timestamp Efisien (1 Read Token): Pengecekan status perubahan server hanya membaca 1 dokumen pengguna (/users/{uid}) untuk memastikan efisiensi maksimal.',
+      'Validasi Timestamp Efisien (1 Read Token): Pengecekan status perubahan server hanya membaca dokumen yang diperlukan untuk memastikan efisiensi maksimal.',
       'Penarikan Data Terarah (Event-Driven): Penarikan data baru dari server hanya dipicu pada event penting: berpindah antar halaman/menu, mutasi data (tambah/ubah/hapus), reload manual, atau saat membuka detail data.',
-      'Zero-Read Cache Restoration: Jika timestamp perangkat lokal cocok dengan server, seluruh koleksi disajikan instan langsung dari cache lokal tanpa konsumsi kuota reads tambahan.',
+      'Zero-Read Cache Restoration: Jika timestamp perangkat lokal cocok dengan server, seluruh koleksi disajikan instan langsung dari cache lokal tanpa harus menarik kembali data dari Firestore.',
     ],
     icon: RotateCcw,
   },
