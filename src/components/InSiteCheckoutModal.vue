@@ -19,9 +19,16 @@ import {
   Sparkles,
   Lock,
   FileText,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-vue-next';
 import QRCode from 'qrcode';
 import { useAuthStore } from '../stores/auth';
+import {
+  getPaymentGuideForChannel,
+  type BankPaymentGuide,
+  type PaymentGuideStep,
+} from '../data/vaPaymentInstructions';
 
 const router = useRouter();
 const route = useRoute();
@@ -182,6 +189,42 @@ const planPeriodLabel = computed(() => {
   return selectedPlan.value === 'yearly' ? '1 Tahun Penuh (Hemat 2 Bulan)' : '1 Bulan';
 });
 
+// VA Payment Guides (Petunjuk Pembayaran Duitku)
+const showAllGuides = ref(false);
+const expandedGuideIndexes = ref<number[]>([0]);
+
+const currentBankGuide = computed<BankPaymentGuide | null>(() => {
+  return getPaymentGuideForChannel(paymentMethod.value);
+});
+
+const primaryGuides = computed<PaymentGuideStep[]>(() => {
+  if (!currentBankGuide.value) return [];
+  return currentBankGuide.value.guides.slice(0, 2);
+});
+
+const remainingGuides = computed<PaymentGuideStep[]>(() => {
+  if (!currentBankGuide.value) return [];
+  return currentBankGuide.value.guides.slice(2);
+});
+
+function isGuideExpanded(index: number): boolean {
+  return expandedGuideIndexes.value.includes(index);
+}
+
+function toggleGuide(index: number) {
+  const pos = expandedGuideIndexes.value.indexOf(index);
+  if (pos >= 0) {
+    expandedGuideIndexes.value.splice(pos, 1);
+  } else {
+    expandedGuideIndexes.value.push(index);
+  }
+}
+
+watch(paymentMethod, () => {
+  showAllGuides.value = false;
+  expandedGuideIndexes.value = [0];
+});
+
 // Polling timer for status verification
 let pollingInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -232,6 +275,8 @@ watch(
       step.value = 'form';
       errorMessage.value = '';
       checkStatusNotice.value = '';
+      showAllGuides.value = false;
+      expandedGuideIndexes.value = [0];
       fullName.value = authStore.user.displayName || authStore.user.username || '';
       email.value = authStore.user.email || '';
     } else {
@@ -389,6 +434,8 @@ async function proceedToPayment() {
       }),
     };
 
+    showAllGuides.value = false;
+    expandedGuideIndexes.value = [0];
     step.value = 'payment';
 
     // Start auto polling payment status every 4 seconds
@@ -455,10 +502,10 @@ function handleClose() {
     class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto bg-slate-900/70 backdrop-blur-xs animate-in fade-in duration-200"
   >
     <div
-      class="relative w-full max-w-xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden my-auto"
+      class="relative w-full max-w-xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col"
     >
       <!-- Modal Header -->
-      <div class="px-4 sm:px-6 py-4 sm:py-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3">
+      <div class="px-4 sm:px-6 py-4 sm:py-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-1.5 text-[11px] sm:text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
             <ShieldCheck class="w-3.5 h-3.5 shrink-0" />
@@ -479,7 +526,7 @@ function handleClose() {
       </div>
 
       <!-- Step 1: Form & Package Selection -->
-      <div v-if="step === 'form'" class="p-4 sm:p-6 space-y-4 sm:space-y-6">
+      <div v-if="step === 'form'" class="p-4 sm:p-6 space-y-4 sm:space-y-6 overflow-y-auto">
         <!-- Error Notice -->
         <div
           v-if="errorMessage"
@@ -772,7 +819,7 @@ function handleClose() {
       </div>
 
       <!-- Step 2: Duitku Payment View -->
-      <div v-else-if="step === 'payment'" class="p-4 sm:p-6 space-y-4 sm:space-y-5">
+      <div v-else-if="step === 'payment'" class="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto">
         <!-- Order & Amount Header Card -->
         <div class="p-3.5 sm:p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/40 border border-emerald-200/80 dark:border-emerald-900/60 space-y-2.5">
           <div class="flex items-start justify-between gap-3">
@@ -909,30 +956,192 @@ function handleClose() {
             </div>
           </div>
 
-          <!-- Panduan Pembayaran Card -->
-          <div class="p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/30 space-y-2.5">
-            <div class="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
-              <FileText class="w-3.5 h-3.5 text-emerald-600" />
-              <span>Panduan Pembayaran:</span>
+          <!-- Panduan Pembayaran Card Sesuai Dokumen Resmi Duitku -->
+          <div class="p-3.5 sm:p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/30 space-y-3">
+            <div class="flex items-center gap-2 min-w-0">
+              <FileText class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span class="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 truncate">
+                Panduan Pembayaran {{ currentBankGuide?.bankName || channelLabels[paymentMethod]?.bank || 'Virtual Account' }}
+              </span>
             </div>
-            <ol class="space-y-2 text-xs text-slate-600 dark:text-slate-300">
-              <li class="flex items-start gap-2.5 leading-relaxed">
-                <span class="w-5 h-5 rounded-full bg-slate-200/90 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">1</span>
-                <div>Buka aplikasi m-Banking atau ATM <strong>{{ channelLabels[paymentMethod]?.bank || 'bank Anda' }}</strong>, pilih menu <strong>Transfer &gt; Virtual Account</strong>.</div>
-              </li>
-              <li class="flex items-start gap-2.5 leading-relaxed">
-                <span class="w-5 h-5 rounded-full bg-slate-200/90 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">2</span>
-                <div>Masukkan nomor Virtual Account di atas. Pastikan nama akun penerima adalah <strong>DUITKU / SISAUANG PRO</strong>.</div>
-              </li>
-              <li class="flex items-start gap-2.5 leading-relaxed">
-                <span class="w-5 h-5 rounded-full bg-slate-200/90 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">3</span>
-                <div>Konfirmasi pembayaran sejumlah <strong>{{ invoiceData.formattedAmount }}</strong>.</div>
-              </li>
-              <li class="flex items-start gap-2.5 leading-relaxed">
-                <span class="w-5 h-5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">4</span>
-                <div>Setelah berhasil, sistem SisaUang akan langsung mengaktifkan status Pro dalam beberapa detik secara otomatis.</div>
-              </li>
-            </ol>
+
+            <!-- Cara Pembayaran Teratas Sesuai Dokumen Resmi -->
+            <div v-if="currentBankGuide && primaryGuides.length" class="space-y-2">
+              <div
+                v-for="(guide, idx) in primaryGuides"
+                :key="guide.title"
+                class="rounded-xl border transition-all overflow-hidden bg-white dark:bg-slate-900 shadow-2xs"
+                :class="
+                  isGuideExpanded(idx)
+                    ? 'border-emerald-400/80 dark:border-emerald-700/80 ring-1 ring-emerald-500/20'
+                    : 'border-slate-200/90 dark:border-slate-700/80 hover:border-slate-300 dark:hover:border-slate-600'
+                "
+              >
+                <!-- Accordion Header Button -->
+                <button
+                  type="button"
+                  class="w-full px-3.5 py-2.5 flex items-center justify-between gap-2.5 text-left transition-colors cursor-pointer"
+                  :class="
+                    isGuideExpanded(idx)
+                      ? 'bg-emerald-50/70 dark:bg-emerald-950/30'
+                      : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'
+                  "
+                  @click="toggleGuide(idx)"
+                >
+                  <div class="flex items-center gap-2.5 min-w-0">
+                    <span
+                      class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 transition-colors"
+                      :class="
+                        isGuideExpanded(idx)
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                      "
+                    >
+                      {{ idx + 1 }}
+                    </span>
+                    <span class="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                      {{ guide.title }}
+                    </span>
+                  </div>
+                  <ChevronDown
+                    class="w-4 h-4 text-slate-400 dark:text-slate-500 transition-transform duration-200 shrink-0"
+                    :class="{ 'rotate-180': isGuideExpanded(idx) }"
+                  />
+                </button>
+
+                <!-- Step-by-Step List -->
+                <div v-show="isGuideExpanded(idx)" class="px-3.5 py-3 border-t border-slate-100 dark:border-slate-800/80 bg-white dark:bg-slate-900">
+                  <ol class="space-y-2 text-xs text-slate-600 dark:text-slate-300">
+                    <li
+                      v-for="(st, sIdx) in guide.steps"
+                      :key="sIdx"
+                      class="flex items-start gap-2.5 leading-relaxed"
+                    >
+                      <span class="w-4 h-4 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-mono text-[10px] flex items-center justify-center shrink-0 mt-0.5 font-bold">
+                        {{ sIdx + 1 }}
+                      </span>
+                      <span class="flex-1">{{ st }}</span>
+                    </li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+
+            <!-- Button Selengkapnya (Hanya tampil jika ada cara lainnya) -->
+            <div v-if="currentBankGuide && remainingGuides.length" class="pt-1">
+              <button
+                type="button"
+                class="w-full py-2.5 px-3.5 rounded-xl border border-dashed border-emerald-300 dark:border-emerald-800 bg-emerald-50/50 hover:bg-emerald-50 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer group shadow-2xs"
+                @click="showAllGuides = !showAllGuides"
+              >
+                <span v-if="!showAllGuides">
+                  Selengkapnya ({{ remainingGuides.length }} metode lainnya: ATM, Bank Lain, dll.)
+                </span>
+                <span v-else>
+                  Tutup Cara Lainnya
+                </span>
+                <ChevronDown
+                  class="w-4 h-4 transition-transform duration-200 text-emerald-600 dark:text-emerald-400 group-hover:translate-y-0.5"
+                  :class="{ 'rotate-180': showAllGuides }"
+                />
+              </button>
+            </div>
+
+            <!-- Cara Lainnya (Ditampilkan ketika Selengkapnya diklik) -->
+            <div v-if="showAllGuides && remainingGuides.length" class="space-y-2 pt-1 animate-in fade-in duration-200">
+              <div
+                v-for="(guide, rIdx) in remainingGuides"
+                :key="guide.title"
+                class="rounded-xl border transition-all overflow-hidden bg-white dark:bg-slate-900 shadow-2xs"
+                :class="
+                  isGuideExpanded(rIdx + 2)
+                    ? 'border-emerald-400/80 dark:border-emerald-700/80 ring-1 ring-emerald-500/20'
+                    : 'border-slate-200/90 dark:border-slate-700/80 hover:border-slate-300 dark:hover:border-slate-600'
+                "
+              >
+                <!-- Accordion Header Button -->
+                <button
+                  type="button"
+                  class="w-full px-3.5 py-2.5 flex items-center justify-between gap-2.5 text-left transition-colors cursor-pointer"
+                  :class="
+                    isGuideExpanded(rIdx + 2)
+                      ? 'bg-emerald-50/70 dark:bg-emerald-950/30'
+                      : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'
+                  "
+                  @click="toggleGuide(rIdx + 2)"
+                >
+                  <div class="flex items-center gap-2.5 min-w-0">
+                    <span
+                      class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 transition-colors"
+                      :class="
+                        isGuideExpanded(rIdx + 2)
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                      "
+                    >
+                      {{ rIdx + 3 }}
+                    </span>
+                    <span class="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                      {{ guide.title }}
+                    </span>
+                    <span
+                      v-if="guide.tag"
+                      class="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 shrink-0"
+                    >
+                      {{ guide.tag }}
+                    </span>
+                  </div>
+                  <ChevronDown
+                    class="w-4 h-4 text-slate-400 dark:text-slate-500 transition-transform duration-200 shrink-0"
+                    :class="{ 'rotate-180': isGuideExpanded(rIdx + 2) }"
+                  />
+                </button>
+
+                <!-- Step-by-Step List -->
+                <div v-show="isGuideExpanded(rIdx + 2)" class="px-3.5 py-3 border-t border-slate-100 dark:border-slate-800/80 bg-white dark:bg-slate-900">
+                  <ol class="space-y-2 text-xs text-slate-600 dark:text-slate-300">
+                    <li
+                      v-for="(st, sIdx) in guide.steps"
+                      :key="sIdx"
+                      class="flex items-start gap-2.5 leading-relaxed"
+                    >
+                      <span class="w-4 h-4 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-mono text-[10px] flex items-center justify-center shrink-0 mt-0.5 font-bold">
+                        {{ sIdx + 1 }}
+                      </span>
+                      <span class="flex-1">{{ st }}</span>
+                    </li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+
+            <!-- Fallback umum jika bank tidak terdaftar -->
+            <div v-if="!currentBankGuide" class="space-y-2">
+              <ol class="space-y-2 text-xs text-slate-600 dark:text-slate-300">
+                <li class="flex items-start gap-2.5 leading-relaxed">
+                  <span class="w-5 h-5 rounded-full bg-slate-200/90 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">1</span>
+                  <div>Buka aplikasi m-Banking atau ATM <strong>{{ channelLabels[paymentMethod]?.bank || 'bank Anda' }}</strong>, pilih menu <strong>Transfer &gt; Virtual Account</strong>.</div>
+                </li>
+                <li class="flex items-start gap-2.5 leading-relaxed">
+                  <span class="w-5 h-5 rounded-full bg-slate-200/90 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">2</span>
+                  <div>Masukkan nomor Virtual Account di atas. Pastikan nama akun penerima adalah <strong>DUITKU / SISAUANG PRO</strong>.</div>
+                </li>
+                <li class="flex items-start gap-2.5 leading-relaxed">
+                  <span class="w-5 h-5 rounded-full bg-slate-200/90 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">3</span>
+                  <div>Konfirmasi pembayaran sejumlah <strong>{{ invoiceData.formattedAmount }}</strong>.</div>
+                </li>
+                <li class="flex items-start gap-2.5 leading-relaxed">
+                  <span class="w-5 h-5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">4</span>
+                  <div>Setelah berhasil, sistem SisaUang akan langsung mengaktifkan status Pro dalam beberapa detik secara otomatis.</div>
+                </li>
+              </ol>
+            </div>
+
+            <!-- Footnote Otomatis Aktif -->
+            <div class="pt-2 border-t border-slate-200/60 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+              <ShieldCheck class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>Verifikasi otomatis 24 jam real-time. Status lisensi SisaUang Pro aktif seketika setelah pembayaran berhasil.</span>
+            </div>
           </div>
         </div>
 
@@ -997,7 +1206,7 @@ function handleClose() {
       </div>
 
       <!-- Step 3: Success Screen & Official Invoice Receipt -->
-      <div v-else-if="step === 'success'" class="p-4 sm:p-6 space-y-4 sm:space-y-6">
+      <div v-else-if="step === 'success'" class="p-4 sm:p-6 space-y-4 sm:space-y-6 overflow-y-auto">
         <div class="text-center space-y-2">
           <div class="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
             <CheckCircle2 class="w-7 h-7" />
