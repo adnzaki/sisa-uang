@@ -868,15 +868,15 @@ function getExecutionStatusText(rule: AutomationItem): { text: string; color: st
               <Calendar class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span>Penjadwalan Otomatis</span>
             </div>
-            <!-- Jam Pelaksanaan -->
-            <div class="flex items-center gap-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-1">
+            <!-- Jam Pelaksanaan (Desktop sm: tetap di kanan atas) -->
+            <div class="hidden sm:flex items-center gap-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-1">
               <Clock class="w-3.5 h-3.5 text-slate-400 shrink-0" />
               <span class="text-[11px] text-slate-500 font-medium">Jam:</span>
               <input
                 v-model="formExecutionTime"
                 type="time"
                 required
-                class="bg-transparent text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none"
+                class="bg-transparent text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none cursor-pointer"
               />
             </div>
           </div>
@@ -941,6 +941,22 @@ function getExecutionStatusText(rule: AutomationItem): { text: string; color: st
               >
                 {{ d }}
               </button>
+            </div>
+          </div>
+
+          <!-- Jam Pelaksanaan (Khusus Layar Mobile: dipindah ke bawah dengan lebar 100%) -->
+          <div class="block sm:hidden space-y-1.5">
+            <div class="text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Jam Pelaksanaan
+            </div>
+            <div class="w-full min-h-[46px] flex items-center justify-between bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2 shadow-2xs">
+              <span class="text-xs text-slate-500 dark:text-slate-400 font-medium">Pukul / Jam:</span>
+              <input
+                v-model="formExecutionTime"
+                type="time"
+                required
+                class="bg-transparent text-sm font-bold text-slate-900 dark:text-slate-100 focus:outline-none cursor-pointer"
+              />
             </div>
           </div>
 
