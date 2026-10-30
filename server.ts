@@ -361,6 +361,7 @@ export interface ServerAutomationRecord {
   toFundOwnerId?: string;
   toFundOwnerName?: string;
   category: string;
+  categoryId?: string;
   amount: number;
   adminFee?: number;
   note: string;
@@ -1962,6 +1963,7 @@ async function startServer() {
       toFundOwnerId: body.toFundOwnerId ? String(body.toFundOwnerId).slice(0, 128) : undefined,
       toFundOwnerName: body.toFundOwnerName ? String(body.toFundOwnerName).slice(0, 60) : undefined,
       category: String(body.category || 'Lainnya').slice(0, 50),
+      categoryId: body.categoryId ? String(body.categoryId).slice(0, 128) : undefined,
       amount: Math.abs(Number(body.amount) || 0),
       adminFee: Math.max(0, Number(body.adminFee) || 0),
       note: String(body.note || '').slice(0, 200),
@@ -2014,6 +2016,7 @@ async function startServer() {
       toFundOwnerId: body.toFundOwnerId !== undefined ? String(body.toFundOwnerId || '').slice(0, 128) : existing?.toFundOwnerId,
       toFundOwnerName: body.toFundOwnerName !== undefined ? String(body.toFundOwnerName || '').slice(0, 60) : existing?.toFundOwnerName,
       category: String(body.category || existing?.category || 'Lainnya').slice(0, 50),
+      categoryId: body.categoryId !== undefined ? (body.categoryId ? String(body.categoryId).slice(0, 128) : undefined) : existing?.categoryId,
       amount: body.amount !== undefined ? Math.abs(Number(body.amount) || 0) : (existing?.amount || 0),
       adminFee: body.adminFee !== undefined ? Math.max(0, Number(body.adminFee) || 0) : (existing?.adminFee || 0),
       note: String(body.note !== undefined ? body.note : (existing?.note || '')).slice(0, 200),
@@ -2126,6 +2129,7 @@ async function startServer() {
           toFundOwnerId: item.toFundOwnerId ? String(item.toFundOwnerId).slice(0, 128) : undefined,
           toFundOwnerName: item.toFundOwnerName ? String(item.toFundOwnerName).slice(0, 60) : undefined,
           category: String(item.category || 'Lainnya').slice(0, 50),
+          categoryId: item.categoryId ? String(item.categoryId).slice(0, 128) : undefined,
           amount: Math.abs(Number(item.amount) || 0),
           adminFee: Math.max(0, Number(item.adminFee) || 0),
           note: String(item.note || '').slice(0, 200),

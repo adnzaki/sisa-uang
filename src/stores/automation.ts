@@ -280,6 +280,7 @@ export const useAutomationStore = defineStore('automation', () => {
         toFundOwnerId: item.toFundOwnerId || null,
         toFundOwnerName: item.toFundOwnerName || null,
         category: item.category,
+        categoryId: item.categoryId || null,
         amount: item.amount,
         adminFee: item.adminFee || 0,
         note: item.note || '',
