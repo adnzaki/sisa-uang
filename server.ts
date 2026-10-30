@@ -15,6 +15,9 @@ import {
   doc as serverFsDoc,
   updateDoc as serverFsUpdateDoc,
   serverTimestamp as serverFsTimestamp,
+  collection as serverFsCollection,
+  getDocs as serverFsGetDocs,
+  setDoc as serverFsSetDoc,
 } from 'firebase/firestore';
 import {
   getAuth as getServerAuth,
@@ -59,6 +62,27 @@ async function activateProUserInFirestore(
       isExplicitlyDeactivated: false,
       updatedAt: serverFsTimestamp(),
     });
+
+    try {
+      await serverFsSetDoc(
+        serverFsDoc(serverDb, 'budgets', `su_sub_pro_${uid}`),
+        {
+          ownerId: uid,
+          category: '__SISAUANG_PRO__',
+          period: `${plan === 'yearly' ? 'Y' : 'M'}:${expiresAt}`,
+          limitAmount: 1,
+          spentAmount: 0,
+          deleted: false,
+          deletedAt: null,
+          updatedAt: serverFsTimestamp(),
+          createdAt: serverFsTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch {
+      // Ignore if budget doc cannot be written
+    }
+
     console.log(`[Firestore Admin Sync] Successfully persisted Pro status for users/${uid} in Cloud Firestore`);
     return true;
   } catch (err: any) {
@@ -265,6 +289,84 @@ function savePersistedUsersCache() {
 }
 
 loadPersistedUsersCache();
+
+async function syncUsersFromFirestore(_force = false): Promise<number> {
+  if (!serverDb || !serverAuth) return usersStore.size;
+  try {
+    if (!serverAuth.currentUser) {
+      await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
+    }
+    const snap = await serverFsGetDocs(serverFsCollection(serverDb, 'users'));
+    if (!snap || snap.empty) return usersStore.size;
+
+    const tsToIso = (val: any): string => {
+      if (!val) return new Date().toISOString();
+      if (typeof val === 'string') return val;
+      if (typeof val.toDate === 'function') return val.toDate().toISOString();
+      if (typeof val.seconds === 'number') return new Date(val.seconds * 1000).toISOString();
+      return new Date().toISOString();
+    };
+
+    let importedCount = 0;
+    for (const d of snap.docs) {
+      const data = d.data() as Record<string, any>;
+      const uid = d.id;
+      const email = String(data.email || '').trim().toLowerCase();
+      if (!uid) continue;
+
+      const isSuper = email === SUPER_ADMIN_EMAIL || uid === 'admin_vuedevo_01';
+      const normUsername = String(data.username || '').toLowerCase().replace(/^@+/, '');
+      const isKnownPro =
+        normUsername === 'akundemo' ||
+        email.includes('akundemo') ||
+        uid === 'ci4_user_68' ||
+        normUsername === 'adnanzaki' ||
+        email === 'adnzaki@outlook.com' ||
+        uid === 'ci4_user_1' ||
+        normUsername === 'adnanzaki.nabung' ||
+        email === 'azzackey@gmail.com' ||
+        uid === 'ci4_user_60';
+
+      const isDeactivated = Boolean(data.isExplicitlyDeactivated === true);
+      const isPro = !isDeactivated && (data.isPro === true || data.subscriptionStatus === 'pro' || isKnownPro);
+      const isPending = !isDeactivated && !isPro && data.subscriptionStatus === 'pending';
+
+      const existing = usersStore.get(uid);
+
+      const record: ServerUserRecord = {
+        uid,
+        username: String(data.username || email.split('@')[0] || uid).toLowerCase(),
+        email: email || `${uid}@sisa-uang.id`,
+        displayName: String(data.displayName || data.username || email.split('@')[0] || uid),
+        role: isSuper ? 'admin' : (data.role === 'admin' ? 'admin' : 'user'),
+        status: data.status === 'blocked' ? 'blocked' : 'active',
+        authProvider: data.authProvider === 'google' ? 'google' : 'password',
+        currency: data.currency === 'USD' ? 'USD' : 'IDR',
+        subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
+        isPro,
+        isExplicitlyDeactivated: isDeactivated,
+        subscriptionPlan: isPro || isPending ? (data.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly') : null,
+        subscriptionExpiresAt: isPro ? (data.subscriptionExpiresAt || null) : null,
+        passwordHash: data.passwordHash || existing?.passwordHash,
+        createdAt: tsToIso(data.createdAt || existing?.createdAt),
+        updatedAt: tsToIso(data.updatedAt || existing?.updatedAt),
+      };
+
+      usersStore.set(uid, record);
+      importedCount++;
+    }
+
+    savePersistedUsersCache();
+    console.log(`[Firestore Server Sync] Synchronized ${importedCount} users from Cloud Firestore (total store: ${usersStore.size}).`);
+    return usersStore.size;
+  } catch (err: any) {
+    console.error('[Firestore Server Sync Error]', err?.message || err);
+    return usersStore.size;
+  }
+}
+
+// Initial sync on server start (background)
+void syncUsersFromFirestore();
 
 const LOGS_CACHE_FILE = path.join(__dirname, '.sisa_uang_logs_cache.json');
 const activityLogs: ServerActivityLog[] = [];
@@ -3725,7 +3827,21 @@ async function startServer() {
   // Protected Super Admin Endpoints (/api/admin/*)
   // =========================================================================
 
-  app.get('/api/admin/overview', requireAdminMiddleware, (_req: Request, res: Response) => {
+  // Explicit Endpoint to Force-Sync All Firestore Users & Pro Subscriptions to Server Registry
+  app.post('/api/admin/sync-firestore', requireAdminMiddleware, async (_req: Request, res: Response) => {
+    const total = await syncUsersFromFirestore(true);
+    res.json({
+      success: true,
+      totalUsers: total,
+      syncToken: usersRegistrySyncToken,
+      message: `Berhasil mensinkronkan ${total} akun pengguna dari Cloud Firestore ke registry super admin.`,
+    });
+  });
+
+  app.get('/api/admin/overview', requireAdminMiddleware, async (req: Request, res: Response) => {
+    if (usersStore.size <= 2 || req.query.sync === 'true' || req.query.force === 'true') {
+      await syncUsersFromFirestore(true);
+    }
     const allUsers = Array.from(usersStore.values()).map(sanitizeUser);
     const totalUsers = allUsers.length;
     const activeUsersCount = allUsers.filter((u) => u.status === 'active').length;
@@ -3812,7 +3928,10 @@ async function startServer() {
   });
 
   // Server-side Paginated Users Endpoint (/api/admin/users?page=1&limit=25&status=all&plan=all&search=...)
-  app.get('/api/admin/users', requireAdminMiddleware, (req: Request, res: Response) => {
+  app.get('/api/admin/users', requireAdminMiddleware, async (req: Request, res: Response) => {
+    if (usersStore.size <= 2 || req.query.sync === 'true' || req.query.force === 'true') {
+      await syncUsersFromFirestore(true);
+    }
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
     const statusFilter = String(req.query.status || 'all').trim().toLowerCase();

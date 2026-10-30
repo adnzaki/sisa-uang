@@ -419,7 +419,7 @@ export const useAdminStore = defineStore('admin', () => {
       }
       localAdminUsersSyncToken = remoteToken;
 
-      if ((!data.items || data.items.length <= 1) && !forceServerReload) {
+      if ((!data.items || data.items.length <= 2 || (data.summary && Number(data.summary.totalUsers) <= 2)) && !forceServerReload) {
         await syncFirestoreUsersToServerRegistry(true);
         return;
       }
@@ -564,11 +564,12 @@ export const useAdminStore = defineStore('admin', () => {
       firestoreUsersSyncedInSession ||
       (typeof sessionStorage !== 'undefined' &&
         sessionStorage.getItem('sisauang_admin_synced_session') === 'true');
-    if (!force && isAlreadySynced && users.value.length > 1) {
+    if (!force && isAlreadySynced && users.value.length > 2) {
       return usersSummary.value.totalUsers;
     }
 
     try {
+      void apiClient.post('/admin/sync-firestore').catch(() => null);
       await ensureSuperAdminFirebaseSession();
       const targetDb = sisaUangDb || db;
       // Strictly limit Firestore sync query to max 100 documents to protect free read quota
@@ -769,6 +770,9 @@ export const useAdminStore = defineStore('admin', () => {
           proUsersCount: Number(data.summary.proUsersCount) || 0,
           pendingProUsersCount: Number(data.summary.pendingProUsersCount) || 0,
         };
+      }
+      if (usersSummary.value.totalUsers <= 2) {
+        void syncFirestoreUsersToServerRegistry(true);
       }
       if (typeof data.totalLogsCount === 'number' && data.totalLogsCount > totalLogsCount.value) {
         totalLogsCount.value = data.totalLogsCount;

@@ -181,6 +181,13 @@ onMounted(() => {
   adminStore.startRealtimeMonitoring();
 });
 
+async function handleRefreshAdminData() {
+  await Promise.all([
+    adminStore.syncFirestoreUsersToServerRegistry(true),
+    adminStore.fetchAdminOverview(false),
+  ]);
+}
+
 // Server-side Pagination for User Management (25 users per page)
 const USERS_PAGE_SIZE = 25;
 const usersCurrentPage = ref(1);
@@ -335,7 +342,7 @@ onMounted(() => {
         <button
           type="button"
           class="w-full sm:w-auto min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1.5 transition-colors"
-          @click="adminStore.fetchAdminOverview(false)"
+          @click="handleRefreshAdminData"
         >
           <RefreshCw class="w-4 h-4 shrink-0" :class="adminStore.isLoading ? 'animate-spin' : ''" />
           <span>Segarkan Data</span>

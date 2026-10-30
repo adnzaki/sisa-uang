@@ -867,44 +867,43 @@ export const useAuthStore = defineStore('auth', () => {
             getDoc(doc(db, 'users', candUid)).catch(() => null),
           ]);
 
+          let budgetIndicatesPro = false;
           if (markerSnap && markerSnap.exists()) {
             const mData = markerSnap.data();
             const rawPeriod = String(mData?.period || '');
-            if (mData?.deleted === true || rawPeriod === 'pro-inactive') {
-              resolvedStatus = 'free';
-              resolvedPlan = null;
-              resolvedExpiresAt = null;
-              foundFirestoreProRecord = true;
-              break;
-            } else if (rawPeriod.startsWith('P:')) {
-              resolvedStatus = 'pending';
-              resolvedPlan = rawPeriod.slice(2, 3) === 'Y' ? 'yearly' : 'monthly';
-              resolvedExpiresAt = null;
-              foundFirestoreProRecord = true;
-              break;
-            } else {
-              let plan: 'monthly' | 'yearly' = 'monthly';
-              let exp: string | null = null;
-              if (rawPeriod.startsWith('Y:')) {
-                plan = 'yearly';
-                exp = rawPeriod.slice(2) || null;
-              } else if (rawPeriod.startsWith('M:')) {
-                plan = 'monthly';
-                exp = rawPeriod.slice(2) || null;
-              }
-              if (isSubscriptionActiveByDate('pro', true, exp, false)) {
-                resolvedStatus = 'pro';
-                resolvedPlan = plan;
-                resolvedExpiresAt = exp;
+            if (mData?.deleted !== true && rawPeriod !== 'pro-inactive') {
+              if (rawPeriod.startsWith('P:')) {
+                resolvedStatus = 'pending';
+                resolvedPlan = rawPeriod.slice(2, 3) === 'Y' ? 'yearly' : 'monthly';
+                resolvedExpiresAt = null;
                 foundFirestoreProRecord = true;
-                break;
+              } else {
+                let plan: 'monthly' | 'yearly' = 'monthly';
+                let exp: string | null = null;
+                if (rawPeriod.startsWith('Y:')) {
+                  plan = 'yearly';
+                  exp = rawPeriod.slice(2) || null;
+                } else if (rawPeriod.startsWith('M:')) {
+                  plan = 'monthly';
+                  exp = rawPeriod.slice(2) || null;
+                }
+                if (isSubscriptionActiveByDate('pro', true, exp, false)) {
+                  resolvedStatus = 'pro';
+                  resolvedPlan = plan;
+                  resolvedExpiresAt = exp;
+                  foundFirestoreProRecord = true;
+                  budgetIndicatesPro = true;
+                }
               }
             }
           }
 
           if (userDocSnap && userDocSnap.exists()) {
             const uData = userDocSnap.data();
-            if (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) {
+            const userIsPro =
+              (uData?.subscriptionStatus === 'pro' || uData?.isPro === true) &&
+              uData?.isExplicitlyDeactivated !== true;
+            if (userIsPro) {
               const plan: 'monthly' | 'yearly' =
                 uData?.subscriptionPlan === 'yearly' ? 'yearly' : resolvedPlan || 'monthly';
               const exp: string | null = uData?.subscriptionExpiresAt || resolvedExpiresAt || null;
@@ -915,22 +914,22 @@ export const useAuthStore = defineStore('auth', () => {
                 foundFirestoreProRecord = true;
                 break;
               }
-            } else if (uData?.isExplicitlyDeactivated === true && resolvedStatus !== 'pro') {
+            } else if (uData?.isExplicitlyDeactivated === true) {
               resolvedStatus = 'free';
               resolvedPlan = null;
               resolvedExpiresAt = null;
               foundFirestoreProRecord = true;
               break;
-            } else if (uData?.subscriptionStatus === 'pending' && resolvedStatus !== 'pro') {
+            } else if (uData?.subscriptionStatus === 'pending' && !budgetIndicatesPro) {
               resolvedStatus = 'pending';
               resolvedPlan = uData?.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly';
               resolvedExpiresAt = null;
               foundFirestoreProRecord = true;
-            } else if (!foundFirestoreProRecord) {
-              resolvedStatus = 'free';
-              resolvedPlan = null;
-              resolvedExpiresAt = null;
             }
+          }
+
+          if (budgetIndicatesPro && resolvedStatus === 'pro') {
+            break;
           }
         } catch {
           // Ignore single doc check failure
