@@ -20,6 +20,7 @@ import AppModal from './AppModal.vue';
 const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0';
 const RELEASE_VERSION = '1.0.0';
 const RELEASE_DATE = 'Oktober 2026';
+const BUILD_NUMBER = '10006';
 
 const notificationStore = useNotificationStore();
 const authStore = useAuthStore();
@@ -247,6 +248,11 @@ watch(
             >
               <Rocket class="w-3.5 h-3.5" />
               <span>Rilis Final · v{{ RELEASE_VERSION }}</span>
+            </span>
+            <span
+              class="inline-flex items-center px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-400/25 text-emerald-300 text-[11px] font-mono font-medium"
+            >
+              <span>Build {{ BUILD_NUMBER }}</span>
             </span>
             <span
               class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 text-slate-200 text-[11px] font-mono"
