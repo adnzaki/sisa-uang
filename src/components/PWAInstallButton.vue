@@ -67,35 +67,35 @@ async function handleInstallClick() {
     <!-- VARIANT 3: Settings Page Detailed Card -->
     <div
       v-else-if="variant === 'card'"
-      class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/25 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+      class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/25 p-4 sm:p-6 space-y-4 shadow-2xs"
     >
-      <div class="flex items-start gap-3.5 min-w-0">
-        <div class="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-          <Smartphone class="w-5 h-5" />
-        </div>
-        <div class="space-y-1 min-w-0">
-          <div class="flex flex-wrap items-center gap-2">
-            <h3 class="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100">
+      <div class="border-b border-emerald-200/60 dark:border-emerald-900/40 pb-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <Smartphone class="w-4 h-4 text-emerald-600 shrink-0" />
+            <h3 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
               Install Aplikasi Sisa Uang (PWA)
             </h3>
-            <span class="px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-bold">
-              Siap Diinstall
-            </span>
           </div>
-          <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-            Pasang Sisa Uang langsung ke <strong>Homescreen</strong> ponsel (Android/iOS) atau <strong>Start Menu / Desktop</strong> komputer Anda untuk akses cepat layar penuh tanpa bilah alamat browser.
-          </p>
+          <span class="px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-bold shrink-0">
+            Siap Diinstall
+          </span>
         </div>
+        <p class="mt-2.5 text-xs text-slate-600 dark:text-slate-400 leading-relaxed w-full">
+          Pasang Sisa Uang langsung ke <strong>Homescreen</strong> ponsel (Android/iOS) atau <strong>Start Menu / Desktop</strong> komputer Anda untuk akses cepat layar penuh tanpa bilah alamat browser.
+        </p>
       </div>
 
-      <button
-        type="button"
-        class="w-full sm:w-auto min-h-[46px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs"
-        @click="handleInstallClick"
-      >
-        <Download class="w-4 h-4 shrink-0" />
-        <span>Install ke Perangkat</span>
-      </button>
+      <div>
+        <button
+          type="button"
+          class="w-full sm:w-auto min-h-[42px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs cursor-pointer"
+          @click="handleInstallClick"
+        >
+          <Download class="w-4 h-4 shrink-0" />
+          <span>Install ke Perangkat</span>
+        </button>
+      </div>
     </div>
 
     <!-- Modal Panduan Installasi (iOS Safari, Android Chrome, & Desktop Start Menu) -->

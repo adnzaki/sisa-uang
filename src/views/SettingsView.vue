@@ -5,6 +5,7 @@ import { RouterLink, useRouter, useRoute } from 'vue-router';
 import {
   Sun,
   Moon,
+  SunMoon,
   Monitor,
   Globe,
   Type,
@@ -381,10 +382,13 @@ function handleGoToAddAccount() {
     <!-- Appearance & Theme -->
     <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
       <div>
-        <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
-          {{ t('theme.label') }}
-        </h2>
-        <p class="text-xs text-slate-500 dark:text-slate-400">
+        <div class="flex items-center gap-2.5">
+          <SunMoon class="w-4 h-4 text-emerald-600 shrink-0" />
+          <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            {{ t('theme.label') }}
+          </h2>
+        </div>
+        <p class="mt-2.5 text-xs text-slate-500 dark:text-slate-400 leading-relaxed w-full">
           Mendukung tema terang, gelap, maupun otomatis mengikuti pengaturan sistem perangkat Anda.
         </p>
       </div>
@@ -436,11 +440,16 @@ function handleGoToAddAccount() {
 
     <!-- Language & Currency (Intlify vue-i18n) -->
     <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
-      <div class="flex items-center gap-2">
-        <Globe class="w-4 h-4 text-emerald-600 shrink-0" />
-        <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
-          Bahasa & Format Lokal
-        </h2>
+      <div>
+        <div class="flex items-center gap-2.5">
+          <Globe class="w-4 h-4 text-emerald-600 shrink-0" />
+          <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            Bahasa &amp; Format Lokal
+          </h2>
+        </div>
+        <p class="mt-2.5 text-xs text-slate-500 dark:text-slate-400 leading-relaxed w-full">
+          Pilih bahasa pengantar antarmuka serta format mata uang yang digunakan untuk pencatatan keuangan Anda.
+        </p>
       </div>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -512,22 +521,23 @@ function handleGoToAddAccount() {
 
     <!-- Typography for Money Numbers (Sans Default vs Monospace / Coding Font) -->
     <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
-      <div class="flex items-start justify-between gap-3">
-        <div class="space-y-0.5">
-          <div class="flex items-center gap-2">
+      <div>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2.5 min-w-0">
             <Type class="w-4 h-4 text-emerald-600 shrink-0" />
             <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Tipografi & Jenis Font Angka Uang
+              Tipografi &amp; Jenis Font Angka Uang
             </h2>
           </div>
-          <p class="text-xs text-slate-500 dark:text-slate-400">
-            Pilih jenis huruf untuk menampilkan nominal saldo, pemasukan, dan pengeluaran di seluruh aplikasi.
-          </p>
+
+          <span class="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/70 dark:border-emerald-900/50 text-[11px] font-bold text-emerald-700 dark:text-emerald-300 shrink-0">
+            {{ themeStore.moneyFont === 'sans' ? 'Standar (Default)' : 'Coding / Mono' }}
+          </span>
         </div>
 
-        <span class="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/70 dark:border-emerald-900/50 text-[11px] font-bold text-emerald-700 dark:text-emerald-300 shrink-0">
-          {{ themeStore.moneyFont === 'sans' ? 'Standar (Default)' : 'Coding / Mono' }}
-        </span>
+        <p class="mt-2.5 text-xs text-slate-500 dark:text-slate-400 leading-relaxed w-full">
+          Pilih jenis huruf untuk menampilkan nominal saldo, pemasukan, dan pengeluaran di seluruh aplikasi.
+        </p>
       </div>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -620,54 +630,54 @@ function handleGoToAddAccount() {
     <!-- Dedicated Report Settings Page Shortcut Card (for Regular Users) -->
     <section
       v-if="!authStore.isSuperAdmin"
-      class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/25 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 w-full min-w-0"
+      class="rounded-2xl border border-emerald-200/80 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/25 p-4 sm:p-5 space-y-4 w-full min-w-0"
     >
-      <div class="flex items-start gap-3 min-w-0">
-        <div class="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-          <PenTool class="w-5 h-5" />
-        </div>
-        <div class="space-y-1 min-w-0">
-          <div class="flex flex-wrap items-center gap-2">
-            <h2 class="text-sm font-bold text-slate-900 dark:text-slate-100">
+      <div>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <PenTool class="w-4 h-4 text-emerald-600 shrink-0" />
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
               Pengaturan Laporan PDF (Kop Institusi, Judul &amp; Tanda Tangan)
             </h2>
-            <span
-              v-if="!authStore.isProUser"
-              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 text-[10px] font-bold uppercase tracking-wider"
-            >
-              <Crown class="w-3 h-3 shrink-0" />
-              <span>Khusus Pelanggan Pro</span>
-            </span>
           </div>
-          <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-            Pengaturan kop masjid/musholla/organisasi, kustomisasi judul laporan, serta daftar penandatangan kini tersedia di sub-menu <strong>Pengaturan &rarr; Laporan</strong> (eksklusif untuk pelanggan SisaUang Pro).
-          </p>
+
+          <span
+            v-if="!authStore.isProUser"
+            class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 text-[10px] font-bold uppercase tracking-wider shrink-0"
+          >
+            <Crown class="w-3 h-3 shrink-0" />
+            <span>Khusus Pelanggan Pro</span>
+          </span>
         </div>
+
+        <p class="mt-2.5 text-xs text-slate-600 dark:text-slate-400 leading-relaxed w-full">
+          Pengaturan kop masjid/musholla/organisasi, kustomisasi judul laporan, serta daftar penandatangan kini tersedia di sub-menu <strong>Pengaturan &rarr; Laporan</strong> (eksklusif untuk pelanggan SisaUang Pro).
+        </p>
       </div>
 
-      <RouterLink
-        to="/report-settings"
-        class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 shrink-0 transition-colors"
-      >
-        <FileCheck2 class="w-4 h-4 shrink-0" />
-        <span>Buka Pengaturan Laporan</span>
-      </RouterLink>
+      <div class="pt-1">
+        <RouterLink
+          to="/report-settings"
+          class="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors"
+        >
+          <FileCheck2 class="w-4 h-4 shrink-0" />
+          <span>Buka Pengaturan Laporan</span>
+        </RouterLink>
+      </div>
     </section>
 
     <!-- Account Profile Summary + DisplayName & Username Editor -->
-    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-5 w-full min-w-0">
-      <div class="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-        <div class="flex items-start sm:items-center gap-2 min-w-0">
-          <UserIcon class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5 sm:mt-0" />
-          <div class="min-w-0">
-            <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Profil Akun (Display Name & Username Login)
-            </h2>
-            <p class="text-xs text-slate-500 dark:text-slate-400 break-words">
-              Atur <strong>Display Name</strong> (mendukung spasi & karakter bebas) dan <strong>Username</strong> yang dapat digunakan untuk login layaknya alamat email.
-            </p>
-          </div>
+    <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
+      <div class="border-b border-slate-100 dark:border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <UserIcon class="w-4 h-4 text-emerald-600 shrink-0" />
+          <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            Profil Akun (Display Name &amp; Username Login)
+          </h2>
         </div>
+        <p class="mt-2.5 text-xs text-slate-500 dark:text-slate-400 leading-relaxed w-full">
+          Atur <strong>Display Name</strong> (mendukung spasi &amp; karakter bebas) dan <strong>Username</strong> yang dapat digunakan untuk login layaknya alamat email.
+        </p>
       </div>
 
       <form class="grid grid-cols-1 sm:grid-cols-2 gap-3.5" @submit.prevent="handleSaveProfile">
@@ -877,18 +887,16 @@ function handleGoToAddAccount() {
 
     <!-- Security & Change Password Section -->
     <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
-      <div class="flex items-start sm:items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 gap-3">
-        <div class="flex items-start sm:items-center gap-2 min-w-0">
-          <KeyRound class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5 sm:mt-0" />
-          <div class="min-w-0">
-            <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Keamanan &amp; Ubah Kata Sandi
-            </h2>
-            <p class="text-xs text-slate-500 dark:text-slate-400 break-words">
-              Perbarui kata sandi akun Anda secara berkala untuk menjaga keamanan data keuangan Anda.
-            </p>
-          </div>
+      <div class="border-b border-slate-100 dark:border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <KeyRound class="w-4 h-4 text-emerald-600 shrink-0" />
+          <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            Keamanan &amp; Ubah Kata Sandi
+          </h2>
         </div>
+        <p class="mt-2.5 text-xs text-slate-500 dark:text-slate-400 leading-relaxed w-full">
+          Perbarui kata sandi akun Anda secara berkala untuk menjaga keamanan data keuangan Anda.
+        </p>
       </div>
 
       <form class="space-y-3.5" @submit.prevent="handleChangePassword">
@@ -995,27 +1003,28 @@ function handleGoToAddAccount() {
 
     <!-- Multi-Account Switcher Section -->
     <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 gap-3">
-        <div class="flex items-start sm:items-center gap-2 min-w-0">
-          <UserPlus class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5 sm:mt-0" />
-          <div class="min-w-0">
+      <div class="border-b border-slate-100 dark:border-slate-800 pb-3 space-y-2.5">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <UserPlus class="w-4 h-4 text-emerald-600 shrink-0" />
             <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
               Manajemen Multi-Akun (Pindah Akun Cepat)
             </h2>
-            <p class="text-xs text-slate-500 dark:text-slate-400 break-words">
-              Simpan beberapa akun pengguna di perangkat ini dan beralih antar akun secara instan tanpa harus memasukkan ulang kata sandi.
-            </p>
           </div>
+
+          <button
+            type="button"
+            class="min-h-[40px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0 cursor-pointer w-full sm:w-auto"
+            @click="handleGoToAddAccount"
+          >
+            <UserPlus class="w-3.5 h-3.5 shrink-0" />
+            <span>Tambah Akun Lain</span>
+          </button>
         </div>
 
-        <button
-          type="button"
-          class="min-h-[40px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0 cursor-pointer"
-          @click="handleGoToAddAccount"
-        >
-          <UserPlus class="w-3.5 h-3.5 shrink-0" />
-          <span>Tambah Akun Lain</span>
-        </button>
+        <p class="mt-2.5 text-xs text-slate-500 dark:text-slate-400 leading-relaxed w-full">
+          Simpan beberapa akun pengguna di perangkat ini dan beralih antar akun secara instan tanpa harus memasukkan ulang kata sandi.
+        </p>
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1094,53 +1103,54 @@ function handleGoToAddAccount() {
 
     <!-- Device & Session Management Section (Primary Device with Email OTP & Remote Session Revocation) -->
     <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4 w-full min-w-0">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 gap-3">
-        <div class="flex items-start sm:items-center gap-2 min-w-0">
-          <Smartphone class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5 sm:mt-0" />
-          <div class="min-w-0">
-            <div class="flex flex-wrap items-center gap-2">
+      <div class="border-b border-slate-100 dark:border-slate-800 pb-3 space-y-2.5">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-2 min-w-0">
+            <div class="flex items-center gap-2.5">
+              <Smartphone class="w-4 h-4 text-emerald-600 shrink-0" />
               <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
                 Manajemen Perangkat &amp; Sesi Aktif
               </h2>
-              <span
-                v-if="authStore.isCurrentDevicePrimary"
-                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold"
-              >
-                <ShieldCheck class="w-3 h-3 shrink-0" />
-                <span>Perangkat Utama</span>
-              </span>
             </div>
-            <p class="text-xs text-slate-500 dark:text-slate-400 break-words mt-0.5">
-              Pantau seluruh perangkat yang masuk ke akun ini. Hanya <strong>Perangkat Utama</strong> (diverifikasi melalui OTP ke email terdaftar <strong>{{ authStore.user?.email }}</strong>) yang dapat menghapus atau mencabut sesi di perangkat lain.
-            </p>
+            <span
+              v-if="authStore.isCurrentDevicePrimary"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold shrink-0"
+            >
+              <ShieldCheck class="w-3 h-3 shrink-0" />
+              <span>Perangkat Utama</span>
+            </span>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              :disabled="authStore.isSessionsLoading"
+              class="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-600 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+              @click="handleManualRefreshSessions"
+            >
+              <RefreshCw class="w-3.5 h-3.5" :class="authStore.isSessionsLoading ? 'animate-spin' : ''" />
+              <span>Segarkan Sesi</span>
+            </button>
+
+            <button
+              v-if="
+                authStore.isCurrentDevicePrimary &&
+                authStore.deviceSessions.filter((s) => s.deviceId !== authStore.currentDeviceId).length > 0
+              "
+              type="button"
+              :disabled="authStore.isSessionsLoading"
+              class="min-h-[38px] px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+              @click="handleRevokeAllOtherSessions"
+            >
+              <LogOut class="w-3.5 h-3.5 shrink-0" />
+              <span>Cabut Semua Sesi Lain</span>
+            </button>
           </div>
         </div>
 
-        <div class="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            :disabled="authStore.isSessionsLoading"
-            class="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-600 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
-            @click="handleManualRefreshSessions"
-          >
-            <RefreshCw class="w-3.5 h-3.5" :class="authStore.isSessionsLoading ? 'animate-spin' : ''" />
-            <span>Segarkan Sesi</span>
-          </button>
-
-          <button
-            v-if="
-              authStore.isCurrentDevicePrimary &&
-              authStore.deviceSessions.filter((s) => s.deviceId !== authStore.currentDeviceId).length > 0
-            "
-            type="button"
-            :disabled="authStore.isSessionsLoading"
-            class="min-h-[38px] px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-            @click="handleRevokeAllOtherSessions"
-          >
-            <LogOut class="w-3.5 h-3.5 shrink-0" />
-            <span>Cabut Semua Sesi Lain</span>
-          </button>
-        </div>
+        <p class="mt-2.5 text-xs text-slate-500 dark:text-slate-400 leading-relaxed w-full">
+          Pantau seluruh perangkat yang masuk ke akun ini. Hanya <strong>Perangkat Utama</strong> (diverifikasi melalui OTP ke email terdaftar <strong>{{ authStore.user?.email }}</strong>) yang dapat menghapus atau mencabut sesi di perangkat lain.
+        </p>
       </div>
 
       <!-- Primary Device Status & Email OTP Verification Box -->
@@ -1363,15 +1373,16 @@ function handleGoToAddAccount() {
 
     <!-- Legal & Support Section for Midtrans Compliance -->
     <section class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-4 sm:p-6 space-y-4 shadow-2xs">
-      <div class="border-b border-slate-100 dark:border-slate-800 pb-3 flex items-center justify-between">
-        <div>
+      <div class="border-b border-slate-100 dark:border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <ShieldAlert class="w-4 h-4 text-emerald-600 shrink-0" />
           <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
             Legalitas, Kebijakan &amp; Bantuan Pelanggan
           </h2>
-          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Informasi lisensi platform, kebijakan transaksi pembayaran, serta saluran bantuan resmi SisaUang.
-          </p>
         </div>
+        <p class="mt-2.5 text-xs text-slate-500 dark:text-slate-400 leading-relaxed w-full">
+          Informasi lisensi platform, kebijakan transaksi pembayaran, serta saluran bantuan resmi SisaUang.
+        </p>
       </div>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
