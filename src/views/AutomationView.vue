@@ -29,7 +29,7 @@ import { useAuthStore } from '../stores/auth';
 import { useFinanceStore, formatHolderName } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
 import { useNotificationStore } from '../stores/notification';
-import { useAutomationStore } from '../stores/automation';
+import { useAutomationStore, getWibDateTime, getLocalTodayIsoDate } from '../stores/automation';
 import AppModal from '../components/AppModal.vue';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 import type { AutomationItem } from '../types/automation';
@@ -82,6 +82,9 @@ async function ensureDataReady(force = false) {
     await Promise.all(tasks);
   }
   automationStore.subscribeToAutomations(uid);
+
+  // Automatically check & execute any scheduled automations that are due
+  void automationStore.checkAndTriggerOnActivity();
 }
 
 async function handleManualRefresh() {
@@ -90,9 +93,10 @@ async function handleManualRefresh() {
   isRefreshing.value = true;
   try {
     await ensureDataReady(true);
+    await automationStore.checkAndTriggerOnActivity();
     notificationStore.notifySuccess(
       'Jadwal Disegarkan',
-      'Daftar jadwal transaksi otomatis berhasil diperbarui dari Cloud Firestore.'
+      'Daftar jadwal transaksi otomatis berhasil diperbarui dan dievaluasi.'
     );
   } catch (err: any) {
     notificationStore.notifyError('Gagal Menyegarkan Jadwal', err?.message || err);
@@ -103,6 +107,7 @@ async function handleManualRefresh() {
 
 onMounted(async () => {
   await ensureDataReady(false);
+  void automationStore.checkAndTriggerOnActivity();
 });
 
 onUnmounted(() => {
@@ -521,19 +526,44 @@ function formatDaysDisplay(days: number[]): string {
 }
 
 function getExecutionStatusText(rule: AutomationItem): { text: string; color: string } {
-  const todayIso = new Date().toISOString().slice(0, 10);
-  if (rule.lastExecutedDate === todayIso) {
-    return { text: 'Sudah dicatat hari ini', color: 'text-emerald-600 dark:text-emerald-400' };
+  const { dateIso: todayWibIso, timeHhMm: currentWibTime, dayOfMonth: todayDay } = getWibDateTime();
+  const localIso = getLocalTodayIsoDate();
+  const localHhMm = `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`;
+
+  // 1. Sudah dicatat hari ini (cek tanggal WIB atau lokal)
+  if (rule.lastExecutedDate === todayWibIso || rule.lastExecutedDate === localIso) {
+    return { text: 'Sudah dicatat hari ini', color: 'text-emerald-600 dark:text-emerald-400 font-semibold' };
   }
-  if (rule.lastCancelledDate === todayIso) {
+
+  // 2. Dibatalkan untuk hari ini
+  if (rule.lastCancelledDate === todayWibIso || rule.lastCancelledDate === localIso) {
     return { text: 'Dibatalkan untuk hari ini', color: 'text-slate-500 dark:text-slate-400' };
   }
+
+  // 3. Ditunda
   if (rule.snoozedUntil && new Date(rule.snoozedUntil).getTime() > Date.now()) {
     const snoozeDate = new Date(rule.snoozedUntil);
     const timeStr = `${String(snoozeDate.getHours()).padStart(2, '0')}:${String(snoozeDate.getMinutes()).padStart(2, '0')}`;
-    return { text: `Ditunda s/d ${timeStr}`, color: 'text-blue-600 dark:text-blue-400' };
+    return { text: `Ditunda s/d ${timeStr} WIB`, color: 'text-blue-600 dark:text-blue-400 font-medium' };
   }
-  return { text: 'Menunggu jadwal', color: 'text-slate-500 dark:text-slate-400' };
+
+  // 4. Jadwal hari ini
+  const isScheduledToday =
+    rule.scheduleDays &&
+    (rule.scheduleDays.includes(todayDay) || rule.scheduleDays.includes(new Date().getDate()));
+
+  if (isScheduledToday) {
+    const isDue = currentWibTime >= rule.executionTime || localHhMm >= rule.executionTime;
+    if (isDue) {
+      if (rule.mode === 'with_confirmation') {
+        return { text: 'Menunggu konfirmasi Anda', color: 'text-amber-600 dark:text-amber-400 font-semibold' };
+      }
+      return { text: 'Jadwal tercapai (Sedang diproses...)', color: 'text-emerald-600 dark:text-emerald-400 font-semibold' };
+    }
+    return { text: `Menunggu jadwal (${rule.executionTime} WIB)`, color: 'text-slate-500 dark:text-slate-400' };
+  }
+
+  return { text: 'Tidak ada jadwal hari ini', color: 'text-slate-500 dark:text-slate-400' };
 }
 </script>
 

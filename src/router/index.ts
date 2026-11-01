@@ -280,6 +280,9 @@ router.afterEach((to) => {
   if (authStore.isAuthenticated && !authStore.isSuperAdmin && authStore.user?.uid) {
     const financeStore = useFinanceStore();
     void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid, false);
+
+    const automationStore = useAutomationStore();
+    void automationStore.checkAndTriggerOnActivity();
   }
 });
 

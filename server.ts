@@ -2071,6 +2071,93 @@ async function startServer() {
   // Automations Persistence Endpoints (/api/users/:uid/automations)
   // =========================================================================
 
+  // Timezone & Server Diagnostics Endpoint (UTC vs Asia/Jakarta WIB)
+  app.get('/api/time', (_req: Request, res: Response) => {
+    const now = new Date();
+    try {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).formatToParts(now);
+
+      const getPart = (type: string) => parts.find((p) => p.type === type)?.value || '00';
+      const wibDate = `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
+      const wibTime = `${getPart('hour')}:${getPart('minute')}`;
+      const wibSeconds = `${getPart('hour')}:${getPart('minute')}:${getPart('second')}`;
+      const wibDay = parseInt(getPart('day'), 10);
+
+      res.json({
+        success: true,
+        utcIso: now.toISOString(),
+        wibDate,
+        wibTime,
+        wibSeconds,
+        wibDay,
+        timeZone: 'Asia/Jakarta (WIB, UTC+7)',
+        serverLocalHours: now.getHours(),
+        serverLocalMinutes: now.getMinutes(),
+      });
+    } catch (e: any) {
+      res.json({
+        success: true,
+        utcIso: now.toISOString(),
+        error: e?.message || 'Intl error',
+      });
+    }
+  });
+
+  // Evaluate due automations against WIB timezone
+  app.get('/api/users/:uid/automations/evaluate', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_');
+
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(now);
+
+    const getPart = (type: string) => parts.find((p) => p.type === type)?.value || '00';
+    const todayWibIso = `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
+    const currentWibTime = `${getPart('hour')}:${getPart('minute')}`;
+    const currentWibDay = parseInt(getPart('day'), 10);
+
+    let userRules = Array.from(automationsStore.values()).filter(
+      (r) => (r.ownerId === uid || r.ownerId === rawUid) && !r.deleted
+    );
+
+    const dueRules = userRules.filter((rule) => {
+      if (!rule.isActive) return false;
+      if (!rule.scheduleDays.includes(currentWibDay)) return false;
+      if (currentWibTime < rule.executionTime) return false;
+      if (rule.lastExecutedDate === todayWibIso) return false;
+      if (rule.lastCancelledDate === todayWibIso) return false;
+      if (rule.snoozedUntil && new Date(rule.snoozedUntil).getTime() > now.getTime()) return false;
+      return true;
+    });
+
+    res.json({
+      success: true,
+      wibDate: todayWibIso,
+      wibTime: currentWibTime,
+      wibDay: currentWibDay,
+      totalRules: userRules.length,
+      dueRulesCount: dueRules.length,
+      dueRules,
+    });
+  });
+
   app.get('/api/users/:uid/automations', (req: Request, res: Response) => {
     const rawUid = String(req.params.uid || '').trim();
     const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_');

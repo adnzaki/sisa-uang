@@ -28,19 +28,72 @@ import type { AutomationItem, AutomationsCacheData } from '../types/automation';
 const CACHE_KEY_PREFIX = 'su_automations_cache_';
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL to save Firestore read quota
 
-function getTodayIsoDate(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
+/**
+ * Precise WIB (Waktu Indonesia Barat, UTC+7 / Asia/Jakarta) and Local Timezone Helpers.
+ * Guarantees that automated schedules ("Pukul 09:00 WIB") execute accurately regardless
+ * of whether the environment clock runs in UTC (like cloud containers) or local device time.
+ */
+export function getWibDateTime(refDate: Date = new Date()): {
+  dateIso: string;
+  timeHhMm: string;
+  dayOfMonth: number;
+  hours: number;
+  minutes: number;
+} {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(refDate);
+    const getVal = (type: string) => parts.find((p) => p.type === type)?.value || '00';
+    const year = getVal('year');
+    const month = getVal('month');
+    const day = getVal('day');
+    const hours = getVal('hour');
+    const minutes = getVal('minute');
+
+    return {
+      dateIso: `${year}-${month}-${day}`,
+      timeHhMm: `${hours}:${minutes}`,
+      dayOfMonth: parseInt(day, 10),
+      hours: parseInt(hours, 10),
+      minutes: parseInt(minutes, 10),
+    };
+  } catch {
+    const year = refDate.getFullYear();
+    const month = String(refDate.getMonth() + 1).padStart(2, '0');
+    const day = String(refDate.getDate()).padStart(2, '0');
+    const hours = String(refDate.getHours()).padStart(2, '0');
+    const minutes = String(refDate.getMinutes()).padStart(2, '0');
+    return {
+      dateIso: `${year}-${month}-${day}`,
+      timeHhMm: `${hours}:${minutes}`,
+      dayOfMonth: refDate.getDate(),
+      hours: refDate.getHours(),
+      minutes: refDate.getMinutes(),
+    };
+  }
+}
+
+export function getLocalTodayIsoDate(d = new Date()): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
-function getCurrentTimeHhMm(): string {
-  const now = new Date();
-  const hours = String(now.getHours()).padStart(2, '0');
-  const minutes = String(now.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
+export function getTodayIsoDate(): string {
+  return getWibDateTime().dateIso;
+}
+
+export function getCurrentTimeHhMm(): string {
+  return getWibDateTime().timeHhMm;
 }
 
 export const useAutomationStore = defineStore('automation', () => {
@@ -629,6 +682,9 @@ export const useAutomationStore = defineStore('automation', () => {
     }
 
     try {
+      if (financeStore.wallets.length === 0) {
+        await financeStore.initFinanceData(uid);
+      }
       await financeStore.addTransaction({
         walletId: rule.walletId,
         fundOwnerId: rule.fundOwnerId,
@@ -833,6 +889,10 @@ export const useAutomationStore = defineStore('automation', () => {
     if (!authStore.isAuthenticated || !authStore.user?.uid) {
       return;
     }
+    // STRICT GUARD: Do not evaluate if tab is in background, minimized, or window is hidden
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+      return;
+    }
     if (isEvaluating.value) return;
 
     const uid = sanitizeId(authStore.user.uid);
@@ -841,9 +901,8 @@ export const useAutomationStore = defineStore('automation', () => {
     const cached = readLocalStorageCache(uid);
     const nowMs = Date.now();
 
-    // If cache exists, is not expired, AND hasRules is FALSE:
-    // User has no automations, bail out immediately! 0 Firestore reads, 0 overhead!
-    if (cached && nowMs < cached.expiresAt && !cached.hasRules) {
+    // If memory already has rules, evaluate immediately. If memory is empty and cache indicates no rules, bail.
+    if (rules.value.length === 0 && cached && nowMs < cached.expiresAt && !cached.hasRules) {
       return;
     }
 
@@ -851,39 +910,54 @@ export const useAutomationStore = defineStore('automation', () => {
     try {
       let currentRules: AutomationItem[] = [];
 
-      if (cached && nowMs < cached.expiresAt) {
+      if (rules.value.length > 0) {
+        currentRules = rules.value;
+      } else if (cached && nowMs < cached.expiresAt && cached.rules.length > 0) {
         currentRules = cached.rules;
         rules.value = cached.rules;
       } else {
         // Cache expired or missing -> fetch fresh rules
-        currentRules = await loadAutomations(uid, true);
+        currentRules = await loadAutomations(uid, false);
       }
 
       if (!currentRules || currentRules.length === 0) {
         return;
       }
 
-      const todayDate = new Date();
-      const currentDay = todayDate.getDate(); // 1..31
-      const todayIso = getTodayIsoDate();
-      const currentHhMm = getCurrentTimeHhMm();
+      // Ensure finance wallets and categories are initialized before recording transactions
+      const financeStore = useFinanceStore();
+      if (financeStore.wallets.length === 0) {
+        try {
+          await financeStore.initFinanceData(uid);
+        } catch (err) {
+          console.warn('initFinanceData notice in automation check:', err);
+        }
+      }
+
+      const wib = getWibDateTime();
+      const localDay = new Date().getDate();
+      const localHhMm = `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`;
+      const localDateIso = getLocalTodayIsoDate();
 
       const dueWithConfirmation: AutomationItem[] = [];
 
       for (const rule of currentRules) {
         if (!rule.isActive || rule.deleted) continue;
 
-        // Check if today matches any scheduled day
-        if (!rule.scheduleDays.includes(currentDay)) continue;
+        // Check if today matches any scheduled day (WIB day or local day)
+        const isScheduledToday =
+          rule.scheduleDays.includes(wib.dayOfMonth) || rule.scheduleDays.includes(localDay);
+        if (!isScheduledToday) continue;
 
-        // Check if current time has reached the scheduled execution time
-        if (currentHhMm < rule.executionTime) continue;
+        // Check if current time has reached the scheduled execution time (in WIB or local)
+        const isTimeReached = wib.timeHhMm >= rule.executionTime || localHhMm >= rule.executionTime;
+        if (!isTimeReached) continue;
 
-        // Check if already executed today
-        if (rule.lastExecutedDate === todayIso) continue;
+        // Check if already executed today (in WIB date or local date)
+        if (rule.lastExecutedDate === wib.dateIso || rule.lastExecutedDate === localDateIso) continue;
 
         // Check if already cancelled today
-        if (rule.lastCancelledDate === todayIso) continue;
+        if (rule.lastCancelledDate === wib.dateIso || rule.lastCancelledDate === localDateIso) continue;
 
         // Check if currently snoozed
         if (rule.snoozedUntil) {

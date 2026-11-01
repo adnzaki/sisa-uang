@@ -471,16 +471,97 @@ function isCurrentSuperAdmin(): boolean {
   return currentEmail === 'vuedevo@gmail.com' || authStore.isSuperAdmin;
 }
 
+let automationTickerInterval: ReturnType<typeof setInterval> | null = null;
+
+function stopAutomationPoller() {
+  if (automationTickerInterval) {
+    clearInterval(automationTickerInterval);
+    automationTickerInterval = null;
+  }
+}
+
+function startAutomationPoller() {
+  stopAutomationPoller();
+
+  // STRICT GUARD: Only run if the document is actively visible
+  if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+    return;
+  }
+  if (!authStore.isAuthenticated || !authStore.user?.uid || authStore.isSuperAdmin) {
+    return;
+  }
+
+  // Trigger one immediate evaluation when app is active in foreground
+  void automationStore.checkAndTriggerOnActivity();
+
+  // Interval ticks every 30 seconds ONLY while active in foreground
+  automationTickerInterval = setInterval(() => {
+    // Immediate self-termination if tab switched or document is no longer visible
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+      stopAutomationPoller();
+      return;
+    }
+    if (authStore.isAuthenticated && authStore.user?.uid && !authStore.isSuperAdmin) {
+      void automationStore.checkAndTriggerOnActivity();
+    } else {
+      stopAutomationPoller();
+    }
+  }, 30000);
+}
+
+const handleVisibilityChange = () => {
+  if (document.visibilityState === 'visible') {
+    startAutomationPoller();
+  } else {
+    // Tab switched, browser minimized, or PWA sent to background -> STOP IMMEDIATELY
+    stopAutomationPoller();
+  }
+};
+
+const handleWindowFocus = () => {
+  startAutomationPoller();
+};
+
+const handleWindowBlur = () => {
+  // Window or PWA lost focus -> STOP IMMEDIATELY
+  stopAutomationPoller();
+};
+
+const handleWindowTermination = () => {
+  // Window closing, page unloading, or PWA exiting -> STOP IMMEDIATELY
+  stopAutomationPoller();
+};
+
 onMounted(() => {
   themeStore.initThemeListener();
   authStore.initAuth();
   window.addEventListener('popstate', handleDrawerPopState);
   document.addEventListener('mousedown', handleAccountMenuClickOutside);
+
+  // App lifecycle listeners: only run poller while active in foreground
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('focus', handleWindowFocus);
+  window.addEventListener('blur', handleWindowBlur);
+  window.addEventListener('beforeunload', handleWindowTermination);
+  window.addEventListener('pagehide', handleWindowTermination);
+  document.addEventListener('freeze', handleWindowTermination);
+
+  // Initial poller startup if app is visible
+  if (document.visibilityState === 'visible') {
+    startAutomationPoller();
+  }
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('popstate', handleDrawerPopState);
   document.removeEventListener('mousedown', handleAccountMenuClickOutside);
+  stopAutomationPoller();
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  window.removeEventListener('focus', handleWindowFocus);
+  window.removeEventListener('blur', handleWindowBlur);
+  window.removeEventListener('beforeunload', handleWindowTermination);
+  window.removeEventListener('pagehide', handleWindowTermination);
+  document.removeEventListener('freeze', handleWindowTermination);
 });
 
 watch(
@@ -501,10 +582,15 @@ watch(
           financeStore.initFinanceData(uid);
         }
       }
-      void automationStore.loadAutomations(uid);
+      void automationStore.loadAutomations(uid).then(() => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+          startAutomationPoller();
+        }
+      });
     } else {
       financeStore.cleanupListeners();
       adminStore.stopRealtimeMonitoring();
+      stopAutomationPoller();
     }
   },
   { immediate: true }
