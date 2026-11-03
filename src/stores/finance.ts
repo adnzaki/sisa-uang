@@ -560,26 +560,8 @@ export const useFinanceStore = defineStore('finance', () => {
       }
     }
 
-    // Attempt bridge session only for super admin records if not authenticated yet
-    if (!current || current.isAnonymous) {
-      if (
-        authStore.isSuperAdmin ||
-        uid === 'admin_vuedevo_01' ||
-        authStore.user?.email?.toLowerCase() === 'vuedevo@gmail.com'
-      ) {
-        try {
-          await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-          return true;
-        } catch (signInErr: any) {
-          try {
-            await createUserWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-            return true;
-          } catch {
-            // Bridge sign-in was not available
-          }
-        }
-      }
-    }
+    // Non-anonymous session check: do NOT forge super admin credentials.
+    // Users must authenticate exclusively via their own verified credentials.
 
     // Verify if an authenticated non-anonymous session is now available
     const finalUser = auth.currentUser;

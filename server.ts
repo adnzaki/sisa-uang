@@ -899,55 +899,64 @@ async function startServer() {
     const adminToken = req.headers['x-admin-token'] as string | undefined;
     const actorEmail = (req.headers['x-actor-email'] as string | undefined)?.toLowerCase() || '';
 
-    // 1. Valid in-memory token or re-hydrated token after server restart
-    if (adminToken && adminToken.length >= 16) {
-      if (!verifiedAdminTokens.has(adminToken)) {
-        verifiedAdminTokens.set(adminToken, {
-          email: actorEmail || SUPER_ADMIN_EMAIL,
-          verifiedAt: Date.now(),
-        });
-      }
-      next();
+    // Token is strictly mandatory: No email header bypass, no unverified token lengths
+    if (!adminToken) {
+      appendLog(
+        'unknown_actor',
+        actorEmail || 'anonymous',
+        'unauthorized_control_panel',
+        `Akses admin (${req.path}) ditolak: x-admin-token tidak disertakan.`,
+        'critical'
+      );
+      res.status(403).json({
+        error: 'Akses ditolak: Token autentikasi Super Admin tidak ditemukan. Silakan login kembali dengan verifikasi 2FA.',
+      });
       return;
     }
 
-    // 2. Recognized Super Admin email or registered admin user
-    if (
-      actorEmail === WORKSPACE_ADMIN_EMAIL ||
-      actorEmail === SUPER_ADMIN_EMAIL ||
-      actorEmail === 'dienhazizahhati@gmail.com' ||
-      actorEmail === 'sdnpengasinantujuh@gmail.com'
-    ) {
-      next();
+    const session = verifiedAdminTokens.get(adminToken);
+    if (!session) {
+      appendLog(
+        'unknown_actor',
+        actorEmail || 'anonymous',
+        'invalid_admin_token',
+        `Akses admin (${req.path}) ditolak: token admin tidak valid atau sudah dicabut.`,
+        'critical'
+      );
+      res.status(403).json({
+        error: 'Sesi Super Admin tidak valid atau telah dicabut. Silakan login kembali.',
+      });
       return;
     }
 
-    for (const u of usersStore.values()) {
-      if (u.email.toLowerCase() === actorEmail && u.role === 'admin' && u.status === 'active') {
-        next();
-        return;
-      }
+    // Check token expiration (max 24 hours)
+    const MAX_TOKEN_AGE_MS = 24 * 60 * 60 * 1000;
+    if (Date.now() - session.verifiedAt > MAX_TOKEN_AGE_MS) {
+      verifiedAdminTokens.delete(adminToken);
+      appendLog(
+        'admin_vuedevo_01',
+        session.email,
+        'expired_admin_token',
+        `Sesi Super Admin kedaluwarsa untuk ${session.email}.`,
+        'warning'
+      );
+      res.status(401).json({
+        error: 'Sesi Super Admin telah kedaluwarsa. Silakan masuk kembali.',
+      });
+      return;
     }
 
-    // Log unauthorized attempt
-    appendLog(
-      'unknown_actor',
-      actorEmail || 'anonymous',
-      'unauthorized_control_panel',
-      `Percobaan akses endpoint admin (${req.path}) ditolak oleh middleware khusus.`,
-      'critical'
-    );
-    createSecurityAlert(
-      'unknown_actor',
-      actorEmail || 'anonymous',
-      'Akses Tanpa Izin ke Control Panel',
-      `Middleware menolak permintaan ke ${req.path} karena identitas Super Admin tidak terotorisasi.`,
-      'critical'
-    );
+    // Verify authorized admin email
+    const sessionEmail = session.email.toLowerCase();
+    if (sessionEmail !== SUPER_ADMIN_EMAIL && sessionEmail !== WORKSPACE_ADMIN_EMAIL) {
+      verifiedAdminTokens.delete(adminToken);
+      res.status(403).json({
+        error: 'Akses ditolak: Identitas akun tidak memiliki hak akses Super Admin.',
+      });
+      return;
+    }
 
-    res.status(403).json({
-      error: 'Akses ditolak oleh middleware administrator. Pastikan Anda masuk menggunakan akun Super Admin.',
-    });
+    next();
   };
 
   // =========================================================================
@@ -1057,65 +1066,40 @@ async function startServer() {
         attempts: 0,
       });
 
-      const directAdminToken = issueSuperAdminToken(adminUser.email);
-
-      // If SMTP is not configured, bypass Email OTP automatically so Super Admin can log in immediately
-      if (!isSmtpConfigured()) {
-        appendLog(
-          adminUser.uid,
-          adminUser.email,
-          'admin_login_direct',
-          `Super Admin (${adminUser.email}) berhasil masuk langsung (SMTP OTP belum dikonfigurasi).`,
-          'info'
-        );
-        res.json({
-          user: sanitizeUser(adminUser),
-          requiresOtp: false,
-          otpVerified: true,
-          adminToken: directAdminToken,
-          smtpFallback: true,
-        });
-        return;
-      }
-
-      try {
-        await sendSuperAdminOtpEmail(adminUser.email, otpCode);
-      } catch (mailErr: any) {
-        const friendlyErr = formatSmtpErrorMessage(mailErr, adminUser.email);
-        appendLog(
-          adminUser.uid,
-          adminUser.email,
-          'smtp_otp_fallback',
-          `Pengiriman OTP email dilewati otomatis karena kendala SMTP (${friendlyErr}). Sesi Super Admin diotorisasi langsung.`,
-          'info'
-        );
-        res.json({
-          user: sanitizeUser(adminUser),
-          requiresOtp: false,
-          otpVerified: true,
-          adminToken: directAdminToken,
-          smtpFallback: true,
-        });
-        return;
+      // Strict Security: DO NOT issue or return adminToken during initial login.
+      // Admin token is ONLY minted in /api/auth/verify-otp after valid OTP code confirmation.
+      if (isSmtpConfigured()) {
+        try {
+          await sendSuperAdminOtpEmail(adminUser.email, otpCode);
+        } catch (mailErr: any) {
+          const friendlyErr = formatSmtpErrorMessage(mailErr, adminUser.email);
+          appendLog(
+            adminUser.uid,
+            adminUser.email,
+            'smtp_otp_delivery_failed',
+            `Pengiriman OTP email gagal (${friendlyErr}). Menampilkan kode verifikasi aman di UI lokal.`,
+            'warning'
+          );
+        }
       }
 
       appendLog(
         adminUser.uid,
         adminUser.email,
         'admin_otp_dispatched',
-        `Kode verifikasi 2FA dikirim via email SMTP ke Super Admin (${adminUser.email}).`,
+        `Tantangan verifikasi 2FA OTP dibuat untuk Super Admin (${adminUser.email}).`,
         'info'
       );
 
       res.json({
         user: sanitizeUser(adminUser),
         requiresOtp: true,
-        adminToken: directAdminToken,
+        otpVerified: false,
         otpDispatch: {
           email: adminUser.email,
           expiresAt,
           fallbackCode: otpCode,
-          message: `Kode verifikasi 6 digit telah dikirim ke email ${adminUser.email}.`,
+          message: `Kode keamanan 6 digit telah dibuat untuk verifikasi Super Admin (${adminUser.email}).`,
         },
       });
       return;
@@ -1340,64 +1324,6 @@ async function startServer() {
       'info'
     );
 
-    if (emailRaw === SUPER_ADMIN_EMAIL) {
-      const otpCode = String(crypto.randomInt(100000, 999999));
-      const expiresAt = Date.now() + 10 * 60 * 1000;
-      otpChallenges.set(emailRaw, {
-        email: emailRaw,
-        code: otpCode,
-        expiresAt,
-        attempts: 0,
-      });
-
-      const directAdminToken = issueSuperAdminToken(newUser.email);
-
-      if (!isSmtpConfigured()) {
-        res.json({
-          user: sanitizeUser(newUser),
-          requiresOtp: false,
-          otpVerified: true,
-          adminToken: directAdminToken,
-          smtpFallback: true,
-        });
-        return;
-      }
-
-      try {
-        await sendSuperAdminOtpEmail(newUser.email, otpCode);
-      } catch (mailErr: any) {
-        const friendlyErr = formatSmtpErrorMessage(mailErr, newUser.email);
-        appendLog(
-          newUser.uid,
-          newUser.email,
-          'smtp_otp_fallback',
-          `Pengiriman OTP email dilewati otomatis (${friendlyErr}).`,
-          'info'
-        );
-        res.json({
-          user: sanitizeUser(newUser),
-          requiresOtp: false,
-          otpVerified: true,
-          adminToken: directAdminToken,
-          smtpFallback: true,
-        });
-        return;
-      }
-
-      res.json({
-        user: sanitizeUser(newUser),
-        requiresOtp: true,
-        adminToken: directAdminToken,
-        otpDispatch: {
-          email: newUser.email,
-          expiresAt,
-          fallbackCode: otpCode,
-          message: `Kode verifikasi 6 digit telah dikirim ke email ${newUser.email}.`,
-        },
-      });
-      return;
-    }
-
     res.json({
       user: sanitizeUser(newUser),
       requiresOtp: false,
@@ -1423,56 +1349,26 @@ async function startServer() {
       attempts: 0,
     });
 
-    const directAdminToken = issueSuperAdminToken(emailRaw);
-
-    if (!isSmtpConfigured()) {
-      appendLog(
-        'admin_vuedevo_01',
-        emailRaw,
-        'admin_otp_fallback',
-        `Sesi Super Admin (${emailRaw}) diverifikasi langsung karena SMTP belum dikonfigurasi.`,
-        'info'
-      );
-      res.json({
-        sent: false,
-        autoVerified: true,
-        adminToken: directAdminToken,
-        fallbackCode: otpCode,
-        email: emailRaw,
-        expiresAt,
-        message: `Verifikasi email dilewati otomatis karena layanan SMTP belum dikonfigurasi.`,
-      });
-      return;
-    }
-
-    try {
-      await sendSuperAdminOtpEmail(emailRaw, otpCode);
-    } catch (mailErr: any) {
-      const friendlyErr = formatSmtpErrorMessage(mailErr, emailRaw);
-      appendLog(
-        'admin_vuedevo_01',
-        emailRaw,
-        'smtp_otp_fallback',
-        `Pengiriman OTP email dilewati otomatis karena kendala SMTP: ${friendlyErr}`,
-        'info'
-      );
-      res.json({
-        sent: false,
-        autoVerified: true,
-        adminToken: directAdminToken,
-        fallbackCode: otpCode,
-        email: emailRaw,
-        expiresAt,
-        message: `Verifikasi email dilewati otomatis karena kendala koneksi SMTP.`,
-      });
-      return;
+    if (isSmtpConfigured()) {
+      try {
+        await sendSuperAdminOtpEmail(emailRaw, otpCode);
+      } catch (mailErr: any) {
+        const friendlyErr = formatSmtpErrorMessage(mailErr, emailRaw);
+        appendLog(
+          'admin_vuedevo_01',
+          emailRaw,
+          'smtp_otp_delivery_failed',
+          `Pengiriman OTP email gagal (${friendlyErr}).`,
+          'warning'
+        );
+      }
     }
 
     appendLog(
       'admin_vuedevo_01',
       emailRaw,
       'admin_otp_requested',
-      `Pengiriman kode OTP 6-digit via email SMTP ke ${emailRaw}.`,
+      `Tantangan kode OTP 6-digit baru dibuat untuk Super Admin (${emailRaw}).`,
       'info'
     );
 
@@ -1481,46 +1377,22 @@ async function startServer() {
       email: emailRaw,
       expiresAt,
       fallbackCode: otpCode,
-      adminToken: directAdminToken,
-      message: `Kode verifikasi baru telah dikirim ke email ${emailRaw}.`,
+      message: `Kode verifikasi baru telah dibuat untuk email ${emailRaw}.`,
     });
   });
 
-  // Verify Super Admin 6-digit OTP code (also supports direct fallback bypass when email is unreachable)
+  // Verify Super Admin 6-digit OTP code (STRICT: Exact code match required, NO bypasses)
   app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
     const emailRaw = String(req.body?.email || SUPER_ADMIN_EMAIL).trim().toLowerCase();
     const code = String(req.body?.code || '').trim();
 
-    if (code === 'BYPASS') {
-      otpChallenges.delete(emailRaw);
-      const adminToken = issueSuperAdminToken(emailRaw);
-      appendLog(
-        'admin_vuedevo_01',
-        emailRaw,
-        'admin_otp_bypass_verified',
-        `Akses Super Admin (/control-panel) dibuka melalui otorisasi langsung.`,
-        'info'
-      );
-      res.json({
-        verified: true,
-        adminToken,
-        verifiedAt: nowIso(),
-      });
+    if (emailRaw !== SUPER_ADMIN_EMAIL && emailRaw !== WORKSPACE_ADMIN_EMAIL) {
+      res.status(403).json({ error: 'Akses ditolak.' });
       return;
     }
 
     const challenge = otpChallenges.get(emailRaw);
     if (!challenge) {
-      // If server restarted while user was on OTP screen, accept any 6-digit code and issue token so they are not stuck
-      if (/^\d{6}$/.test(code)) {
-        const adminToken = issueSuperAdminToken(emailRaw);
-        res.json({
-          verified: true,
-          adminToken,
-          verifiedAt: nowIso(),
-        });
-        return;
-      }
       res.status(400).json({ error: 'Sesi kode verifikasi tidak ditemukan. Silakan minta kode baru.' });
       return;
     }
@@ -1555,6 +1427,7 @@ async function startServer() {
       return;
     }
 
+    // OTP verification passed - issue cryptographically secure admin token
     otpChallenges.delete(emailRaw);
     const adminToken = issueSuperAdminToken(emailRaw);
 
@@ -3903,6 +3776,25 @@ async function startServer() {
   // =========================================================================
   // Protected Super Admin Endpoints (/api/admin/*)
   // =========================================================================
+
+  // Immediate Killswitch: Revoke All Super Admin Active Sessions & Invalidate Tokens
+  app.post('/api/admin/revoke-all-sessions', requireAdminMiddleware, (_req: Request, res: Response) => {
+    const revokedCount = verifiedAdminTokens.size;
+    verifiedAdminTokens.clear();
+    otpChallenges.clear();
+    appendLog(
+      'admin_vuedevo_01',
+      SUPER_ADMIN_EMAIL,
+      'super_admin_sessions_revoked',
+      `Seluruh sesi Super Admin (${revokedCount} token) telah dicabut secara massal.`,
+      'critical'
+    );
+    res.json({
+      success: true,
+      revokedCount,
+      message: 'Seluruh sesi dan token akses Super Admin telah berhasil dicabut.',
+    });
+  });
 
   // Explicit Endpoint to Force-Sync All Firestore Users & Pro Subscriptions to Server Registry
   app.post('/api/admin/sync-firestore', requireAdminMiddleware, async (_req: Request, res: Response) => {

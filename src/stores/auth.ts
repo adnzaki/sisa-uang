@@ -145,7 +145,7 @@ export function purgeForeignLocalStorage(activeUid?: string) {
   }
 }
 
-// Immediately purge on file evaluation to clean up existing foreign user entries
+// Immediately purge on file evaluation to clean up existing foreign user entries & revoke compromised admin sessions
 try {
   if (typeof window !== 'undefined' && window.localStorage) {
     const rawSaved = localStorage.getItem('sisa_uang_active_user');
@@ -154,6 +154,23 @@ try {
       try {
         const parsed = JSON.parse(rawSaved);
         if (parsed?.uid) activeUid = parsed.uid;
+        const isSuperAdminEmail =
+          parsed?.email?.toLowerCase() === 'vuedevo@gmail.com' ||
+          parsed?.role === 'admin' ||
+          parsed?.username?.toLowerCase() === 'vuedevo';
+        const hasValidToken = Boolean(localStorage.getItem('sisa_uang_admin_token'));
+        const hasVerifiedOtp = localStorage.getItem('sisa_uang_otp_verified') === 'true';
+
+        // Strict: If any cached session claims to be Super Admin but lacks strict 2FA OTP verification and token,
+        // revoke and purge immediately so no unauthorized browser enters super admin!
+        if (isSuperAdminEmail && (!hasValidToken || !hasVerifiedOtp)) {
+          localStorage.removeItem('sisa_uang_active_user');
+          localStorage.removeItem('sisa_uang_admin_token');
+          localStorage.removeItem('sisa_uang_otp_verified');
+          localStorage.removeItem('sisa_uang_actor_email');
+          localStorage.removeItem('sisa_uang_admin_synced_session');
+          activeUid = '';
+        }
       } catch {
         // ignore
       }
@@ -205,7 +222,6 @@ const SAVED_ACCOUNTS_STORAGE_KEY = 'sisa_uang_saved_accounts_v1';
 const DEVICE_ID_STORAGE_KEY = 'sisa_uang_device_id_v1';
 const CUSTOM_DEVICE_NAME_KEY = 'sisa_uang_custom_device_name_v1';
 const OTP_VERIFIED_KEY = 'sisa_uang_otp_verified';
-const DEFAULT_ADMIN_SESSION_TOKEN = 'sisa_uang_admin_session_token_v1';
 const EXPLICIT_LOGOUT_KEY = 'sisa_uang_explicit_logout';
 
 function getOrCreateDeviceId(): string {
@@ -347,10 +363,10 @@ export const useAuthStore = defineStore('auth', () => {
   const isSuperAdmin = computed(
     () =>
       !!user.value &&
-      (user.value.role === 'admin' ||
-        user.value.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
-        user.value.username?.toLowerCase() === SUPER_ADMIN_USERNAME ||
-        user.value.username?.toLowerCase() === 'dark.notes')
+      user.value.status === 'active' &&
+      user.value.role === 'admin' &&
+      (user.value.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+        user.value.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL)
   );
   const isProUser = computed(() => {
     if (!user.value) return false;
@@ -382,10 +398,8 @@ export const useAuthStore = defineStore('auth', () => {
   );
   const canAccessControlPanel = computed(() => {
     if (!isAuthenticated.value || !isSuperAdmin.value) return false;
-    if (user.value?.email.toLowerCase() === SUPER_ADMIN_EMAIL && requiresOtp.value) {
-      return otpVerified.value;
-    }
-    return true;
+    // OTP verification & valid server token are strictly mandatory to access Control Panel
+    return otpVerified.value === true && Boolean(localStorage.getItem('sisa_uang_admin_token'));
   });
 
   function clearError() {
@@ -721,37 +735,21 @@ export const useAuthStore = defineStore('auth', () => {
     purgeForeignLocalStorage(nextUser.uid);
 
     const isTargetSuperAdmin =
-      nextUser.role === 'admin' ||
-      nextUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
-      nextUser.username?.toLowerCase() === SUPER_ADMIN_USERNAME ||
-      nextUser.username?.toLowerCase() === 'dark.notes';
+      nextUser.role === 'admin' &&
+      (nextUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+        nextUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL);
 
-    requiresOtp.value = false;
-    otpVerified.value = isTargetSuperAdmin ? true : Boolean(targetEntry.otpVerified);
+    requiresOtp.value = isTargetSuperAdmin;
+    otpVerified.value = isTargetSuperAdmin
+      ? Boolean(targetEntry.otpVerified && targetEntry.adminToken)
+      : Boolean(targetEntry.otpVerified);
     localStorage.setItem(OTP_VERIFIED_KEY, otpVerified.value ? 'true' : 'false');
 
-    const effectiveToken =
-      targetEntry.adminToken ||
-      (isTargetSuperAdmin ? DEFAULT_ADMIN_SESSION_TOKEN : null);
+    const effectiveToken = targetEntry.adminToken || null;
     setApiAdminContext(nextUser.email, effectiveToken);
 
     upsertSavedAccount(nextUser, effectiveToken);
     primaryDeviceOtpPending.value = null;
-
-    // Ensure Firebase Auth bridge session is active so Firestore rules work seamlessly
-    if (
-      String(nextUser.uid).startsWith('ci4_user_') ||
-      nextUser.uid === 'admin_vuedevo_01' ||
-      !auth.currentUser
-    ) {
-      if (!auth.currentUser || auth.currentUser.email?.toLowerCase() !== SUPER_ADMIN_EMAIL) {
-        try {
-          await signInWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
-        } catch {
-          // Ignore
-        }
-      }
-    }
 
     await syncSubscriptionFromFirestoreForUser(nextUser.uid, nextUser.email);
     await registerCurrentDeviceSession(nextUser, true);
@@ -796,17 +794,12 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const safeUid = sanitizeId(rawUid);
 
-      // Ensure Firebase Auth session is active so Firestore rules permit reading `/users`
-      if (
-        !auth.currentUser ||
-        auth.currentUser.isAnonymous ||
-        (safeUid.startsWith('ci4_user_') &&
-          auth.currentUser.email?.toLowerCase() !== SUPER_ADMIN_EMAIL)
-      ) {
+      // Ensure Firebase Auth session is active
+      if (!auth.currentUser) {
         try {
-          await signInWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
+          await signInAnonymously(auth);
         } catch {
-          // Ignore if already signed in or offline
+          // Ignore
         }
       }
 
@@ -1185,7 +1178,7 @@ export const useAuthStore = defineStore('auth', () => {
           username: existingData.username || defaultUsername,
           email: safeEmail,
           displayName: existingData.displayName || existingData.username || safeName,
-          role: isAdminEmail ? 'admin' : existingData.role === 'admin' ? 'admin' : 'user',
+          role: isAdminEmail ? 'admin' : 'user',
           status: existingData.status === 'blocked' ? 'blocked' : 'active',
           authProvider: existingData.authProvider === 'google' ? 'google' : 'password',
           currency: existingData.currency === 'USD' ? 'USD' : 'IDR',
@@ -1271,20 +1264,35 @@ export const useAuthStore = defineStore('auth', () => {
           purgeForeignLocalStorage(parsed.uid);
           localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
           const isAdminAccount =
-            parsed.role === 'admin' ||
-            parsed.email?.toLowerCase() === SUPER_ADMIN_EMAIL ||
-            parsed.email?.toLowerCase() === WORKSPACE_ADMIN_EMAIL ||
-            parsed.username?.toLowerCase() === SUPER_ADMIN_USERNAME ||
-            parsed.username?.toLowerCase() === 'dark.notes';
-          const storedToken =
-            localStorage.getItem('sisa_uang_admin_token') ||
-            (isAdminAccount ? DEFAULT_ADMIN_SESSION_TOKEN : null);
-          if (isAdminAccount && !requiresOtp.value) {
-            otpVerified.value = true;
-            localStorage.setItem(OTP_VERIFIED_KEY, 'true');
+            parsed.role === 'admin' &&
+            (parsed.email?.toLowerCase() === SUPER_ADMIN_EMAIL ||
+              parsed.email?.toLowerCase() === WORKSPACE_ADMIN_EMAIL);
+
+          const storedToken = localStorage.getItem('sisa_uang_admin_token');
+          const storedOtpVerified = localStorage.getItem(OTP_VERIFIED_KEY) === 'true';
+
+          if (isAdminAccount) {
+            // Strict: Super Admin access is ONLY valid if an authentic server token and verified OTP are present
+            if (!storedToken || !storedOtpVerified) {
+              requiresOtp.value = true;
+              otpVerified.value = false;
+              localStorage.setItem(OTP_VERIFIED_KEY, 'false');
+              localStorage.removeItem('sisa_uang_admin_token');
+              setApiAdminContext(null, null);
+              // Demote role to regular user for this unverified session
+              parsed.role = 'user';
+              user.value = parsed;
+              localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(parsed));
+            } else {
+              requiresOtp.value = false;
+              otpVerified.value = true;
+              setApiAdminContext(parsed.email, storedToken);
+              upsertSavedAccount(parsed, storedToken);
+            }
+          } else {
+            setApiAdminContext(parsed.email, null);
           }
-          setApiAdminContext(parsed.email, storedToken);
-          upsertSavedAccount(parsed, storedToken);
+
           void registerCurrentDeviceSession(parsed, false);
           // Always validate subscription status directly against Cloud Firestore
           void syncSubscriptionFromFirestoreForUser(parsed.uid, parsed.email);
@@ -1318,25 +1326,56 @@ export const useAuthStore = defineStore('auth', () => {
           isReady.value = true;
           return;
         }
+
+        const fbEmail = (fbUser.email || '').toLowerCase();
+        const isFbSuperAdmin = fbEmail === SUPER_ADMIN_EMAIL || fbEmail === WORKSPACE_ADMIN_EMAIL;
+
+        // Security Barrier: Never automatically restore Super Admin session from ambient Firebase Auth state!
+        if (isFbSuperAdmin) {
+          const storedToken = localStorage.getItem('sisa_uang_admin_token');
+          const storedOtp = localStorage.getItem(OTP_VERIFIED_KEY) === 'true';
+
+          if (!storedToken || !storedOtp) {
+            try {
+              await firebaseSignOut(auth);
+            } catch {
+              // Ignore
+            }
+            user.value = null;
+            isReady.value = true;
+            return;
+          }
+        }
+
         try {
           const profile = await ensureFirestoreUserDocument(fbUser);
           const currentActiveUser = user.value as AppUser | null;
           if (!currentActiveUser || currentActiveUser.email.toLowerCase() === profile.email.toLowerCase()) {
+            const isProfileAdmin =
+              profile.role === 'admin' &&
+              (profile.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+                profile.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL);
+
+            const storedToken = localStorage.getItem('sisa_uang_admin_token');
+            const storedOtp = localStorage.getItem(OTP_VERIFIED_KEY) === 'true';
+
+            if (isProfileAdmin && (!storedToken || !storedOtp)) {
+              // Do not auto-elevate to admin
+              profile.role = 'user';
+              requiresOtp.value = true;
+              otpVerified.value = false;
+              localStorage.setItem(OTP_VERIFIED_KEY, 'false');
+              localStorage.removeItem('sisa_uang_admin_token');
+              setApiAdminContext(null, null);
+            } else if (isProfileAdmin && storedToken && storedOtp) {
+              requiresOtp.value = false;
+              otpVerified.value = true;
+              setApiAdminContext(profile.email, storedToken);
+              upsertSavedAccount(profile, storedToken);
+            }
+
             user.value = profile;
             localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
-            const isAdminAccount =
-              profile.role === 'admin' ||
-              profile.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
-              profile.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL;
-            const storedToken =
-              localStorage.getItem('sisa_uang_admin_token') ||
-              (isAdminAccount ? DEFAULT_ADMIN_SESSION_TOKEN : null);
-            if (isAdminAccount && !requiresOtp.value) {
-              otpVerified.value = true;
-              localStorage.setItem(OTP_VERIFIED_KEY, 'true');
-            }
-            setApiAdminContext(profile.email, storedToken);
-            upsertSavedAccount(profile, storedToken);
             await syncSubscriptionFromFirestoreForUser(profile.uid, profile.email);
             void registerCurrentDeviceSession(profile, true);
             startUserStatusMonitor(profile);
@@ -1369,16 +1408,12 @@ export const useAuthStore = defineStore('auth', () => {
     const clean = identifier.trim().toLowerCase().replace(/^@+/, '');
     const normalizedUsername = clean.replace(/\s+/g, '_');
 
-    // Ensure at least an active Firebase session so Firestore rules allow reading /users
+    // Ensure an active Firebase session if available
     if (!auth.currentUser) {
       try {
-        await signInWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
+        await signInAnonymously(auth);
       } catch {
-        try {
-          await signInAnonymously(auth);
-        } catch {
-          // Ignore
-        }
+        // Ignore
       }
     }
 
@@ -1529,24 +1564,14 @@ export const useAuthStore = defineStore('auth', () => {
           };
 
           if (backendData.requiresOtp) {
+            backendData.otpVerified = false;
             try {
               const { data: otpData } = await apiClient.post('/auth/request-otp', {
                 email: firestoreUser.email,
               });
-              if (otpData?.autoVerified) {
-                backendData.requiresOtp = false;
-                backendData.otpVerified = true;
-                backendData.adminToken = otpData.adminToken || DEFAULT_ADMIN_SESSION_TOKEN;
-              } else {
-                backendData.otpDispatch = otpData;
-                if (otpData?.adminToken) {
-                  backendData.adminToken = otpData.adminToken;
-                }
-              }
+              backendData.otpDispatch = otpData;
             } catch {
-              backendData.requiresOtp = false;
-              backendData.otpVerified = true;
-              backendData.adminToken = DEFAULT_ADMIN_SESSION_TOKEN;
+              // Keep requiresOtp = true
             }
           }
         } else {
@@ -1577,29 +1602,12 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(loggedInUser));
       purgeForeignLocalStorage(loggedInUser.uid);
 
-      // Step C: Ensure Firebase Auth session is active for Firestore security rules
-      if (isMigratedUserUid) {
-        // For migrated users (ci4_user_*), keep the bridge session active so Firestore Console rules allow querying ownerId == ci4_user_*
-        if (!auth.currentUser || auth.currentUser.email?.toLowerCase() !== SUPER_ADMIN_EMAIL) {
-          try {
-            await signInWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
-          } catch {
-            try {
-              await createUserWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
-            } catch {
-              // Ignore
-            }
-          }
-        }
-      } else {
+      // Step C: For direct email login, synchronize Firebase Auth session if applicable
+      if (!isMigratedUserUid && cleanIdentifier.includes('@')) {
         try {
           await signInWithEmailAndPassword(auth, resolvedEmail, passwordInput);
         } catch {
-          try {
-            await createUserWithEmailAndPassword(auth, resolvedEmail, passwordInput);
-          } catch {
-            // Ignore
-          }
+          // Ignore
         }
       }
 
@@ -1610,38 +1618,32 @@ export const useAuthStore = defineStore('auth', () => {
       }
 
       const isLoggedSuperAdmin =
-        loggedInUser.role === 'admin' ||
-        loggedInUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
-        loggedInUser.username?.toLowerCase() === SUPER_ADMIN_USERNAME ||
-        loggedInUser.username?.toLowerCase() === 'dark.notes';
+        loggedInUser.role === 'admin' &&
+        (loggedInUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+          loggedInUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL);
 
-      const effectiveAdminToken =
-        backendData.adminToken ||
-        localStorage.getItem('sisa_uang_admin_token') ||
-        (isLoggedSuperAdmin ? DEFAULT_ADMIN_SESSION_TOKEN : null);
-
-      setApiAdminContext(loggedInUser.email, effectiveAdminToken);
-      upsertSavedAccount(loggedInUser, effectiveAdminToken);
-      await registerCurrentDeviceSession(loggedInUser, true);
-      startUserStatusMonitor(loggedInUser);
-
-      if (backendData.requiresOtp) {
+      if (isLoggedSuperAdmin) {
+        // Strict: Super Admin MUST complete 2FA OTP verification. No token is granted yet.
         requiresOtp.value = true;
         otpVerified.value = false;
         localStorage.setItem(OTP_VERIFIED_KEY, 'false');
+        localStorage.removeItem('sisa_uang_admin_token');
+        setApiAdminContext(null, null);
         otpDispatchInfo.value = backendData.otpDispatch || null;
         useNotificationStore().notifySuccess(
-          'Kode Verifikasi OTP Dikirim',
-          `Kode keamanan 6-digit telah dikirim ke ${loggedInUser.email}.`
+          'Kode Verifikasi OTP Diperlukan',
+          `Masukkan 6-digit kode verifikasi akun Super Admin (${loggedInUser.email}).`
         );
         return { requiresOtp: true };
       }
 
       requiresOtp.value = false;
-      if (isLoggedSuperAdmin) {
-        otpVerified.value = true;
-        localStorage.setItem(OTP_VERIFIED_KEY, 'true');
-      }
+      otpVerified.value = false;
+      setApiAdminContext(loggedInUser.email, null);
+      upsertSavedAccount(loggedInUser, null);
+      await registerCurrentDeviceSession(loggedInUser, true);
+      startUserStatusMonitor(loggedInUser);
+
       useNotificationStore().notifySuccess(
         'Berhasil Masuk',
         `Selamat datang kembali, ${loggedInUser.displayName} (@${loggedInUser.username})!`
@@ -1649,7 +1651,7 @@ export const useAuthStore = defineStore('auth', () => {
       return { requiresOtp: false };
     } catch (err: any) {
       // Final fallback: direct Firebase Auth signInWithEmailAndPassword if identifier is an email
-      if (cleanIdentifier.includes('@')) {
+      if (cleanIdentifier.includes('@') && cleanIdentifier !== SUPER_ADMIN_EMAIL) {
         try {
           const cred = await signInWithEmailAndPassword(auth, cleanIdentifier, passwordInput);
           const profile = await ensureFirestoreUserDocument(cred.user);
@@ -1657,25 +1659,11 @@ export const useAuthStore = defineStore('auth', () => {
           user.value = profile;
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
           purgeForeignLocalStorage(profile.uid);
-          const fallbackToken =
-            localStorage.getItem('sisa_uang_admin_token') ||
-            (profile.email.toLowerCase() === SUPER_ADMIN_EMAIL ? DEFAULT_ADMIN_SESSION_TOKEN : null);
-          setApiAdminContext(profile.email, fallbackToken);
-          upsertSavedAccount(profile, fallbackToken);
+          setApiAdminContext(profile.email, null);
+          upsertSavedAccount(profile, null);
           await registerCurrentDeviceSession(profile, true);
           startUserStatusMonitor(profile);
 
-          if (cleanIdentifier === SUPER_ADMIN_EMAIL) {
-            const otpRes = await requestSuperAdminOtp();
-            if (otpRes.autoVerified || !requiresOtp.value) {
-              useNotificationStore().notifySuccess(
-                'Berhasil Masuk',
-                `Selamat datang kembali, ${profile.displayName} (@${profile.username})!`
-              );
-              return { requiresOtp: false };
-            }
-            return { requiresOtp: true };
-          }
           useNotificationStore().notifySuccess(
             'Berhasil Masuk',
             `Selamat datang kembali, ${profile.displayName} (@${profile.username})!`
@@ -1753,14 +1741,6 @@ export const useAuthStore = defineStore('auth', () => {
       const isAdminEmail = cleanEmail === SUPER_ADMIN_EMAIL || cleanEmail === WORKSPACE_ADMIN_EMAIL;
 
       // 2. Ensure the newly registered user document is written to Cloud Firestore (/users/{uid})
-      // If Firebase Auth created the user (isFbAuthenticated), keep their own session active so `isOwner(userId)` rule passes!
-      if (!auth.currentUser && !isFbAuthenticated) {
-        try {
-          await signInWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
-        } catch {
-          // Ignore
-        }
-      }
       try {
         const userDocRef = doc(db, 'users', resolvedUid);
         const snap = await getDoc(userDocRef);
@@ -1770,7 +1750,7 @@ export const useAuthStore = defineStore('auth', () => {
             username: data.user?.username || cleanUsername,
             email: cleanEmail,
             displayName: data.user?.displayName || cleanName,
-            role: isAdminEmail ? 'admin' : 'user',
+            role: 'user',
             status: 'active',
             authProvider: 'password',
             currency: 'IDR',
@@ -1814,6 +1794,7 @@ export const useAuthStore = defineStore('auth', () => {
 
       const registeredUser: AppUser = {
         ...data.user,
+        role: 'user',
         username: data.user.username || cleanUsername,
         displayName: data.user.displayName || cleanName,
         isFirebaseBacked: isFbAuthenticated,
@@ -1821,14 +1802,8 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
       user.value = registeredUser;
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(registeredUser));
-      const isRegSuperAdmin =
-        registeredUser.role === 'admin' || registeredUser.email.toLowerCase() === SUPER_ADMIN_EMAIL;
-      const regAdminToken =
-        data.adminToken ||
-        localStorage.getItem('sisa_uang_admin_token') ||
-        (isRegSuperAdmin ? DEFAULT_ADMIN_SESSION_TOKEN : null);
-      setApiAdminContext(registeredUser.email, regAdminToken);
-      upsertSavedAccount(registeredUser, regAdminToken);
+      setApiAdminContext(registeredUser.email, null);
+      upsertSavedAccount(registeredUser, null);
       await registerCurrentDeviceSession(registeredUser, true);
       startUserStatusMonitor(registeredUser);
 
@@ -1845,10 +1820,7 @@ export const useAuthStore = defineStore('auth', () => {
       }
 
       requiresOtp.value = false;
-      if (isRegSuperAdmin) {
-        otpVerified.value = true;
-        localStorage.setItem(OTP_VERIFIED_KEY, 'true');
-      }
+      otpVerified.value = false;
       useNotificationStore().notifySuccess(
         'Pendaftaran Akun Berhasil',
         `Akun ${registeredUser.displayName} (@${registeredUser.username}) berhasil dibuat.`
@@ -2227,30 +2199,10 @@ export const useAuthStore = defineStore('auth', () => {
         email: user.value.email,
       });
 
-      if (data.autoVerified) {
-        otpVerified.value = true;
-        requiresOtp.value = false;
-        localStorage.setItem(OTP_VERIFIED_KEY, 'true');
-        setApiAdminContext(
-          user.value.email,
-          data.adminToken || DEFAULT_ADMIN_SESSION_TOKEN
-        );
-        otpDispatchInfo.value = {
-          email: data.email || user.value.email,
-          expiresAt: data.expiresAt || Date.now() + 600000,
-          message: data.message || 'Sesi Super Admin diverifikasi secara langsung.',
-          fallbackCode: data.fallbackCode,
-          autoVerified: true,
-        };
-        return otpDispatchInfo.value;
-      }
-
       requiresOtp.value = true;
-      if (data.adminToken) {
-        setApiAdminContext(user.value.email, data.adminToken);
-      }
+      otpVerified.value = false;
       otpDispatchInfo.value = {
-        email: data.email,
+        email: data.email || user.value.email,
         expiresAt: data.expiresAt,
         message: data.message,
         fallbackCode: data.fallbackCode,
@@ -2258,22 +2210,14 @@ export const useAuthStore = defineStore('auth', () => {
       };
       useNotificationStore().notifySuccess(
         'Kode OTP Baru Dikirim',
-        `Kode verifikasi 6-digit baru telah dikirim ke ${data.email}.`
+        `Kode verifikasi 6-digit baru telah dibuat untuk ${data.email}.`
       );
       return otpDispatchInfo.value;
-    } catch {
-      // Fallback: if SMTP / endpoint fails, auto-verify Super Admin so they are never locked out
-      otpVerified.value = true;
-      requiresOtp.value = false;
-      localStorage.setItem(OTP_VERIFIED_KEY, 'true');
-      setApiAdminContext(user.value.email, DEFAULT_ADMIN_SESSION_TOKEN);
-      otpDispatchInfo.value = {
-        email: user.value.email,
-        expiresAt: Date.now() + 600000,
-        message: 'Verifikasi email dilewati otomatis karena kendala layanan SMTP.',
-        autoVerified: true,
-      };
-      return otpDispatchInfo.value;
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || 'Gagal meminta kode OTP Super Admin.';
+      error.value = msg;
+      useNotificationStore().notifyError('Gagal Meminta OTP', err, msg);
+      throw new Error(msg);
     } finally {
       isLoading.value = false;
     }
@@ -2306,17 +2250,6 @@ export const useAuthStore = defineStore('auth', () => {
       }
       return false;
     } catch (err: any) {
-      if (codeInput.trim() === 'BYPASS') {
-        otpVerified.value = true;
-        requiresOtp.value = false;
-        localStorage.setItem(OTP_VERIFIED_KEY, 'true');
-        setApiAdminContext(user.value.email, DEFAULT_ADMIN_SESSION_TOKEN);
-        useNotificationStore().notifySuccess(
-          'Akses Super Admin Dibuka',
-          'Akses penuh ke Control Panel Super Admin telah dibuka.'
-        );
-        return true;
-      }
       const msg = err?.response?.data?.error || 'Kode verifikasi OTP tidak sesuai.';
       error.value = msg;
       useNotificationStore().notifyError('Verifikasi OTP Gagal', err, msg);

@@ -288,34 +288,9 @@ export const useAdminStore = defineStore('admin', () => {
         currentEmail === 'sdnpengasinantujuh@gmail.com';
 
       if (!targetAuth.currentUser || targetAuth.currentUser.isAnonymous || !isAlreadyAdminEmail) {
-        try {
-          await signInWithEmailAndPassword(targetAuth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-        } catch (signInErr: any) {
-          const code = String(signInErr?.code || '');
-          if (
-            code.includes('user-not-found') ||
-            code.includes('invalid-credential') ||
-            code.includes('invalid-login-credentials')
-          ) {
-            try {
-              await createUserWithEmailAndPassword(
-                targetAuth,
-                'vuedevo@gmail.com',
-                '@Dienzaki2019##'
-              );
-            } catch {
-              // Proceed to fallback if needed
-            }
-          }
-        }
-
-        if (!targetAuth.currentUser) {
-          try {
-            await signInAnonymously(targetAuth);
-          } catch {
-            // Ignore if anonymous auth is not enabled
-          }
-        }
+        // Do NOT automatically sign in with hardcoded credentials.
+        // Super Admin access requires explicit authentication with 2FA OTP.
+        continue;
       }
 
       // Ensure `/admins/{uid}` document exists once per session

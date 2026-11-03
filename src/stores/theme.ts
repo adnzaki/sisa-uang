@@ -343,25 +343,7 @@ export const useThemeStore = defineStore('theme', () => {
     } catch {
       // Ignore
     }
-    const current = auth.currentUser;
-    const rawKey = ownerUid?.trim() || '';
-    const isMigratedId = rawKey.startsWith('ci4_user_') || rawKey === 'admin_vuedevo_01';
-
-    if (current && !current.isAnonymous) {
-      if (!isMigratedId && current.uid === rawKey) {
-        return true;
-      }
-      if (current.email?.toLowerCase() === 'vuedevo@gmail.com') {
-        return true;
-      }
-    }
-
-    try {
-      await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-      return true;
-    } catch {
-      return !!auth.currentUser;
-    }
+    return Boolean(auth.currentUser);
   }
 
   function stopRealtimeFirestoreListener() {

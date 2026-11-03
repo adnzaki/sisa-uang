@@ -29,6 +29,8 @@ import {
   type AdminUserItem,
 } from '../stores/admin';
 import { useAuthStore } from '../stores/auth';
+import { useNotificationStore } from '../stores/notification';
+import { apiClient } from '../services/api';
 import AppModal from '../components/AppModal.vue';
 import AppPagination from '../components/AppPagination.vue';
 import MaterialDatePicker from '../components/MaterialDatePicker.vue';
@@ -315,9 +317,36 @@ function copyDuitkuCallback() {
   }, 2500);
 }
 
-onMounted(() => {
-  fetchDuitkuConfig();
-});
+  const notificationStore = useNotificationStore();
+  const isRevokingSessions = ref(false);
+
+  async function handleRevokeAllSuperAdminSessions() {
+    if (
+      !confirm(
+        'PERINGATAN KEAMANAN: Apakah Anda yakin ingin langsung mencabut SELURUH sesi Super Admin aktif di semua perangkat? Anda dan seluruh perangkat yang sedang login akan langsung dikeluarkan dan wajib masuk ulang dengan verifikasi 2FA.'
+      )
+    ) {
+      return;
+    }
+    isRevokingSessions.value = true;
+    try {
+      await apiClient.post('/admin/revoke-all-sessions');
+      notificationStore.notifySuccess(
+        'Sesi Dicabut',
+        'Seluruh token dan sesi Super Admin berhasil dicabut dari server.'
+      );
+    } catch {
+      // Continue to client logout
+    } finally {
+      isRevokingSessions.value = false;
+      await authStore.logout(true);
+      router.push('/auth');
+    }
+  }
+
+  onMounted(() => {
+    fetchDuitkuConfig();
+  });
 </script>
 
 <template>
@@ -337,8 +366,19 @@ onMounted(() => {
         </p>
       </div>
 
-      <!-- Instant Suspicious Activity Simulation Controls -->
+      <!-- Instant Security and Session Controls -->
       <div class="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2 w-full sm:w-auto">
+        <button
+          type="button"
+          :disabled="isRevokingSessions"
+          class="w-full sm:w-auto min-h-[44px] px-3.5 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-xs font-semibold text-rose-700 dark:text-rose-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+          title="Cabut semua sesi login Super Admin di seluruh perangkat"
+          @click="handleRevokeAllSuperAdminSessions"
+        >
+          <ShieldAlert class="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400" />
+          <span>{{ isRevokingSessions ? 'Mencabut Sesi...' : 'Cabut Semua Sesi Admin' }}</span>
+        </button>
+
         <button
           type="button"
           class="w-full sm:w-auto min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1.5 transition-colors"

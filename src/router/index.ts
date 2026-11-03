@@ -48,12 +48,8 @@ async function superAdminMiddleware(
     return;
   }
 
-  // Enforce email verification code (OTP) exclusively when an active OTP challenge is pending
-  if (
-    authStore.user?.email.toLowerCase() === 'vuedevo@gmail.com' &&
-    authStore.requiresOtp &&
-    !authStore.otpVerified
-  ) {
+  const hasAdminToken = Boolean(localStorage.getItem('sisa_uang_admin_token'));
+  if (!authStore.otpVerified || !hasAdminToken) {
     next({ path: '/auth', query: { step: 'otp', redirect: to.fullPath } });
     return;
   }
