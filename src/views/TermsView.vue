@@ -26,7 +26,7 @@ onMounted(() => {
             Syarat dan Ketentuan Layanan (Terms & Conditions)
           </h1>
           <p class="text-xs text-slate-500">
-            Terakhir diperbarui: 15 Oktober 2026 · Mengadopsi Standar Lisensi Perangkat Lunak Digital Goods Duitku
+            Terakhir diperbarui: 3 November 2026 · Mengadopsi Standar Lisensi Perangkat Lunak Digital Goods Duitku
           </p>
         </div>
 
