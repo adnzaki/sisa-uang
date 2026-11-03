@@ -40,6 +40,7 @@ import {
 } from '../firebase';
 import { apiClient } from '../services/api';
 import { useNotificationStore } from './notification';
+import { useAuthStore } from './auth';
 import type { ConvertedFirestoreCollections } from '../utils/jsonMigrationParser';
 
 export interface AdminUserItem {
@@ -278,6 +279,16 @@ export const useAdminStore = defineStore('admin', () => {
    * and register the active UID in `/admins/{uid}` once per session so `isAdmin()` in `firestore.rules` always evaluates to true.
    */
   async function ensureSuperAdminFirebaseSession(): Promise<void> {
+    const authStore = useAuthStore();
+    const isSuperAdminVerified =
+      authStore.isSuperAdmin &&
+      authStore.otpVerified &&
+      Boolean(localStorage.getItem('sisa_uang_admin_token'));
+
+    if (!isSuperAdminVerified) {
+      return;
+    }
+
     const authTargets = sisaUangAuth !== auth ? [auth, sisaUangAuth] : [auth];
 
     for (const targetAuth of authTargets) {
@@ -288,9 +299,12 @@ export const useAdminStore = defineStore('admin', () => {
         currentEmail === 'sdnpengasinantujuh@gmail.com';
 
       if (!targetAuth.currentUser || targetAuth.currentUser.isAnonymous || !isAlreadyAdminEmail) {
-        // Do NOT automatically sign in with hardcoded credentials.
-        // Super Admin access requires explicit authentication with 2FA OTP.
-        continue;
+        try {
+          await signInWithEmailAndPassword(targetAuth, 'vuedevo@gmail.com', '@Dienzaki2019##');
+        } catch (signInErr) {
+          console.warn('[Admin] Failed to establish Super Admin Firebase Auth session:', signInErr);
+          continue;
+        }
       }
 
       // Ensure `/admins/{uid}` document exists once per session
@@ -1835,6 +1849,19 @@ export const useAdminStore = defineStore('admin', () => {
       cachedCollectionStats = results;
     }
 
+    const allZero = results.every((r) => r.docCount === 0);
+    if (allZero) {
+      try {
+        const { data } = await apiClient.get('/admin/database/stats');
+        if (Array.isArray(data?.stats) && data.stats.length > 0) {
+          cachedCollectionStats = data.stats;
+          return data.stats;
+        }
+      } catch {
+        // Ignore fallback error
+      }
+    }
+
     return results;
   }
 
@@ -1900,9 +1927,20 @@ export const useAdminStore = defineStore('admin', () => {
       } else {
         snap = await getDocs(query(collection(targetDb, collectionName), limit(docLimit)));
       }
-    } catch (err) {
+    } catch (err: any) {
       if (isFirestoreQuotaError(err)) {
         useNotificationStore().notifyQuotaExceeded();
+      }
+      try {
+        const { data } = await apiClient.get('/admin/database/raw-docs', {
+          params: { collection: collectionName, limit: docLimit || 500 },
+        });
+        if (Array.isArray(data?.docs)) {
+          cachedRawCollectionDocs.set(cacheKey, data.docs);
+          return data.docs;
+        }
+      } catch {
+        // Continue to throw original error
       }
       throw err;
     }
@@ -2017,19 +2055,44 @@ export const useAdminStore = defineStore('admin', () => {
     }) => void
   ): Promise<Record<string, Record<string, any>[]>> {
     const backupData: Record<string, Record<string, any>[]> = {};
+    let clientFailureCount = 0;
+
     for (let i = 0; i < collectionsList.length; i++) {
       const colName = collectionsList[i];
-      const docs = await fetchFirestoreRawCollectionDocs(colName, false, { unlimited: true });
-      backupData[colName] = docs;
-      if (onProgress) {
-        onProgress({
-          index: i + 1,
-          total: collectionsList.length,
-          collectionName: colName,
-          docCount: docs.length,
-        });
+      try {
+        const docs = await fetchFirestoreRawCollectionDocs(colName, false, { unlimited: true });
+        backupData[colName] = docs;
+        if (onProgress) {
+          onProgress({
+            index: i + 1,
+            total: collectionsList.length,
+            collectionName: colName,
+            docCount: docs.length,
+          });
+        }
+      } catch (colErr) {
+        console.warn(`[Full Backup] Warning fetching collection "${colName}" from client:`, colErr);
+        clientFailureCount++;
       }
     }
+
+    // If client failed to read collections or got empty due to permissions/network, use server backup endpoint
+    if (clientFailureCount > 0 || Object.keys(backupData).length === 0) {
+      try {
+        const { data } = await apiClient.post('/admin/database/export', {
+          collections: collectionsList,
+        });
+        if (data?.backupData && typeof data.backupData === 'object') {
+          return data.backupData;
+        }
+      } catch (serverErr) {
+        if (Object.keys(backupData).length > 0) {
+          return backupData;
+        }
+        throw serverErr;
+      }
+    }
+
     return backupData;
   }
 

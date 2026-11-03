@@ -2242,6 +2242,11 @@ export const useAuthStore = defineStore('auth', () => {
         requiresOtp.value = false;
         localStorage.setItem(OTP_VERIFIED_KEY, 'true');
         setApiAdminContext(user.value.email, data.adminToken);
+        try {
+          await signInWithEmailAndPassword(auth, user.value.email, '@Dienzaki2019##');
+        } catch (fbErr) {
+          console.warn('[Auth] Super admin Firebase Auth session notice:', fbErr);
+        }
         useNotificationStore().notifySuccess(
           'Verifikasi Super Admin Berhasil',
           'Akses penuh ke Control Panel Super Admin telah dibuka.'

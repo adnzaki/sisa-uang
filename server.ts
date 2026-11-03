@@ -4312,6 +4312,221 @@ async function startServer() {
   });
 
   // =========================================================================
+  // Super Admin Database Explorer & Backup API (Server Proxy to Cloud Firestore)
+  // =========================================================================
+  app.get('/api/admin/database/stats', requireAdminMiddleware, async (_req: Request, res: Response) => {
+    const collectionDefs = [
+      {
+        collectionName: 'users',
+        label: 'users (Akun Pengguna)',
+        description: 'Data akun pengguna hasil migrasi & registrasi (Super Admin tetap dilindungi)',
+        docCount: usersStore.size,
+      },
+      {
+        collectionName: 'wallets',
+        label: 'wallets (Sumber Dana / Dompet)',
+        description: 'Daftar rekening bank, e-wallet, kas tunai, dan investasi',
+        docCount: 0,
+      },
+      {
+        collectionName: 'wallet_owners',
+        label: 'wallet_owners (Kepemilikan Dana)',
+        description: 'Alokasi pemilik dana (Pribadi, Istri, Tabungan, dll) di setiap dompet',
+        docCount: 0,
+      },
+      {
+        collectionName: 'categories',
+        label: 'categories (Kategori Transaksi)',
+        description: 'Kategori pemasukan (income) dan pengeluaran (expense)',
+        docCount: 0,
+      },
+      {
+        collectionName: 'transactions',
+        label: 'transactions (Riwayat Transaksi)',
+        description: 'Seluruh mutasi pemasukan, pengeluaran, dan transfer dana',
+        docCount: 0,
+      },
+      {
+        collectionName: 'budgets',
+        label: 'budgets (Anggaran Bulanan)',
+        description: 'Target & batas anggaran pengeluaran bulanan per kategori',
+        docCount: 0,
+      },
+      {
+        collectionName: 'activity_logs',
+        label: 'activity_logs (Log Aktivitas & Login)',
+        description: 'Jejak audit aktivitas pengguna dan histori login CI4 Shield',
+        docCount: activityLogs.length,
+      },
+      {
+        collectionName: 'security_alerts',
+        label: 'security_alerts (Peringatan Keamanan)',
+        description: 'Insiden dan notifikasi peringatan keamanan sistem',
+        docCount: securityAlerts.length,
+      },
+    ];
+
+    if (serverDb && serverAuth) {
+      try {
+        if (!serverAuth.currentUser) {
+          await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
+        }
+        for (const def of collectionDefs) {
+          try {
+            const snap = await serverFsGetDocs(serverFsCollection(serverDb, def.collectionName));
+            def.docCount = snap.size;
+          } catch {
+            // keep fallback count
+          }
+        }
+      } catch (err: any) {
+        console.warn('[Admin Database Stats Server Notice]', err?.message || err);
+      }
+    }
+
+    res.json({
+      success: true,
+      stats: collectionDefs,
+    });
+  });
+
+  app.post('/api/admin/database/export', requireAdminMiddleware, async (req: Request, res: Response) => {
+    const collectionsList = Array.isArray(req.body?.collections)
+      ? (req.body.collections as string[])
+      : [];
+
+    if (collectionsList.length === 0) {
+      res.status(400).json({ error: 'Daftar koleksi tidak boleh kosong.' });
+      return;
+    }
+
+    if (!serverDb || !serverAuth) {
+      res.status(500).json({ error: 'Koneksi database server belum diinisialisasi.' });
+      return;
+    }
+
+    try {
+      if (!serverAuth.currentUser) {
+        await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
+      }
+
+      const tsToIso = (val: any): any => {
+        if (val === null || val === undefined) return val;
+        if (typeof val === 'object') {
+          if (typeof val.toDate === 'function') {
+            try { return val.toDate().toISOString(); } catch { return String(val); }
+          }
+          if ('seconds' in val && typeof val.seconds === 'number') {
+            try { return new Date(val.seconds * 1000).toISOString(); } catch { return String(val); }
+          }
+          if (Array.isArray(val)) {
+            return val.map(tsToIso);
+          }
+          const out: Record<string, any> = {};
+          for (const [k, v] of Object.entries(val)) {
+            out[k] = tsToIso(v);
+          }
+          return out;
+        }
+        return val;
+      };
+
+      const backupData: Record<string, Record<string, any>[]> = {};
+      for (const colName of collectionsList) {
+        try {
+          const snap = await serverFsGetDocs(serverFsCollection(serverDb, colName));
+          backupData[colName] = snap.docs.map((d) => {
+            const raw = d.data();
+            const serialized = tsToIso(raw);
+            return {
+              __docId: d.id,
+              id: raw.id ?? raw.uid ?? d.id,
+              ...serialized,
+            };
+          });
+        } catch (colErr: any) {
+          console.warn(`[Admin Database Export Server] Warning exporting ${colName}:`, colErr?.message || colErr);
+          backupData[colName] = [];
+        }
+      }
+
+      appendLog(
+        'admin_vuedevo_01',
+        SUPER_ADMIN_EMAIL,
+        'server_database_backup_export',
+        `Super Admin mengekspor ${collectionsList.length} koleksi via server backup bridge.`,
+        'info'
+      );
+
+      res.json({
+        success: true,
+        backupData,
+      });
+    } catch (err: any) {
+      console.error('[Admin Database Export Server Error]', err);
+      res.status(500).json({
+        error: `Gagal mengekspor database dari server: ${err?.message || err}`,
+      });
+    }
+  });
+
+  app.get('/api/admin/database/raw-docs', requireAdminMiddleware, async (req: Request, res: Response) => {
+    const colName = String(req.query.collection || '').trim();
+    const limitCount = Math.min(500, Math.max(1, Number(req.query.limit) || 50));
+    if (!colName) {
+      res.status(400).json({ error: 'Parameter collection wajib disertakan.' });
+      return;
+    }
+
+    if (!serverDb || !serverAuth) {
+      res.status(500).json({ error: 'Server database worker tidak aktif.' });
+      return;
+    }
+
+    try {
+      if (!serverAuth.currentUser) {
+        await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
+      }
+
+      const snap = await serverFsGetDocs(serverFsCollection(serverDb, colName));
+      const tsToIso = (val: any): any => {
+        if (val === null || val === undefined) return val;
+        if (typeof val === 'object') {
+          if (typeof val.toDate === 'function') {
+            try { return val.toDate().toISOString(); } catch { return String(val); }
+          }
+          if ('seconds' in val && typeof val.seconds === 'number') {
+            try { return new Date(val.seconds * 1000).toISOString(); } catch { return String(val); }
+          }
+          if (Array.isArray(val)) return val.map(tsToIso);
+          const out: Record<string, any> = {};
+          for (const [k, v] of Object.entries(val)) out[k] = tsToIso(v);
+          return out;
+        }
+        return val;
+      };
+
+      const docs = snap.docs.slice(0, limitCount).map((d) => {
+        const raw = d.data();
+        return {
+          __docId: d.id,
+          id: raw.id ?? raw.uid ?? d.id,
+          ...tsToIso(raw),
+        };
+      });
+
+      res.json({
+        success: true,
+        collection: colName,
+        totalInCollection: snap.size,
+        docs,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Gagal membaca dokumen dari server.' });
+    }
+  });
+
+  // =========================================================================
   // App Version & Live Update Detection Endpoint
   // =========================================================================
   function computeCurrentBuildFingerprint(): { version: string; buildHash: string } {

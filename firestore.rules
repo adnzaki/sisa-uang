@@ -384,8 +384,8 @@ service cloud.firestore {
 
     // 3. Wallets Collection (/wallets/{walletId})
     match /wallets/{walletId} {
-      allow get: if isSignedIn() && isValidId(walletId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(walletId) && (isAdmin() || (resource != null && resource.data.ownerId == request.auth.uid));
+      allow list: if isSignedIn() && (isAdmin() || resource.data.ownerId == request.auth.uid);
       allow create: if isSignedIn() &&
         isValidId(walletId) &&
         isValidWallet(incoming()) &&
@@ -422,8 +422,8 @@ service cloud.firestore {
 
     // 4. Wallet Owners Collection (/wallet_owners/{fundOwnerId})
     match /wallet_owners/{fundOwnerId} {
-      allow get: if isSignedIn() && isValidId(fundOwnerId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(fundOwnerId) && (isAdmin() || (resource != null && resource.data.ownerId == request.auth.uid));
+      allow list: if isSignedIn() && (isAdmin() || resource.data.ownerId == request.auth.uid);
       allow create: if isSignedIn() &&
         isValidId(fundOwnerId) &&
         isValidWalletOwner(incoming()) &&
@@ -474,16 +474,18 @@ service cloud.firestore {
     // 5. Categories Collection (/categories/{categoryId})
     match /categories/{categoryId} {
       allow get: if isSignedIn() && isValidId(categoryId) && (
-        existing().ownerId == request.auth.uid ||
-        existing().ownerId == 'default' ||
-        existing().ownerId == 'system' ||
-        isAdmin()
+        isAdmin() ||
+        (resource != null && (
+          resource.data.ownerId == request.auth.uid ||
+          resource.data.ownerId == 'default' ||
+          resource.data.ownerId == 'system'
+        ))
       );
       allow list: if isSignedIn() && (
-        existing().ownerId == request.auth.uid ||
-        existing().ownerId == 'default' ||
-        existing().ownerId == 'system' ||
-        isAdmin()
+        isAdmin() ||
+        resource.data.ownerId == request.auth.uid ||
+        resource.data.ownerId == 'default' ||
+        resource.data.ownerId == 'system'
       );
       allow create: if isSignedIn() &&
         isValidId(categoryId) &&
@@ -521,8 +523,8 @@ service cloud.firestore {
 
     // 6. Transactions Collection (/transactions/{transactionId})
     match /transactions/{transactionId} {
-      allow get: if isSignedIn() && isValidId(transactionId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(transactionId) && (isAdmin() || (resource != null && resource.data.ownerId == request.auth.uid));
+      allow list: if isSignedIn() && (isAdmin() || resource.data.ownerId == request.auth.uid);
       allow create: if isSignedIn() &&
         isValidId(transactionId) &&
         isValidTransaction(incoming()) &&
@@ -606,8 +608,8 @@ service cloud.firestore {
 
     // 7. Budgets Collection (/budgets/{budgetId})
     match /budgets/{budgetId} {
-      allow get: if isSignedIn() && isValidId(budgetId) && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(budgetId) && (isAdmin() || (resource != null && resource.data.ownerId == request.auth.uid));
+      allow list: if isSignedIn() && (isAdmin() || resource.data.ownerId == request.auth.uid);
       allow create: if isSignedIn() &&
         isValidId(budgetId) &&
         isValidBudget(incoming()) &&
@@ -644,8 +646,8 @@ service cloud.firestore {
 
     // 8. Activity Logs Collection (/activity_logs/{logId})
     match /activity_logs/{logId} {
-      allow get: if isSignedIn() && isValidId(logId) && (existing().actorUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().actorUid == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(logId) && (isAdmin() || (resource != null && resource.data.actorUid == request.auth.uid));
+      allow list: if isSignedIn() && (isAdmin() || resource.data.actorUid == request.auth.uid);
       allow create: if isSignedIn() &&
         isValidId(logId) &&
         isValidActivityLog(incoming()) &&
@@ -663,8 +665,8 @@ service cloud.firestore {
 
     // 9. Security Alerts Collection (/security_alerts/{alertId})
     match /security_alerts/{alertId} {
-      allow get: if isSignedIn() && isValidId(alertId) && (existing().actorUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().actorUid == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(alertId) && (isAdmin() || (resource != null && resource.data.actorUid == request.auth.uid));
+      allow list: if isSignedIn() && (isAdmin() || resource.data.actorUid == request.auth.uid);
       allow create: if isSignedIn() &&
         isValidId(alertId) &&
         isValidSecurityAlert(incoming()) &&
@@ -687,16 +689,16 @@ service cloud.firestore {
     // 10. Report Settings Collection (/report_settings/{settingId})
     match /report_settings/{settingId} {
       allow get: if isSignedIn() && isValidId(settingId) && (
+        isAdmin() ||
         resource == null ||
         resource.data.ownerId == request.auth.uid ||
         settingId == request.auth.uid ||
-        settingId == 'default' ||
-        isAdmin()
+        settingId == 'default'
       );
       allow list: if isSignedIn() && (
+        isAdmin() ||
         resource.data.ownerId == request.auth.uid ||
-        resource.data.ownerId == 'default' ||
-        isAdmin()
+        resource.data.ownerId == 'default'
       );
       allow create: if isSignedIn() &&
         isValidId(settingId) &&
@@ -729,8 +731,8 @@ service cloud.firestore {
 
     // 11. Automations Collection (/automations/{automationId})
     match /automations/{automationId} {
-      allow get: if isSignedIn() && isValidId(automationId) && (resource == null || resource.data.ownerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(automationId) && (isAdmin() || resource == null || resource.data.ownerId == request.auth.uid);
+      allow list: if isSignedIn() && (isAdmin() || resource.data.ownerId == request.auth.uid);
       allow create: if isSignedIn() &&
         isValidId(automationId) &&
         isValidAutomation(incoming()) &&
