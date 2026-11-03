@@ -71,7 +71,7 @@ onMounted(() => {
                 <span>Sertifikasi PCI-DSS Level 1</span>
               </div>
               <p class="text-xs text-slate-600 dark:text-slate-400">
-                SisaUang <strong>tidak pernah menyimpan atau memiliki akses</strong> terhadap nomor lengkap kartu kredit, CVV, PIN mobile banking, atau kredensial e-wallet Anda. Seluruh data pembayaran sensitif diproses langsung melalui protokol keamanan Midtrans berstandar internasional.
+                SisaUang <strong>tidak pernah menyimpan atau memiliki akses</strong> terhadap nomor lengkap kartu kredit, CVV, PIN mobile banking, atau kredensial e-wallet Anda. Seluruh data pembayaran sensitif diproses langsung melalui protokol keamanan Duitku berstandar internasional.
               </p>
             </div>
           </section>
