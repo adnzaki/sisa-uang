@@ -58,10 +58,10 @@ onMounted(() => {
                 <strong>Kegagalan Sistemik Terverifikasi</strong>: Terjadi galat (*error*) kritis berulang pada basis data atau fitur ekspor laporan yang diverifikasi oleh tim pengembang dan tidak dapat diperbaiki dalam kurun waktu 3x24 jam kerja.
               </li>
               <li>
-                <strong>Transaksi Ganda (*Double Charge*)</strong>: Terjadi pemotongan saldo atau penerbitan tagihan ganda untuk satu periode langganan yang sama akibat kendala jaringan pada payment gateway Midtrans.
+                <strong>Transaksi Ganda (*Double Charge*)</strong>: Terjadi pemotongan saldo atau penerbitan tagihan ganda untuk satu periode langganan yang sama akibat kendala jaringan pada payment gateway Duitku.
               </li>
               <li>
-                <strong>Aktivasi Gagal</strong>: Pembayaran telah berstatus Lunas (*Settlement / Success*) di Midtrans, namun status akun tidak ter-upgrade dan kendala tidak dapat diselesaikan oleh tim teknis.
+                <strong>Aktivasi Gagal</strong>: Pembayaran telah berstatus Lunas (*Settlement / Success*) di Duitku, namun status akun tidak ter-upgrade dan kendala tidak dapat diselesaikan oleh tim teknis.
               </li>
             </ul>
           </section>
@@ -99,7 +99,7 @@ onMounted(() => {
               <li>
                 Sertakan dokumen pendukung:
                 <ul class="list-disc pl-5 mt-1 space-y-1">
-                  <li>Nomor Order ID / Invoice Midtrans (contoh: <code>INV-SU-XXXXXX</code>)</li>
+                  <li>Nomor Order ID / Invoice Duitku (contoh: <code>INV-SU-XXXXXX</code>)</li>
                   <li>Email terdaftar pada akun SisaUang</li>
                   <li>Bukti tangkapan layar transaksi atau kendala teknis yang dialami</li>
                   <li>Nomor rekening bank atau nomor e-wallet tujuan pengembalian dana (harus atas nama yang sama dengan pemesan)</li>

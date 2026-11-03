@@ -26,7 +26,7 @@ onMounted(() => {
             Syarat dan Ketentuan Layanan (Terms & Conditions)
           </h1>
           <p class="text-xs text-slate-500">
-            Terakhir diperbarui: 15 Oktober 2026 · Mengadopsi Standar Lisensi Perangkat Lunak Digital Goods Midtrans
+            Terakhir diperbarui: 15 Oktober 2026 · Mengadopsi Standar Lisensi Perangkat Lunak Digital Goods Duitku
           </p>
         </div>
 
@@ -76,7 +76,7 @@ onMounted(() => {
               <div>&bull; <strong>SisaUang Pro Tahunan:</strong> Rp 215.000 / tahun</div>
             </div>
             <p>
-              Pembayaran diproses langsung di dalam website melalui mitra payment gateway resmi berlisensi Bank Indonesia (**Midtrans**). Kami menerima kanal pembayaran QRIS, Virtual Account bank nasional (BCA, Mandiri, BRI, BNI), GoPay, dan Kartu Kredit/Debit berstandar PCI-DSS Level 1.
+              Pembayaran diproses langsung di dalam website melalui mitra payment gateway resmi berlisensi Bank Indonesia (**Duitku**). Kami menerima kanal pembayaran QRIS, Virtual Account bank nasional (BCA, Mandiri, BRI, BNI), GoPay, dan Kartu Kredit/Debit berstandar PCI-DSS Level 1.
             </p>
           </section>
 

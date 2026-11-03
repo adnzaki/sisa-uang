@@ -200,7 +200,7 @@ function navigateToSection(sectionId: string) {
         <div class="flex items-center gap-4 text-[11px]">
           <span>Mata Uang Transaksi: Rupiah (IDR)</span>
           <span aria-hidden="true">&middot;</span>
-          <span>Diproses via Midtrans Payment Gateway</span>
+          <span>Diproses via Duitku Payment Gateway</span>
         </div>
       </div>
     </div>

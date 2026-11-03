@@ -1,7 +1,7 @@
 /**
  * Pre-rendered Semantic HTML Templates for Public & Legal Pages
  * Provides instant first-paint HTML and full SEO / compliance visibility
- * for search engines, Midtrans verification crawlers, and visitors before JS execution.
+ * for search engines, Duitku verification crawlers, and visitors before JS execution.
  */
 
 export interface PreRenderPageData {
@@ -117,7 +117,7 @@ const COMMON_FOOTER_HTML = `
         <div class="flex items-center gap-4 text-[11px]">
           <span>Mata Uang Transaksi: Rupiah (IDR)</span>
           <span aria-hidden="true">&middot;</span>
-          <span>Diproses via Midtrans Payment Gateway</span>
+          <span>Diproses via Duitku Payment Gateway</span>
         </div>
       </div>
     </div>
@@ -135,7 +135,7 @@ const PRICING_SECTION_HTML = `
           Investasi Terjangkau untuk Tata Kelola Finansial Profesional
         </h3>
         <p class="text-sm text-slate-600 dark:text-slate-400">
-          Pilih paket yang sesuai dengan kebutuhan Anda. Semua transaksi ditagihkan dalam mata uang Rupiah Indonesia (IDR) melalui Midtrans.
+          Pilih paket yang sesuai dengan kebutuhan Anda. Semua transaksi ditagihkan dalam mata uang Rupiah Indonesia (IDR) melalui Duitku.
         </p>
       </div>
 
@@ -595,7 +595,7 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
   '/landing': LANDING_PAGE_DATA,
   '/pricing': {
     title: 'Paket Berlangganan Resmi (IDR) – SisaUang Pro',
-    description: 'Daftar paket harga resmi SisaUang Pro (IDR) mulai Rp 21.500/bulan dan Rp 215.000/tahun. Pembayaran resmi Rupiah melalui Midtrans QRIS, Virtual Account, dan Kartu Kredit.',
+    description: 'Daftar paket harga resmi SisaUang Pro (IDR) mulai Rp 21.500/bulan dan Rp 215.000/tahun. Pembayaran resmi Rupiah melalui Duitku QRIS, Virtual Account, dan Kartu Kredit.',
     canonicalUrl: 'https://sisauang.bitdanbait.web.id/pricing',
     htmlContent: `
       <div class="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 selection:bg-emerald-500/20 selection:text-emerald-600">
@@ -613,7 +613,7 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
                 Pilihan Paket Berlangganan Transparan (IDR)
               </h1>
               <p class="text-sm sm:text-base text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
-                Bebas pilih berlangganan bulanan yang fleksibel atau tahunan yang jauh lebih hemat. Seluruh transaksi diproses aman di dalam website via Midtrans.
+                Bebas pilih berlangganan bulanan yang fleksibel atau tahunan yang jauh lebih hemat. Seluruh transaksi diproses aman di dalam website via Duitku.
               </p>
             </div>
           </div>
@@ -635,7 +635,7 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
 
   '/terms': {
     title: 'Syarat dan Ketentuan Layanan (Terms & Conditions) – SisaUang',
-    description: 'Syarat dan Ketentuan resmi lisensi platform SisaUang Pro. Mengadopsi standar Digital Goods Midtrans, ketentuan lisensi, dan mata uang transaksi Rupiah (IDR).',
+    description: 'Syarat dan Ketentuan resmi lisensi platform SisaUang Pro. Mengadopsi standar Digital Goods Duitku, ketentuan lisensi, dan mata uang transaksi Rupiah (IDR).',
     canonicalUrl: 'https://sisauang.bitdanbait.web.id/terms',
     htmlContent: `
       <div class="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
@@ -649,7 +649,7 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
                 Syarat dan Ketentuan Layanan (Terms &amp; Conditions)
               </h1>
               <p class="text-xs text-slate-500">
-                Terakhir diperbarui: 15 Oktober 2026 · Mengadopsi Standar Lisensi Platform Digital Goods Midtrans
+                Terakhir diperbarui: 15 Oktober 2026 · Mengadopsi Standar Lisensi Platform Digital Goods Duitku
               </p>
             </div>
 
@@ -689,7 +689,7 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
                   <div>&bull; <strong>SisaUang Pro Tahunan:</strong> Rp 215.000 / tahun</div>
                 </div>
                 <p>
-                  Pembayaran diproses langsung di dalam website melalui mitra payment gateway resmi berlisensi Bank Indonesia (<strong>Midtrans</strong>). Kami menerima kanal pembayaran QRIS, Virtual Account bank nasional (BCA, Mandiri, BRI, BNI), GoPay, dan Kartu Kredit/Debit berstandar PCI-DSS Level 1.
+                  Pembayaran diproses langsung di dalam website melalui mitra payment gateway resmi berlisensi Bank Indonesia (<strong>Duitku</strong>). Kami menerima kanal pembayaran QRIS, Virtual Account bank nasional (BCA, Mandiri, BRI, BNI), GoPay, dan Kartu Kredit/Debit berstandar PCI-DSS Level 1.
                 </p>
               </section>
 
@@ -730,7 +730,7 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
 
   '/refund-policy': {
     title: 'Kebijakan Pengembalian Dana (Refund Policy) – SisaUang',
-    description: 'Kebijakan pengembalian dana resmi untuk pembelian paket SisaUang Pro. Garansi kepuasan pelanggan 7 hari kalender, prosedur klaim, dan pemrosesan Midtrans.',
+    description: 'Kebijakan pengembalian dana resmi untuk pembelian paket SisaUang Pro. Garansi kepuasan pelanggan 7 hari kalender, prosedur klaim, dan pemrosesan Duitku.',
     canonicalUrl: 'https://sisauang.bitdanbait.web.id/refund-policy',
     htmlContent: `
       <div class="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
@@ -767,8 +767,8 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
                 </p>
                 <ul class="list-disc pl-5 space-y-1.5">
                   <li><strong>Kegagalan Sistemik Terverifikasi</strong>: Terjadi galat (*error*) kritis berulang pada basis data atau fitur ekspor laporan yang diverifikasi oleh tim pengembang dan tidak dapat diperbaiki dalam kurun waktu 3x24 jam kerja.</li>
-                  <li><strong>Transaksi Ganda (*Double Charge*)</strong>: Terjadi pemotongan saldo atau penerbitan tagihan ganda untuk satu periode langganan yang sama akibat kendala jaringan pada payment gateway Midtrans.</li>
-                  <li><strong>Aktivasi Gagal</strong>: Pembayaran telah berstatus Lunas (*Settlement / Success*) di Midtrans, namun status akun tidak ter-upgrade dan kendala tidak dapat diselesaikan oleh tim teknis.</li>
+                  <li><strong>Transaksi Ganda (*Double Charge*)</strong>: Terjadi pemotongan saldo atau penerbitan tagihan ganda untuk satu periode langganan yang sama akibat kendala jaringan pada payment gateway Duitku.</li>
+                  <li><strong>Aktivasi Gagal</strong>: Pembayaran telah berstatus Lunas (*Settlement / Success*) di Duitku, namun status akun tidak ter-upgrade dan kendala tidak dapat diselesaikan oleh tim teknis.</li>
                 </ul>
               </section>
 
@@ -788,7 +788,7 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
                 <ol class="list-decimal pl-5 space-y-2">
                   <li>Kirimkan email ke alamat resmi: <a href="mailto:vuedevo@gmail.com" class="text-emerald-600 underline font-semibold">vuedevo@gmail.com</a> atau WhatsApp layanan ke <a href="https://wa.me/6285129634505" class="text-emerald-600 underline font-semibold">0851-2963-4505</a>.</li>
                   <li>Gunakan subjek: <strong>[PERMOHONAN REFUND] - Nomor Invoice / Email Akun</strong>.</li>
-                  <li>Sertakan dokumen pendukung: Nomor Order ID / Invoice Midtrans (contoh: <code>INV-SU-XXXXXX</code>), Email terdaftar, Bukti kendala teknis, dan Nomor rekening/e-wallet tujuan refund.</li>
+                  <li>Sertakan dokumen pendukung: Nomor Order ID / Invoice Duitku (contoh: <code>INV-SU-XXXXXX</code>), Email terdaftar, Bukti kendala teknis, dan Nomor rekening/e-wallet tujuan refund.</li>
                   <li>Tim verifikasi kami akan meninjau kelayakan dalam jangka waktu maksimal <strong>2x24 jam kerja</strong>.</li>
                   <li>Setelah disetujui, dana akan dikembalikan ke rekening/e-wallet asal dalam waktu 3–5 hari kerja perbankan.</li>
                 </ol>
@@ -811,7 +811,7 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
 
   '/privacy': {
     title: 'Kebijakan Privasi (Privacy Policy) – SisaUang',
-    description: 'Kebijakan Privasi data pengguna platform SisaUang. Menjamin keamanan data keuangan, enkripsi TLS 256-bit, standar UU PDP No. 27 Tahun 2022, dan kepatuhan PCI-DSS Midtrans.',
+    description: 'Kebijakan Privasi data pengguna platform SisaUang. Menjamin keamanan data keuangan, enkripsi TLS 256-bit, standar UU PDP No. 27 Tahun 2022, dan kepatuhan PCI-DSS Duitku.',
     canonicalUrl: 'https://sisauang.bitdanbait.web.id/privacy',
     htmlContent: `
       <div class="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
@@ -850,12 +850,12 @@ export const PRERENDERED_PAGES: Record<string, PreRenderPageData> = {
               <section class="space-y-3">
                 <h2 class="text-base font-bold text-slate-900 dark:text-slate-100">3. Keamanan Data Transaksi Pembayaran (Payment Gateway)</h2>
                 <p>
-                  Ketika Anda berlangganan paket <strong>SisaUang Pro (Bulanan: Rp 21.500 atau Tahunan: Rp 215.000)</strong>, pemrosesan transaksi pembayaran dilakukan secara terenkripsi oleh mitra resmi berlisensi Bank Indonesia, yaitu <strong>Midtrans (PT Midtrans)</strong>:
+                  Ketika Anda berlangganan paket <strong>SisaUang Pro (Bulanan: Rp 21.500 atau Tahunan: Rp 215.000)</strong>, pemrosesan transaksi pembayaran dilakukan secara terenkripsi oleh mitra resmi berlisensi Bank Indonesia, yaitu <strong>Duitku (PT Duitku)</strong>:
                 </p>
                 <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 space-y-2">
                   <div class="font-semibold text-slate-900 dark:text-slate-100">Sertifikasi PCI-DSS Level 1</div>
                   <p class="text-xs text-slate-600 dark:text-slate-400">
-                    SisaUang <strong>tidak pernah menyimpan atau memiliki akses</strong> terhadap nomor lengkap kartu kredit, CVV, PIN mobile banking, atau kredensial e-wallet Anda. Seluruh data pembayaran sensitif diproses langsung melalui protokol keamanan Midtrans berstandar internasional.
+                    SisaUang <strong>tidak pernah menyimpan atau memiliki akses</strong> terhadap nomor lengkap kartu kredit, CVV, PIN mobile banking, atau kredensial e-wallet Anda. Seluruh data pembayaran sensitif diproses langsung melalui protokol keamanan Duitku berstandar internasional.
                   </p>
                 </div>
               </section>

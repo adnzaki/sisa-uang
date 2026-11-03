@@ -63,7 +63,7 @@ onMounted(() => {
               3. Keamanan Data Transaksi Pembayaran (Payment Gateway)
             </h2>
             <p>
-              Ketika Anda berlangganan paket <strong>SisaUang Pro (Bulanan: Rp 21.500 atau Tahunan: Rp 215.000)</strong>, pemrosesan transaksi pembayaran dilakukan secara terenkripsi oleh mitra resmi berlisensi Bank Indonesia, yaitu <strong>Midtrans (PT Midtrans)</strong>:
+              Ketika Anda berlangganan paket <strong>SisaUang Pro (Bulanan: Rp 21.500 atau Tahunan: Rp 215.000)</strong>, pemrosesan transaksi pembayaran dilakukan secara terenkripsi oleh mitra resmi berlisensi Bank Indonesia, yaitu <strong>Duitku</strong>:
             </p>
             <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 space-y-2">
               <div class="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
