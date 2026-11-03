@@ -36,6 +36,44 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error.response?.status;
+    const errorMsg = String(error.response?.data?.error || '').toLowerCase();
+    const url = String(error.config?.url || '');
+
+    const isTokenError =
+      status === 401 ||
+      (status === 403 &&
+        (url.includes('/admin') ||
+          errorMsg.includes('token') ||
+          errorMsg.includes('sesi super admin') ||
+          errorMsg.includes('kedaluwarsa') ||
+          errorMsg.includes('dicabut')));
+
+    if (isTokenError && typeof window !== 'undefined') {
+      const currentToken = localStorage.getItem(ADMIN_TOKEN_KEY);
+      if (currentToken) {
+        localStorage.removeItem(ADMIN_TOKEN_KEY);
+        localStorage.setItem('sisa_uang_otp_verified', 'false');
+      }
+
+      window.dispatchEvent(
+        new CustomEvent('sisauang:admin-session-expired', {
+          detail: {
+            message:
+              error.response?.data?.error ||
+              'Sesi Super Admin telah kedaluwarsa. Silakan masuk kembali.',
+            status,
+          },
+        })
+      );
+    }
+    return Promise.reject(error);
+  }
+);
+
 export function setApiAdminContext(email: string | null, token: string | null) {
   if (email) {
     localStorage.setItem(ACTOR_EMAIL_KEY, email);

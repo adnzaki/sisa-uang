@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   Database,
@@ -64,6 +64,44 @@ const router = useRouter();
 const authStore = useAuthStore();
 const adminStore = useAdminStore();
 const notificationStore = useNotificationStore();
+
+function checkSuperAdminSessionOrRedirect(): boolean {
+  if (!authStore.canAccessControlPanel) {
+    explorerRawDocs.value = [];
+    firestoreCollectionsStats.value = [];
+    adminStore.invalidateAllAdminCaches();
+    router.replace({ path: '/auth', query: { step: 'otp', redirect: '/database' } });
+    return false;
+  }
+  return true;
+}
+
+watch(
+  () => authStore.canAccessControlPanel,
+  (canAccess) => {
+    if (!canAccess) {
+      explorerRawDocs.value = [];
+      firestoreCollectionsStats.value = [];
+      adminStore.invalidateAllAdminCaches();
+      router.replace({ path: '/auth', query: { step: 'otp', redirect: '/database' } });
+    }
+  },
+  { immediate: true }
+);
+
+function onAdminSessionExpiredListener() {
+  explorerRawDocs.value = [];
+  firestoreCollectionsStats.value = [];
+  adminStore.invalidateAllAdminCaches();
+  router.replace({ path: '/auth', query: { step: 'otp', redirect: '/database' } });
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('sisauang:admin-session-expired', onAdminSessionExpiredListener);
+  onUnmounted(() => {
+    window.removeEventListener('sisauang:admin-session-expired', onAdminSessionExpiredListener);
+  });
+}
 
 // =========================================================================
 // Active Tab State: 'explorer' (Data Explorer) | 'import' (Impor Database) | 'delete' (Hapus Database)
@@ -180,7 +218,7 @@ async function loadExplorerCollectionDocs(
   forceRefresh = false,
   targetPage = 1
 ) {
-  if (!authStore.isSuperAdmin) return;
+  if (!checkSuperAdminSessionOrRedirect()) return;
   explorerSelectedCollection.value = colName;
   isLoadingExplorerDocs.value = true;
   try {
@@ -199,6 +237,10 @@ async function loadExplorerCollectionDocs(
       explorerSortField.value = '__docId';
     }
   } catch (err) {
+    if (!authStore.canAccessControlPanel) {
+      checkSuperAdminSessionOrRedirect();
+      return;
+    }
     notificationStore.notifyError(
       'Gagal Memuat Data Koleksi',
       err,
@@ -210,6 +252,7 @@ async function loadExplorerCollectionDocs(
 }
 
 async function goToExplorerPage(newPage: number) {
+  if (!checkSuperAdminSessionOrRedirect()) return;
   if (newPage < 1 || (newPage > explorerCurrentPage.value && !explorerHasMore.value)) return;
   await loadExplorerCollectionDocs(explorerSelectedCollection.value, false, newPage);
 }
@@ -666,6 +709,7 @@ const computedExportFilename = computed<string>(() => {
 });
 
 async function handleExecuteExport() {
+  if (!checkSuperAdminSessionOrRedirect()) return;
   if (isExporting.value) return;
   isExporting.value = true;
   exportProgress.value = null;
@@ -864,6 +908,10 @@ async function handleExecuteExport() {
       showExportModal.value = false;
     }
   } catch (err: any) {
+    if (!authStore.canAccessControlPanel) {
+      checkSuperAdminSessionOrRedirect();
+      return;
+    }
     notificationStore.notifyError(
       'Gagal Mengekspor Database',
       err,
@@ -877,6 +925,7 @@ async function handleExecuteExport() {
 
 // 1-Click fast routine backup action directly from the explorer tab banner
 async function handleQuickRoutineBackup() {
+  if (!checkSuperAdminSessionOrRedirect()) return;
   exportScope.value = 'full';
   exportFormat.value = 'json';
   exportIncludeSoftDeleted.value = true;
@@ -884,6 +933,7 @@ async function handleQuickRoutineBackup() {
 }
 
 function handleQuickExportCurrentResults(format: 'json' | 'csv') {
+  if (!checkSuperAdminSessionOrRedirect()) return;
   exportScope.value = 'filtered';
   exportFormat.value = format;
   void handleExecuteExport();
@@ -908,11 +958,15 @@ const totalLiveFirestoreDocs = computed(() =>
 );
 
 async function loadFirestoreCollectionStats(forceRefresh = false) {
-  if (!authStore.isSuperAdmin) return;
+  if (!checkSuperAdminSessionOrRedirect()) return;
   isLoadingFirestoreStats.value = true;
   try {
     firestoreCollectionsStats.value = await adminStore.fetchFirestoreCollectionStats(forceRefresh);
   } catch (err) {
+    if (!authStore.canAccessControlPanel) {
+      checkSuperAdminSessionOrRedirect();
+      return;
+    }
     console.warn('Failed to load Firestore collection stats:', err);
   } finally {
     isLoadingFirestoreStats.value = false;
@@ -920,7 +974,7 @@ async function loadFirestoreCollectionStats(forceRefresh = false) {
 }
 
 onMounted(() => {
-  if (authStore.isSuperAdmin) {
+  if (checkSuperAdminSessionOrRedirect()) {
     if (activeDbTab.value === 'explorer') {
       loadExplorerCollectionDocs(explorerSelectedCollection.value, false);
       void loadFirestoreCollectionStats(false);
@@ -972,6 +1026,7 @@ const pendingDeleteFirestoreTotalDocs = computed(() =>
 );
 
 async function confirmAndExecuteFirestoreCollectionsDelete() {
+  if (!checkSuperAdminSessionOrRedirect()) return;
   if (pendingDeleteFirestoreCols.value.length === 0) return;
   isDeletingFirestoreCols.value = true;
   deleteFirestoreProgressText.value = 'Menyiapkan penghapusan tabel/koleksi Firestore...';
@@ -1424,6 +1479,7 @@ async function copyConvertedJson() {
 }
 
 async function confirmAndExecuteImport() {
+  if (!checkSuperAdminSessionOrRedirect()) return;
   if (!migrationAnalysis.value) return;
   isImporting.value = true;
   importProgressText.value = 'Menyiapkan batch dokumen Firestore...';

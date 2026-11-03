@@ -520,6 +520,9 @@ export interface ServerAutomationRecord {
   lastExecutedDate?: string | null;
   lastCancelledDate?: string | null;
   snoozedUntil?: string | null;
+  claimedExecutionDate?: string | null;
+  claimedAt?: number | null;
+  claimedBy?: string | null;
   deleted?: boolean;
   deletedAt?: string | null;
   createdAt?: string;
@@ -2173,8 +2176,18 @@ async function startServer() {
     }
 
     if (body.isActive !== undefined) existing.isActive = Boolean(body.isActive);
-    if (body.lastExecutedDate !== undefined) existing.lastExecutedDate = body.lastExecutedDate;
-    if (body.lastCancelledDate !== undefined) existing.lastCancelledDate = body.lastCancelledDate;
+    if (body.lastExecutedDate !== undefined) {
+      existing.lastExecutedDate = body.lastExecutedDate;
+      existing.claimedExecutionDate = null;
+      existing.claimedAt = null;
+      existing.claimedBy = null;
+    }
+    if (body.lastCancelledDate !== undefined) {
+      existing.lastCancelledDate = body.lastCancelledDate;
+      existing.claimedExecutionDate = null;
+      existing.claimedAt = null;
+      existing.claimedBy = null;
+    }
     if (body.snoozedUntil !== undefined) existing.snoozedUntil = body.snoozedUntil;
     if (body.deleted !== undefined) existing.deleted = Boolean(body.deleted);
     existing.updatedAt = nowIso();
@@ -2191,6 +2204,107 @@ async function startServer() {
       success: true,
       rule: existing,
     });
+  });
+
+  // Fetch a single automation rule's real-time execution state
+  app.get('/api/users/:uid/automations/:id', (req: Request, res: Response) => {
+    const id = String(req.params.id || '').trim();
+    const existing = automationsStore.get(id);
+    if (!existing || existing.deleted) {
+      res.status(404).json({ success: false, error: 'Automation rule not found' });
+      return;
+    }
+    res.json({ success: true, rule: existing });
+  });
+
+  // Atomic distributed claim endpoint to guarantee single-device execution across multi-device logins
+  app.post('/api/users/:uid/automations/:id/claim-execution', (req: Request, res: Response) => {
+    const id = String(req.params.id || '').trim();
+    const targetDate = String(req.body?.date || '').trim();
+    const deviceId = String(req.body?.deviceId || '').trim();
+
+    if (!targetDate) {
+      res.status(400).json({ success: false, error: 'Target execution date is required' });
+      return;
+    }
+
+    const existing = automationsStore.get(id);
+    if (!existing || existing.deleted) {
+      res.status(404).json({ success: false, error: 'Automation rule not found' });
+      return;
+    }
+
+    // 1. If already executed today, refuse claim immediately
+    if (existing.lastExecutedDate === targetDate) {
+      res.json({
+        success: false,
+        claimed: false,
+        reason: 'already_executed',
+        lastExecutedDate: existing.lastExecutedDate,
+      });
+      return;
+    }
+
+    // 2. If already cancelled today, refuse claim immediately
+    if (existing.lastCancelledDate === targetDate) {
+      res.json({
+        success: false,
+        claimed: false,
+        reason: 'already_cancelled',
+        lastCancelledDate: existing.lastCancelledDate,
+      });
+      return;
+    }
+
+    // 3. If currently leased/claimed by another device within the last 60 seconds, prevent duplicate execution
+    const nowMs = Date.now();
+    const leaseMs = 60 * 1000;
+    if (
+      existing.claimedExecutionDate === targetDate &&
+      existing.claimedAt &&
+      nowMs - existing.claimedAt < leaseMs &&
+      existing.claimedBy &&
+      existing.claimedBy !== deviceId
+    ) {
+      res.json({
+        success: false,
+        claimed: false,
+        reason: 'currently_claimed_by_other_device',
+        claimedBy: existing.claimedBy,
+        leaseRemainingMs: Math.max(0, leaseMs - (nowMs - existing.claimedAt)),
+      });
+      return;
+    }
+
+    // 4. Grant atomic exclusive execution claim to this device
+    existing.claimedExecutionDate = targetDate;
+    existing.claimedAt = nowMs;
+    existing.claimedBy = deviceId;
+    existing.updatedAt = nowIso();
+    automationsStore.set(id, existing);
+
+    res.json({
+      success: true,
+      claimed: true,
+      rule: existing,
+    });
+  });
+
+  // Release claim if execution failed or was aborted
+  app.post('/api/users/:uid/automations/:id/release-claim', (req: Request, res: Response) => {
+    const id = String(req.params.id || '').trim();
+    const deviceId = String(req.body?.deviceId || '').trim();
+    const existing = automationsStore.get(id);
+    if (existing) {
+      if (!deviceId || existing.claimedBy === deviceId) {
+        existing.claimedExecutionDate = null;
+        existing.claimedAt = null;
+        existing.claimedBy = null;
+        existing.updatedAt = nowIso();
+        automationsStore.set(id, existing);
+      }
+    }
+    res.json({ success: true });
   });
 
   app.delete('/api/users/:uid/automations/:id', (req: Request, res: Response) => {
@@ -3776,6 +3890,14 @@ async function startServer() {
   // =========================================================================
   // Protected Super Admin Endpoints (/api/admin/*)
   // =========================================================================
+
+  // Verify Super Admin active session token validity
+  app.get('/api/admin/verify-session', requireAdminMiddleware, (_req: Request, res: Response) => {
+    res.json({
+      valid: true,
+      timestamp: nowIso(),
+    });
+  });
 
   // Immediate Killswitch: Revoke All Super Admin Active Sessions & Invalidate Tokens
   app.post('/api/admin/revoke-all-sessions', requireAdminMiddleware, (_req: Request, res: Response) => {

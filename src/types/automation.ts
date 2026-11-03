@@ -23,6 +23,9 @@ export interface AutomationItem {
   lastExecutedDate?: string; // YYYY-MM-DD
   lastCancelledDate?: string; // YYYY-MM-DD
   snoozedUntil?: string; // ISO timestamp
+  claimedExecutionDate?: string | null;
+  claimedAt?: number | null;
+  claimedBy?: string | null;
   deleted?: boolean;
   deletedAt?: any;
   createdAt?: any;

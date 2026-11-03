@@ -20,6 +20,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signInAnonymously,
+  signOut as firebaseSignOut,
 } from 'firebase/auth';
 import {
   auth,
@@ -275,8 +276,34 @@ export const useAdminStore = defineStore('admin', () => {
   }
 
   /**
+   * Immediately clears all cached database docs, table counts, users, logs, and alerts in admin store
+   */
+  function invalidateAllAdminCaches() {
+    cachedCollectionStats = null;
+    cachedRawCollectionDocs.clear();
+    rawCollectionCursorMap.clear();
+    adminUsersPageCache.clear();
+    adminLogsPageCache.clear();
+    users.value = [];
+    paginatedUsers.value = [];
+    logs.value = [];
+    paginatedLogs.value = [];
+    alerts.value = [];
+    instantAlertNotification.value = null;
+    adminDocVerifiedInSession = false;
+  }
+
+  // Auto-listen to global admin session expiration events dispatched by API interceptors
+  if (typeof window !== 'undefined') {
+    window.addEventListener('sisauang:admin-session-expired', () => {
+      invalidateAllAdminCaches();
+    });
+  }
+
+  /**
    * Ensure Firebase Auth has an active session for Super Admin on both primary and sisa-uang instances,
    * and register the active UID in `/admins/{uid}` once per session so `isAdmin()` in `firestore.rules` always evaluates to true.
+   * If the session is invalid or expired, actively revoke client-side Firebase Auth sessions.
    */
   async function ensureSuperAdminFirebaseSession(): Promise<void> {
     const authStore = useAuthStore();
@@ -285,11 +312,22 @@ export const useAdminStore = defineStore('admin', () => {
       authStore.otpVerified &&
       Boolean(localStorage.getItem('sisa_uang_admin_token'));
 
+    const authTargets = sisaUangAuth !== auth ? [auth, sisaUangAuth] : [auth];
+
     if (!isSuperAdminVerified) {
+      // Actively sign out from client Firebase Auth so residual Firestore credentials do not persist
+      for (const targetAuth of authTargets) {
+        if (targetAuth.currentUser) {
+          try {
+            await firebaseSignOut(targetAuth);
+          } catch {
+            // Ignore signout error
+          }
+        }
+      }
+      invalidateAllAdminCaches();
       return;
     }
-
-    const authTargets = sisaUangAuth !== auth ? [auth, sisaUangAuth] : [auth];
 
     for (const targetAuth of authTargets) {
       const currentEmail = targetAuth.currentUser?.email?.toLowerCase() || '';
@@ -1764,6 +1802,12 @@ export const useAdminStore = defineStore('admin', () => {
   async function fetchFirestoreCollectionStats(
     forceRefresh = false
   ): Promise<{ collectionName: string; label: string; description: string; docCount: number }[]> {
+    const authStore = useAuthStore();
+    if (!authStore.canAccessControlPanel) {
+      invalidateAllAdminCaches();
+      return [];
+    }
+
     if (!forceRefresh && cachedCollectionStats) {
       return cachedCollectionStats;
     }
@@ -1910,6 +1954,12 @@ export const useAdminStore = defineStore('admin', () => {
     forceRefresh = false,
     options?: { limitCount?: number; unlimited?: boolean }
   ): Promise<Record<string, any>[]> {
+    const authStore = useAuthStore();
+    if (!authStore.canAccessControlPanel) {
+      invalidateAllAdminCaches();
+      throw new Error('Sesi Super Admin telah kedaluwarsa. Silakan verifikasi OTP kembali.');
+    }
+
     const isUnlimited = options?.unlimited === true;
     const docLimit = isUnlimited ? 0 : Math.max(1, options?.limitCount || 50);
     const cacheKey = isUnlimited ? `${collectionName}:unlimited` : `${collectionName}:lim_${docLimit}`;
@@ -1974,6 +2024,12 @@ export const useAdminStore = defineStore('admin', () => {
     pageSize = 50,
     forceRefresh = false
   ): Promise<{ docs: Record<string, any>[]; hasMore: boolean; page: number; pageSize: number }> {
+    const authStore = useAuthStore();
+    if (!authStore.canAccessControlPanel) {
+      invalidateAllAdminCaches();
+      throw new Error('Sesi Super Admin telah kedaluwarsa. Silakan verifikasi OTP kembali.');
+    }
+
     const cleanPage = Math.max(1, page);
     const cleanPageSize = Math.max(1, Math.min(100, pageSize));
     const cacheKey = `${collectionName}:p${cleanPage}:s${cleanPageSize}`;
@@ -2054,6 +2110,12 @@ export const useAdminStore = defineStore('admin', () => {
       docCount: number;
     }) => void
   ): Promise<Record<string, Record<string, any>[]>> {
+    const authStore = useAuthStore();
+    if (!authStore.canAccessControlPanel) {
+      invalidateAllAdminCaches();
+      throw new Error('Sesi Super Admin telah kedaluwarsa. Silakan verifikasi OTP kembali.');
+    }
+
     const backupData: Record<string, Record<string, any>[]> = {};
     let clientFailureCount = 0;
 
@@ -2105,6 +2167,12 @@ export const useAdminStore = defineStore('admin', () => {
     options?: { keepSuperAdminUser?: boolean },
     onProgress?: (phase: string) => void
   ): Promise<{ deletedCount: number; batchesCommitted: number; clearedCollections: string[] }> {
+    const authStore = useAuthStore();
+    if (!authStore.canAccessControlPanel) {
+      invalidateAllAdminCaches();
+      throw new Error('Sesi Super Admin telah kedaluwarsa. Silakan verifikasi OTP kembali.');
+    }
+
     const keepSuperAdmin = options?.keepSuperAdminUser ?? true;
     await ensureSuperAdminFirebaseSession();
     const targetDb = sisaUangDb || db;
@@ -2233,5 +2301,6 @@ export const useAdminStore = defineStore('admin', () => {
     fetchAllCollectionsForFullBackup,
     deleteFirestoreCollections,
     dismissInstantAlertBanner,
+    invalidateAllAdminCaches,
   };
 });

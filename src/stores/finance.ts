@@ -98,6 +98,7 @@ export interface TransactionItem {
   adminFee?: number;
   note: string;
   date: string;
+  automationRuleId?: string;
   deleted?: boolean;
   deletedAt?: any;
   createdAt?: any;
@@ -3965,6 +3966,7 @@ export const useFinanceStore = defineStore('finance', () => {
   // =========================================================================
 
   async function addTransaction(payload: {
+    id?: string;
     walletId: string;
     fundOwnerId?: string;
     toWalletId?: string;
@@ -3976,6 +3978,7 @@ export const useFinanceStore = defineStore('finance', () => {
     adminFee?: number;
     note: string;
     date: string;
+    automationRuleId?: string;
   }) {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
@@ -3988,7 +3991,22 @@ export const useFinanceStore = defineStore('finance', () => {
     const sourceHolder =
       walletHolders.find((h) => h.id === payload.fundOwnerId) || walletHolders[0];
 
-    const id = sanitizeId(`su_tx_${Date.now()}`);
+    const safeDate = sanitizeString(payload.date || getTodayIsoDate(), 30, getTodayIsoDate());
+    const id = sanitizeId(payload.id || `su_tx_${Date.now()}`);
+
+    // Multi-Device Idempotency & Deduplication Guard:
+    // If a transaction with the same deterministic ID or same automationRuleId for this date already exists, skip!
+    const existingTx = rawTransactions.value.find(
+      (t) =>
+        !t.deleted &&
+        (t.id === id ||
+          (payload.automationRuleId && t.automationRuleId === payload.automationRuleId && t.date === safeDate))
+    );
+    if (existingTx) {
+      console.warn(`[Finance] Transaction ${id} already exists for date ${safeDate}. Skipping duplicate creation.`);
+      return existingTx;
+    }
+
     const numericAmount = Math.abs(Number(payload.amount) || 0);
     if (numericAmount <= 0) {
       throw new Error('Nominal transaksi harus lebih dari 0.');
@@ -4000,7 +4018,6 @@ export const useFinanceStore = defineStore('finance', () => {
       payload.type === 'transfer' ? 'Transfer Saldo' : payload.category || 'Lainnya';
     const safeCategory = sanitizeString(defaultCategory, MAX_CATEGORY_LENGTH, 'Lainnya');
     const safeNote = sanitizeString(payload.note, MAX_NOTE_LENGTH, safeCategory);
-    const safeDate = sanitizeString(payload.date || getTodayIsoDate(), 30, getTodayIsoDate());
 
     let destWallet: WalletItem | undefined;
     let destHolder: WalletOwnerItem | undefined;
@@ -4170,6 +4187,9 @@ export const useFinanceStore = defineStore('finance', () => {
       if (resolvedCategoryId) {
         firestoreTxData.categoryId = resolvedCategoryId;
       }
+      if (payload.automationRuleId) {
+        firestoreTxData.automationRuleId = payload.automationRuleId;
+      }
       if (payload.type === 'transfer' && destWallet) {
         firestoreTxData.toWalletId = destWallet.id;
         firestoreTxData.toWalletName = destWallet.name;
@@ -4199,6 +4219,9 @@ export const useFinanceStore = defineStore('finance', () => {
         };
         if (resolvedFeeCatId) {
           feeData.categoryId = resolvedFeeCatId;
+        }
+        if (payload.automationRuleId) {
+          feeData.automationRuleId = payload.automationRuleId;
         }
         batch.set(doc(db, 'transactions', feeTxId), feeData);
       }
@@ -4247,6 +4270,7 @@ export const useFinanceStore = defineStore('finance', () => {
       type: payload.type,
       category: safeCategory,
       categoryId: resolvedCategoryId,
+      automationRuleId: payload.automationRuleId,
       amount: numericAmount,
       note: safeNote,
       date: safeDate,

@@ -3,6 +3,7 @@ import { ref, computed } from 'vue';
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   setDoc,
   deleteDoc,
@@ -109,6 +110,53 @@ export const useAutomationStore = defineStore('automation', () => {
   const hasActiveRules = computed(() => activeRules.value.length > 0);
 
   let automationsUnsubscribe: (() => void) | null = null;
+
+  // Cross-tab / cross-window synchronization channel for multi-tab automation execution deduplication
+  if (typeof window !== 'undefined' && !(window as any).__sisauang_auto_channel_bound) {
+    (window as any).__sisauang_auto_channel_bound = true;
+    if ('BroadcastChannel' in window) {
+      try {
+        const autoChannel = new BroadcastChannel('sisauang_automation_channel');
+        autoChannel.onmessage = (event) => {
+          try {
+            const { type, ruleId, date, snoozedUntil } = event.data || {};
+            const target = rules.value.find((r) => r.id === ruleId);
+            if (type === 'AUTOMATION_EXECUTED' && target && date) {
+              target.lastExecutedDate = date;
+              target.snoozedUntil = undefined;
+              const authStore = useAuthStore();
+              const uid = sanitizeId(authStore.user?.uid || auth.currentUser?.uid || 'default');
+              writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+              if (pendingConfirmation.value?.id === ruleId) {
+                dismissCurrentConfirmation();
+              }
+            } else if (type === 'AUTOMATION_CANCELLED' && target && date) {
+              target.lastCancelledDate = date;
+              target.snoozedUntil = undefined;
+              const authStore = useAuthStore();
+              const uid = sanitizeId(authStore.user?.uid || auth.currentUser?.uid || 'default');
+              writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+              if (pendingConfirmation.value?.id === ruleId) {
+                dismissCurrentConfirmation();
+              }
+            } else if (type === 'AUTOMATION_SNOOZED' && target && snoozedUntil) {
+              target.snoozedUntil = snoozedUntil;
+              const authStore = useAuthStore();
+              const uid = sanitizeId(authStore.user?.uid || auth.currentUser?.uid || 'default');
+              writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+              if (pendingConfirmation.value?.id === ruleId) {
+                dismissCurrentConfirmation();
+              }
+            }
+          } catch {
+            // Ignore channel error
+          }
+        };
+      } catch {
+        // Ignore BroadcastChannel error
+      }
+    }
+  }
 
   // =========================================================================
   // Local Storage Cache Management (With Multi-Key Fallback Discovery)
@@ -661,6 +709,11 @@ export const useAutomationStore = defineStore('automation', () => {
   // Execute Transaction for Rule (Now / Early / Automatic)
   // =========================================================================
 
+  // =========================================================================
+  // Execute Transaction for Rule (Now / Early / Automatic)
+  // Multi-Device Idempotent Execution with Atomic Leases & Deterministic IDs
+  // =========================================================================
+
   async function executeTransaction(
     rule: AutomationItem,
     options?: { isManualEarly?: boolean }
@@ -674,6 +727,107 @@ export const useAutomationStore = defineStore('automation', () => {
     const todayIso = getTodayIsoDate();
     const isManualEarly = Boolean(options?.isManualEarly);
 
+    // 1. In-Memory Guard: If already executed today and not forced as early manual, prevent re-execution
+    if (!isManualEarly && rule.lastExecutedDate === todayIso) {
+      if (pendingConfirmation.value?.id === rule.id) {
+        dismissCurrentConfirmation();
+      }
+      return true;
+    }
+
+    // 2. Deterministic Transaction ID: Guarantees Firestore document uniqueness per rule per date
+    const autoTxId = sanitizeId(`su_tx_auto_${rule.id}_${todayIso}`);
+
+    // Ensure finance wallets and data are loaded
+    if (financeStore.wallets.length === 0) {
+      try {
+        await financeStore.initFinanceData(uid);
+      } catch (err) {
+        console.warn('initFinanceData notice in executeTransaction:', err);
+      }
+    }
+
+    // 3. Local Transactions Store Deduplication Guard:
+    // If a transaction with this exact autoTxId or automationRuleId for today is already recorded, skip!
+    const alreadyRecordedInStore = financeStore.rawTransactions.some(
+      (tx) =>
+        !tx.deleted &&
+        (tx.id === autoTxId ||
+          (tx.automationRuleId && tx.automationRuleId === rule.id && tx.date === todayIso))
+    );
+    if (alreadyRecordedInStore) {
+      rule.lastExecutedDate = todayIso;
+      rule.snoozedUntil = undefined;
+      writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+      if (pendingConfirmation.value?.id === rule.id) {
+        dismissCurrentConfirmation();
+      }
+      notify.notifyInfo(
+        'Transaksi Sudah Tercatat',
+        `Transaksi otomatis "${rule.name}" untuk hari ini sudah dicatat sebelumnya.`
+      );
+      return true;
+    }
+
+    // 4. Multi-Device Distributed Atomic Claim:
+    // Acquire exclusive execution lease from server to prevent race conditions across simultaneous devices
+    const deviceId = authStore.currentDeviceId || 'web_client';
+    let claimAcquired = false;
+    try {
+      const claimRes = await fetch(
+        `/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(rule.id)}/claim-execution`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date: todayIso, deviceId }),
+        }
+      );
+      if (claimRes.ok) {
+        const claimData = await claimRes.json();
+        if (!claimData.claimed) {
+          // Another device already executed or is currently executing!
+          rule.lastExecutedDate = claimData.lastExecutedDate || todayIso;
+          rule.snoozedUntil = undefined;
+          writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+          if (pendingConfirmation.value?.id === rule.id) {
+            dismissCurrentConfirmation();
+          }
+          if (claimData.reason === 'already_executed') {
+            notify.notifyInfo(
+              'Transaksi Sudah Dicatat di Perangkat Lain',
+              `Transaksi otomatis "${rule.name}" untuk hari ini telah berhasil dicatat dari perangkat lain.`
+            );
+          }
+          return false;
+        }
+        claimAcquired = true;
+      }
+    } catch {
+      // If server claim endpoint is temporarily unreachable, fallback to Firestore check below
+    }
+
+    // 5. Cloud Firestore Direct Document Idempotency Check:
+    // Before creating or committing, verify if the deterministic document already exists in Cloud Firestore
+    try {
+      await financeStore.ensureFirestoreSessionForUser(uid);
+      const existingDocSnap = await getDoc(doc(db, 'transactions', autoTxId));
+      if (existingDocSnap.exists() && !existingDocSnap.data()?.deleted) {
+        rule.lastExecutedDate = todayIso;
+        rule.snoozedUntil = undefined;
+        writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+        if (pendingConfirmation.value?.id === rule.id) {
+          dismissCurrentConfirmation();
+        }
+        notify.notifyInfo(
+          'Transaksi Sudah Tersimpan di Database',
+          `Transaksi otomatis "${rule.name}" untuk hari ini sudah tersimpan di Cloud Firestore.`
+        );
+        return true;
+      }
+    } catch {
+      // Continue to execution
+    }
+
     let defaultNote = rule.note;
     if (!defaultNote) {
       defaultNote = isManualEarly
@@ -682,10 +836,9 @@ export const useAutomationStore = defineStore('automation', () => {
     }
 
     try {
-      if (financeStore.wallets.length === 0) {
-        await financeStore.initFinanceData(uid);
-      }
       await financeStore.addTransaction({
+        id: autoTxId,
+        automationRuleId: rule.id,
         walletId: rule.walletId,
         fundOwnerId: rule.fundOwnerId,
         toWalletId: rule.toWalletId,
@@ -699,12 +852,12 @@ export const useAutomationStore = defineStore('automation', () => {
         date: todayIso,
       });
 
-      // Update in memory rule
+      // Update in-memory rule
       rule.lastExecutedDate = todayIso;
       rule.snoozedUntil = undefined;
       writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
 
-      // Server API sync
+      // Server API sync (finalizes lastExecutedDate and clears claims)
       try {
         await fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(rule.id)}`, {
           method: 'PATCH',
@@ -731,6 +884,21 @@ export const useAutomationStore = defineStore('automation', () => {
         console.warn('Firestore executeTransaction notice:', err?.message || err);
       }
 
+      // Broadcast to other open tabs / windows on this device
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
+          const autoChannel = new BroadcastChannel('sisauang_automation_channel');
+          autoChannel.postMessage({
+            type: 'AUTOMATION_EXECUTED',
+            ruleId: rule.id,
+            date: todayIso,
+          });
+          autoChannel.close();
+        } catch {
+          // Ignore
+        }
+      }
+
       // Dismiss confirmation banner if it matches current rule
       if (pendingConfirmation.value?.id === rule.id) {
         dismissCurrentConfirmation();
@@ -755,6 +923,21 @@ export const useAutomationStore = defineStore('automation', () => {
       }
       return true;
     } catch (err: any) {
+      // If transaction failed, release claim lease so another attempt can succeed
+      if (claimAcquired) {
+        try {
+          void fetch(
+            `/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(rule.id)}/release-claim`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ deviceId }),
+            }
+          );
+        } catch {
+          // Ignore
+        }
+      }
       notify.notifyError('Gagal Mencatat Transaksi Otomatis', err?.message || err);
       return false;
     }
@@ -800,6 +983,21 @@ export const useAutomationStore = defineStore('automation', () => {
       );
     } catch (err: any) {
       console.warn('Firestore snoozeRule notice:', err?.message || err);
+    }
+
+    // Broadcast snooze event
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const autoChannel = new BroadcastChannel('sisauang_automation_channel');
+        autoChannel.postMessage({
+          type: 'AUTOMATION_SNOOZED',
+          ruleId,
+          snoozedUntil,
+        });
+        autoChannel.close();
+      } catch {
+        // Ignore
+      }
     }
 
     if (pendingConfirmation.value?.id === ruleId) {
@@ -855,6 +1053,21 @@ export const useAutomationStore = defineStore('automation', () => {
       );
     } catch (err: any) {
       console.warn('Firestore cancelRuleForToday notice:', err?.message || err);
+    }
+
+    // Broadcast cancellation event
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const autoChannel = new BroadcastChannel('sisauang_automation_channel');
+        autoChannel.postMessage({
+          type: 'AUTOMATION_CANCELLED',
+          ruleId,
+          date: todayIso,
+        });
+        autoChannel.close();
+      } catch {
+        // Ignore
+      }
     }
 
     if (pendingConfirmation.value?.id === ruleId) {
@@ -966,6 +1179,56 @@ export const useAutomationStore = defineStore('automation', () => {
             // Still in snooze duration, skip
             continue;
           }
+        }
+
+        const todayIso = wib.dateIso;
+        const autoTxId = sanitizeId(`su_tx_auto_${rule.id}_${todayIso}`);
+
+        // Deduplication Check 1: Inspect local transactions list for an existing execution today
+        const alreadyInTransactions = financeStore.rawTransactions.some(
+          (tx) =>
+            !tx.deleted &&
+            (tx.id === autoTxId ||
+              (tx.automationRuleId && tx.automationRuleId === rule.id && tx.date === todayIso))
+        );
+        if (alreadyInTransactions) {
+          rule.lastExecutedDate = todayIso;
+          writeLocalStorageCache(uid, currentRules, CACHE_TTL_MS);
+          continue;
+        }
+
+        // Deduplication Check 2: Live check server rule state to see if another device already executed or claimed lease
+        try {
+          const statusRes = await fetch(
+            `/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(rule.id)}`
+          );
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            if (statusData?.rule) {
+              if (
+                statusData.rule.lastExecutedDate === todayIso ||
+                statusData.rule.lastCancelledDate === todayIso
+              ) {
+                rule.lastExecutedDate = statusData.rule.lastExecutedDate;
+                rule.lastCancelledDate = statusData.rule.lastCancelledDate;
+                writeLocalStorageCache(uid, currentRules, CACHE_TTL_MS);
+                continue;
+              }
+              const nowTime = Date.now();
+              if (
+                statusData.rule.claimedExecutionDate === todayIso &&
+                statusData.rule.claimedAt &&
+                nowTime - statusData.rule.claimedAt < 60000 &&
+                statusData.rule.claimedBy &&
+                statusData.rule.claimedBy !== authStore.currentDeviceId
+              ) {
+                // Another device is currently in the middle of executing this rule, skip this cycle
+                continue;
+              }
+            }
+          }
+        } catch {
+          // Ignore network errors
         }
 
         // Rule is DUE!

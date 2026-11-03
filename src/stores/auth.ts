@@ -2299,6 +2299,40 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  /**
+   * Immediately revokes Super Admin elevation when the server admin token expires or is invalid.
+   * Clears the admin token, sets otpVerified to false, signs out Firebase Auth so Firestore access is cut off,
+   * and triggers navigation away from protected admin routes (/control-panel, /database).
+   */
+  async function handleAdminSessionExpired(reason?: string) {
+    localStorage.removeItem('sisa_uang_admin_token');
+    localStorage.setItem(OTP_VERIFIED_KEY, 'false');
+    otpVerified.value = false;
+    requiresOtp.value = true;
+    setApiAdminContext(user.value?.email || null, null);
+
+    // Sign out from Firebase Auth so client-side Firestore access is immediately revoked
+    try {
+      await firebaseSignOut(auth);
+    } catch {
+      // Ignore
+    }
+
+    if (typeof window !== 'undefined' && window.location) {
+      const currentPath = window.location.pathname;
+      if (currentPath.includes('/database') || currentPath.includes('/control-panel')) {
+        window.location.href = `/auth?step=otp&redirect=${encodeURIComponent(currentPath)}`;
+      }
+    }
+  }
+
+  if (typeof window !== 'undefined' && !(window as any).__sisauang_admin_expired_listener_bound) {
+    (window as any).__sisauang_admin_expired_listener_bound = true;
+    window.addEventListener('sisauang:admin-session-expired', (e: any) => {
+      void handleAdminSessionExpired(e?.detail?.message);
+    });
+  }
+
   async function submitProSubscriptionPayment(payload: {
     subscriptionPlan: 'monthly' | 'yearly';
     paymentMethod: 'qris' | 'bank_transfer';
@@ -2437,5 +2471,6 @@ export const useAuthStore = defineStore('auth', () => {
     removeSavedAccount,
     recordAuditLog,
     logout,
+    handleAdminSessionExpired,
   };
 });

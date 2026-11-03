@@ -5,6 +5,7 @@ import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
 import { useAutomationStore } from '../stores/automation';
 import { useFinanceStore } from '../stores/finance';
+import { apiClient } from '../services/api';
 import DashboardView from '../views/DashboardView.vue';
 import TransactionsView from '../views/TransactionsView.vue';
 import WalletsView from '../views/WalletsView.vue';
@@ -19,11 +20,12 @@ import ControlPanelView from '../views/ControlPanelView.vue';
 import AuthView from '../views/AuthView.vue';
 
 /**
- * Dedicated Middleware for /control-panel
+ * Dedicated Middleware for /control-panel and /database
  * Enforces:
  * 1. Active authenticated session
  * 2. Administrator role (vuedevo@gmail.com or bootstrapped admin)
  * 3. Completed 6-digit Email OTP verification specifically for vuedevo@gmail.com
+ * 4. Active server-verified admin token (not expired or revoked)
  */
 async function superAdminMiddleware(
   to: RouteLocationNormalized,
@@ -38,10 +40,10 @@ async function superAdminMiddleware(
   }
 
   if (!authStore.isSuperAdmin) {
-    // Log suspicious unauthorized access attempt to /control-panel
+    // Log suspicious unauthorized access attempt to /control-panel or /database
     await authStore.recordAuditLog(
       'unauthorized_control_panel_access',
-      `Pengguna non-admin (${authStore.user?.email}) mencoba mengakses endpoint terproteksi /control-panel.`,
+      `Pengguna non-admin (${authStore.user?.email}) mencoba mengakses endpoint terproteksi ${to.path}.`,
       'critical'
     );
     next({ path: '/dashboard', query: { denied: 'admin_only' } });
@@ -50,6 +52,17 @@ async function superAdminMiddleware(
 
   const hasAdminToken = Boolean(localStorage.getItem('sisa_uang_admin_token'));
   if (!authStore.otpVerified || !hasAdminToken) {
+    next({ path: '/auth', query: { step: 'otp', redirect: to.fullPath } });
+    return;
+  }
+
+  // Actively verify session with server to ensure token hasn't expired or been revoked
+  try {
+    await apiClient.get('/admin/verify-session');
+  } catch {
+    await authStore.handleAdminSessionExpired(
+      'Sesi Super Admin telah kedaluwarsa atau token tidak valid. Silakan verifikasi ulang OTP.'
+    );
     next({ path: '/auth', query: { step: 'otp', redirect: to.fullPath } });
     return;
   }
