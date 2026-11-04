@@ -530,9 +530,25 @@ export interface ServerAutomationRecord {
 }
 
 const AUTOMATIONS_CACHE_FILE = path.join(__dirname, '.sisa_uang_automations_cache.json');
+const AUTOMATIONS_DELETED_FILE = path.join(__dirname, '.sisa_uang_automations_deleted.json');
 const automationsStore = new Map<string, ServerAutomationRecord>();
+const deletedAutomationsStore = new Set<string>();
 
 function loadPersistedAutomationsCache() {
+  try {
+    if (fs.existsSync(AUTOMATIONS_DELETED_FILE)) {
+      const rawDeleted = fs.readFileSync(AUTOMATIONS_DELETED_FILE, 'utf8');
+      const delList = JSON.parse(rawDeleted) as string[];
+      if (Array.isArray(delList)) {
+        for (const id of delList) {
+          if (id) deletedAutomationsStore.add(String(id));
+        }
+      }
+    }
+  } catch {
+    // Ignore deleted list read error
+  }
+
   try {
     if (fs.existsSync(AUTOMATIONS_CACHE_FILE)) {
       const raw = fs.readFileSync(AUTOMATIONS_CACHE_FILE, 'utf8');
@@ -540,7 +556,7 @@ function loadPersistedAutomationsCache() {
       if (Array.isArray(list)) {
         automationsStore.clear();
         for (const item of list) {
-          if (item && item.id) {
+          if (item && item.id && !item.deleted && !deletedAutomationsStore.has(item.id)) {
             automationsStore.set(item.id, item);
           }
         }
@@ -553,8 +569,15 @@ function loadPersistedAutomationsCache() {
 
 function savePersistedAutomationsCache() {
   try {
-    const list = Array.from(automationsStore.values());
+    const list = Array.from(automationsStore.values()).filter(
+      (item) => !item.deleted && !deletedAutomationsStore.has(item.id)
+    );
     fs.writeFileSync(AUTOMATIONS_CACHE_FILE, JSON.stringify(list, null, 2), 'utf8');
+    fs.writeFileSync(
+      AUTOMATIONS_DELETED_FILE,
+      JSON.stringify(Array.from(deletedAutomationsStore), null, 2),
+      'utf8'
+    );
   } catch {
     // Ignore cache write error
   }
@@ -2039,13 +2062,13 @@ async function startServer() {
     const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_');
 
     let userRules = Array.from(automationsStore.values()).filter(
-      (r) => (r.ownerId === uid || r.ownerId === rawUid) && !r.deleted
+      (r) => (r.ownerId === uid || r.ownerId === rawUid) && !r.deleted && !deletedAutomationsStore.has(r.id)
     );
 
     // If empty and uid is super admin / alias, check other known admin identifiers
     if (userRules.length === 0 && (uid.includes('vuedevo') || uid === 'admin_vuedevo_01' || rawUid === 'KlSX6JgegtUIsQinZRKp535OJ6E3')) {
       userRules = Array.from(automationsStore.values()).filter(
-        (r) => (r.ownerId.includes('vuedevo') || r.ownerId === 'admin_vuedevo_01' || r.ownerId === 'KlSX6JgegtUIsQinZRKp535OJ6E3') && !r.deleted
+        (r) => (r.ownerId.includes('vuedevo') || r.ownerId === 'admin_vuedevo_01' || r.ownerId === 'KlSX6JgegtUIsQinZRKp535OJ6E3') && !r.deleted && !deletedAutomationsStore.has(r.id)
       );
     }
 
@@ -2064,6 +2087,7 @@ async function startServer() {
     const body = req.body || {};
 
     const id = String(body.id || `auto_${Date.now()}`).trim();
+    deletedAutomationsStore.delete(id);
     const record: ServerAutomationRecord = {
       id,
       ownerId: uid,
@@ -2312,18 +2336,14 @@ async function startServer() {
     const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
     const id = String(req.params.id || '').trim();
 
+    deletedAutomationsStore.add(id);
     const existing = automationsStore.get(id);
-    if (existing) {
-      existing.deleted = true;
-      existing.deletedAt = nowIso();
-      existing.updatedAt = nowIso();
-      automationsStore.set(id, existing);
-      savePersistedAutomationsCache();
+    automationsStore.delete(id);
+    savePersistedAutomationsCache();
 
-      const isFromPeer = req.query.peer === '1';
-      if (!isFromPeer) {
-        void syncAutomationToPeer(uid, existing, true);
-      }
+    const isFromPeer = req.query.peer === '1';
+    if (!isFromPeer && existing) {
+      void syncAutomationToPeer(uid, { ...existing, id, deleted: true, updatedAt: nowIso() }, true);
     }
 
     res.json({
@@ -2341,6 +2361,10 @@ async function startServer() {
     for (const item of items) {
       if (item && item.id) {
         const id = String(item.id);
+        if (deletedAutomationsStore.has(id) || item.deleted) {
+          automationsStore.delete(id);
+          continue;
+        }
         const record: ServerAutomationRecord = {
           id,
           ownerId: uid,
@@ -2366,7 +2390,7 @@ async function startServer() {
           lastExecutedDate: item.lastExecutedDate || null,
           lastCancelledDate: item.lastCancelledDate || null,
           snoozedUntil: item.snoozedUntil || null,
-          deleted: Boolean(item.deleted),
+          deleted: false,
           createdAt: item.createdAt || nowIso(),
           updatedAt: nowIso(),
         };

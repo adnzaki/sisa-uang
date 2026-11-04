@@ -147,6 +147,16 @@ export const useAutomationStore = defineStore('automation', () => {
               if (pendingConfirmation.value?.id === ruleId) {
                 dismissCurrentConfirmation();
               }
+            } else if (type === 'AUTOMATION_DELETED' && ruleId) {
+              const authStore = useAuthStore();
+              const uid = sanitizeId(authStore.user?.uid || auth.currentUser?.uid || 'default');
+              recordDeletedId(uid, ruleId);
+              rules.value = rules.value.filter((r) => r.id !== ruleId);
+              purgeIdFromAllCaches(ruleId);
+              if (pendingConfirmation.value?.id === ruleId) {
+                dismissCurrentConfirmation();
+              }
+              pendingQueue.value = pendingQueue.value.filter((q) => q.id !== ruleId);
             }
           } catch {
             // Ignore channel error
@@ -159,8 +169,101 @@ export const useAutomationStore = defineStore('automation', () => {
   }
 
   // =========================================================================
-  // Local Storage Cache Management (With Multi-Key Fallback Discovery)
+  // Persistent Deleted Automation IDs Registry & Local Storage Cache
   // =========================================================================
+
+  const DELETED_KEY_PREFIX = 'su_deleted_automations_';
+
+  function getDeletedKey(uid: string): string {
+    return `${DELETED_KEY_PREFIX}${uid}`;
+  }
+
+  function getDeletedIds(uid: string): Set<string> {
+    const result = new Set<string>();
+    if (typeof window === 'undefined') return result;
+    try {
+      const raw = localStorage.getItem(getDeletedKey(uid));
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          for (const id of parsed) {
+            if (id) result.add(String(id));
+          }
+        }
+      }
+      const globalRaw = localStorage.getItem('su_deleted_automations_global');
+      if (globalRaw) {
+        const parsed = JSON.parse(globalRaw);
+        if (Array.isArray(parsed)) {
+          for (const id of parsed) {
+            if (id) result.add(String(id));
+          }
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    return result;
+  }
+
+  function recordDeletedId(uid: string, id: string) {
+    if (typeof window === 'undefined' || !id) return;
+    try {
+      const deleted = getDeletedIds(uid);
+      deleted.add(id);
+      const arr = Array.from(deleted);
+      localStorage.setItem(getDeletedKey(uid), JSON.stringify(arr));
+      localStorage.setItem('su_deleted_automations_global', JSON.stringify(arr));
+
+      const altUid = sanitizeId(auth.currentUser?.uid || '');
+      if (altUid && altUid !== uid) {
+        localStorage.setItem(getDeletedKey(altUid), JSON.stringify(arr));
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  function removeDeletedId(uid: string, id: string) {
+    if (typeof window === 'undefined' || !id) return;
+    try {
+      const deleted = getDeletedIds(uid);
+      deleted.delete(id);
+      const arr = Array.from(deleted);
+      localStorage.setItem(getDeletedKey(uid), JSON.stringify(arr));
+      localStorage.setItem('su_deleted_automations_global', JSON.stringify(arr));
+
+      const altUid = sanitizeId(auth.currentUser?.uid || '');
+      if (altUid && altUid !== uid) {
+        localStorage.setItem(getDeletedKey(altUid), JSON.stringify(arr));
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  function purgeIdFromAllCaches(id: string) {
+    if (typeof window === 'undefined' || !id) return;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(CACHE_KEY_PREFIX)) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const parsed = JSON.parse(raw) as AutomationsCacheData;
+            if (parsed && Array.isArray(parsed.rules)) {
+              const filtered = parsed.rules.filter((r) => r.id !== id && !r.deleted);
+              parsed.rules = filtered;
+              parsed.hasRules = filtered.length > 0;
+              localStorage.setItem(key, JSON.stringify(parsed));
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }
 
   function getCacheKey(uid: string): string {
     return `${CACHE_KEY_PREFIX}${uid}`;
@@ -181,7 +284,18 @@ export const useAutomationStore = defineStore('automation', () => {
       if (!parsed || typeof parsed.expiresAt !== 'number' || !Array.isArray(parsed.rules)) {
         return emptyCache;
       }
-      return parsed;
+      const deletedIds = getDeletedIds(uid);
+      const validRules = parsed.rules.filter((r) => !r.deleted && !deletedIds.has(r.id));
+      if (validRules.length !== parsed.rules.length) {
+        parsed.rules = validRules;
+        parsed.hasRules = validRules.length > 0;
+        localStorage.setItem(getCacheKey(uid), JSON.stringify(parsed));
+      }
+      return {
+        ...parsed,
+        rules: validRules,
+        hasRules: validRules.length > 0,
+      };
     } catch {
       return emptyCache;
     }
@@ -191,7 +305,8 @@ export const useAutomationStore = defineStore('automation', () => {
     if (typeof window === 'undefined') return;
     try {
       const now = Date.now();
-      const validItems = items.filter((i) => !i.deleted);
+      const deletedIds = getDeletedIds(uid);
+      const validItems = items.filter((i) => !i.deleted && !deletedIds.has(i.id));
       const cacheData: AutomationsCacheData = {
         rules: validItems,
         fetchedAt: now,
@@ -266,12 +381,15 @@ export const useAutomationStore = defineStore('automation', () => {
       return rules.value;
     }
 
+    const deletedIds = getDeletedIds(uid);
+
     // 1. If not forcing refresh, check local storage cache if still valid within TTL
     if (!forceRefresh) {
       const cached = readLocalStorageCache(uid);
       if (cached && typeof cached.expiresAt === 'number' && cached.expiresAt > 0 && Date.now() < cached.expiresAt) {
-        rules.value = cached.rules;
-        return cached.rules;
+        const cleanRules = cached.rules.filter((r) => !r.deleted && !deletedIds.has(r.id));
+        rules.value = cleanRules;
+        return cleanRules;
       }
     }
 
@@ -282,6 +400,8 @@ export const useAutomationStore = defineStore('automation', () => {
     const financeStore = useFinanceStore();
     isLoading.value = true;
     try {
+      const deletedIds = getDeletedIds(uid);
+
       // 1. Ensure authenticated Firebase session so Firestore rules permit query
       await financeStore.ensureFirestoreSessionForUser(uid);
 
@@ -296,7 +416,7 @@ export const useAutomationStore = defineStore('automation', () => {
             id: d.id,
             ...(d.data() as Omit<AutomationItem, 'id'>),
           }))
-          .filter((item) => !item.deleted);
+          .filter((item) => !item.deleted && !deletedIds.has(item.id));
         firestoreFetchSuccess = true;
       } catch (err: any) {
         if (!isFirestoreOfflineError(err) && !isFirestoreQuotaError(err)) {
@@ -311,41 +431,51 @@ export const useAutomationStore = defineStore('automation', () => {
         if (res.ok) {
           const data = await res.json();
           if (data && Array.isArray(data.rules)) {
-            serverRules = data.rules.filter((r: any) => !r.deleted);
+            serverRules = data.rules.filter((r: any) => !r.deleted && !deletedIds.has(r.id));
           }
         }
       } catch {
         // Ignore server network errors
       }
 
-      // 4. Merge results: prefer Cloud Firestore, then Server API, then existing Local Cache
+      // 4. Merge results:
+      // When Cloud Firestore succeeds, it is the authoritative cloud truth.
+      // Do NOT resurrect deleted rules from local cache or server!
       const cached = readLocalStorageCache(uid);
       const combinedMap = new Map<string, AutomationItem>();
 
-      // Base: local cache
-      for (const item of cached.rules) {
-        if (!item.deleted) combinedMap.set(item.id, item);
-      }
-      // Layer: server API
-      for (const item of serverRules) {
-        if (!item.deleted) combinedMap.set(item.id, item);
-      }
-      // Top: Cloud Firestore
       if (firestoreFetchSuccess) {
         for (const item of firestoreRules) {
-          if (!item.deleted) combinedMap.set(item.id, item);
+          if (!item.deleted && !deletedIds.has(item.id)) {
+            combinedMap.set(item.id, item);
+          }
         }
-        // If there were local items not yet in Firestore, push them up to Firestore
+        // ONLY if an item was specifically created offline on this device with an explicit offline flag,
+        // and NOT deleted, push it to Firestore. Stale cached items are NEVER pushed!
         for (const item of cached.rules) {
-          if (!item.deleted && !firestoreRules.some((f) => f.id === item.id)) {
+          if (
+            (item as any)._isOfflineCreated &&
+            !item.deleted &&
+            !deletedIds.has(item.id) &&
+            !firestoreRules.some((f) => f.id === item.id)
+          ) {
+            combinedMap.set(item.id, item);
             void pushAutomationDocToFirestore(item);
           }
         }
+      } else {
+        // Offline or Firestore unreachable: merge valid local cache and server rules
+        for (const item of cached.rules) {
+          if (!item.deleted && !deletedIds.has(item.id)) combinedMap.set(item.id, item);
+        }
+        for (const item of serverRules) {
+          if (!item.deleted && !deletedIds.has(item.id)) combinedMap.set(item.id, item);
+        }
       }
 
-      const merged = Array.from(combinedMap.values()).sort((a, b) =>
-        (a.name || '').localeCompare(b.name || '')
-      );
+      const merged = Array.from(combinedMap.values())
+        .filter((r) => !r.deleted && !deletedIds.has(r.id))
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
       rules.value = merged;
       writeLocalStorageCache(uid, merged, CACHE_TTL_MS);
@@ -359,8 +489,10 @@ export const useAutomationStore = defineStore('automation', () => {
     } catch (err: any) {
       console.warn('Load automations notice, using local cache fallback:', err?.message || err);
       const fallback = readLocalStorageCache(uid);
-      rules.value = fallback.rules;
-      return fallback.rules;
+      const deletedIds = getDeletedIds(uid);
+      const safeFallback = fallback.rules.filter((r) => !r.deleted && !deletedIds.has(r.id));
+      rules.value = safeFallback;
+      return safeFallback;
     } finally {
       isLoading.value = false;
     }
@@ -515,6 +647,8 @@ export const useAutomationStore = defineStore('automation', () => {
       deleted: false,
     };
 
+    removeDeletedId(uid, id);
+
     // 1. Immediately update Pinia reactive memory
     const idx = rules.value.findIndex((r) => r.id === id);
     if (idx >= 0) {
@@ -614,13 +748,37 @@ export const useAutomationStore = defineStore('automation', () => {
     });
     if (!confirmed) return false;
 
-    // 1. Immediately update Pinia memory
+    // 1. Immediately record in persistent deleted IDs
+    recordDeletedId(uid, id);
+
+    // 2. Immediately update Pinia memory
     rules.value = rules.value.filter((r) => r.id !== id);
 
-    // 2. Immediately update local storage cache
+    // 3. Purge from all cache keys in localStorage
+    purgeIdFromAllCaches(id);
     writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
 
-    // 3. Immediately delete from Server API
+    // 4. Dismiss pending confirmation / queue
+    if (pendingConfirmation.value?.id === id) {
+      dismissCurrentConfirmation();
+    }
+    pendingQueue.value = pendingQueue.value.filter((q) => q.id !== id);
+
+    // 5. Broadcast to all open tabs/windows
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const autoChannel = new BroadcastChannel('sisauang_automation_channel');
+        autoChannel.postMessage({
+          type: 'AUTOMATION_DELETED',
+          ruleId: id,
+        });
+        autoChannel.close();
+      } catch {
+        // Ignore
+      }
+    }
+
+    // 6. Delete from Server API
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(id)}`, {
         method: 'DELETE',
@@ -629,29 +787,29 @@ export const useAutomationStore = defineStore('automation', () => {
       // Ignore
     }
 
-    // 4. Delete / soft-delete from Cloud Firestore
+    // 7. Hard Delete AND soft-delete tombstone in Cloud Firestore
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await setDoc(
-        doc(db, 'automations', id),
-        {
-          deleted: true,
-          deletedAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-    } catch {
+      await deleteDoc(doc(db, 'automations', id));
+    } catch (err: any) {
       try {
-        await deleteDoc(doc(db, 'automations', id));
-      } catch (err: any) {
-        console.warn('Firestore delete doc notice:', err?.message || err);
+        await setDoc(
+          doc(db, 'automations', id),
+          {
+            deleted: true,
+            deletedAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch (err2: any) {
+        console.warn('Firestore delete notice:', err2?.message || err2);
       }
     }
 
     notify.notifySuccess(
       'Jadwal Otomatisasi Dihapus',
-      `Jadwal "${rule.name}" telah dihapus.`
+      `Jadwal "${rule.name}" telah dihapus secara permanen.`
     );
     return true;
   }
