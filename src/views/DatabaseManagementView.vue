@@ -58,6 +58,7 @@ import {
 } from '../utils/jsonMigrationParser';
 import AppModal from '../components/AppModal.vue';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
+import { COMPILED_CLIENT_VERSION } from '../composables/usePWA';
 
 const route = useRoute();
 const router = useRouter();
@@ -774,7 +775,7 @@ async function handleExecuteExport() {
       const fullPayload: FullDatabaseBackupPayload = {
         _metadata: {
           appName: 'SisaUang Platform',
-          appVersion: '1.0.0',
+          appVersion: COMPILED_CLIENT_VERSION,
           exportType: exportScope.value === 'full' ? 'full_database_backup' : ('custom_collections_backup' as any),
           databaseId: 'sisa-uang',
           projectId: 'sisa-uang-dfb7b',
@@ -829,7 +830,7 @@ async function handleExecuteExport() {
         const payload: SingleCollectionBackupPayload = {
           _metadata: {
             appName: 'SisaUang Platform',
-            appVersion: '1.0.0',
+            appVersion: COMPILED_CLIENT_VERSION,
             exportType: 'single_collection',
             databaseId: 'sisa-uang',
             projectId: 'sisa-uang-dfb7b',
@@ -870,7 +871,7 @@ async function handleExecuteExport() {
         const payload: SingleCollectionBackupPayload = {
           _metadata: {
             appName: 'SisaUang Platform',
-            appVersion: '1.0.0',
+            appVersion: COMPILED_CLIENT_VERSION,
             exportType: 'filtered_query',
             databaseId: 'sisa-uang',
             projectId: 'sisa-uang-dfb7b',

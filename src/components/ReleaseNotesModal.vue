@@ -5,32 +5,28 @@ import {
   Rocket,
   Layers,
   Check,
-  Zap,
-  CreditCard,
-  Crown,
-  Database,
+  Clock,
   RotateCcw,
-  SunMoon,
-  TrendingUp,
+  Crown,
 } from 'lucide-vue-next';
 import { useNotificationStore } from '../stores/notification';
 import { useAuthStore } from '../stores/auth';
 import AppModal from './AppModal.vue';
 
-const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_0';
-const RELEASE_VERSION = '1.0.0';
-const RELEASE_DATE = 'Oktober 2026';
-const BUILD_NUMBER = '10012';
+const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_1';
+const RELEASE_VERSION = '1.0.1';
+const RELEASE_DATE = 'November 2026';
+const BUILD_NUMBER = '10113';
 
 const notificationStore = useNotificationStore();
 const authStore = useAuthStore();
 
-type ChangelogCategory = 'all' | 'database' | 'payment' | 'ui' | 'system';
+type ChangelogCategory = 'all' | 'system' | 'database';
 const activeFilter = ref<ChangelogCategory>('all');
 
 export interface ChangelogItem {
   id: string;
-  category: 'database' | 'payment' | 'ui' | 'system';
+  category: 'system' | 'database';
   badge: string;
   badgeColor: 'emerald' | 'indigo' | 'amber' | 'rose' | 'sky';
   isProExclusive?: boolean;
@@ -42,133 +38,78 @@ export interface ChangelogItem {
 
 const changelogItems: ChangelogItem[] = [
   {
-    id: 'database-operations-optimization',
-    category: 'database',
-    badge: 'OPTIMASI DATABASE',
-    badgeColor: 'emerald',
-    title: 'Mengoptimalkan Proses Operasi Database Firestore',
+    id: 'automation-timezone-alignment',
+    category: 'system',
+    badge: 'ZONA WAKTU OTOMATISASI',
+    badgeColor: 'indigo',
+    title: 'Perbaikan Zona Waktu untuk Jadwal Otomatis',
     summary:
-      'Penataan ulang menyeluruh pada arsitektur pembacaan data Cloud Firestore untuk meningkatkan performa aplikasi:',
+      'Penyelarasan menyeluruh evaluasi jadwal otomatis menggunakan acuan presisi Waktu Indonesia Barat (WIB / UTC+7) guna mencegah selisih waktu antara server dan perangkat:',
     details: [
-      'Pemberhentian Background Polling Otomatis: Mematikan proses background looping dan kueri otomatis berkala saat aplikasi dalam posisi idle.',
-      'Penerapan Batas Limit Kueri Ketat: Mencegah penarikan dokumen tak terbatas (unbounded queries) pada seluruh koleksi utama dengan menerapkan pembatasan dokumen proporsional.',
-      'Zero-Read Idle State: Menjamin tidak ada penarikan data diam-diam dari database Firestore ketika perangkat pengguna sedang aktif namun tidak sedang digunakan.',
+      'Standardisasi Jam Eksekusi Berbasis WIB: Seluruh penghitungan tanggal dan jam jatuh tempo otomatis diseragamkan ke zona waktu Asia/Jakarta (UTC+7).',
+      'Endpoint Diagnostik Sinkronisasi Jam (/api/time): Menyediakan acuan waktu server yang presisi untuk mendeteksi deviasi jam lokal dan mencegah eksekusi tertunda.',
+      'Pencegahan Pergeseran Jam Eksekusi: Menghilangkan potensi pergeseran jadwal yang sebelumnya dapat terhambat oleh perbedaan zona waktu antara server UTC dan perangkat lokal.',
     ],
-    icon: Database,
+    icon: Clock,
   },
   {
-    id: 'sync-and-data-loading-system',
-    category: 'database',
-    badge: 'SINKRONISASI DATA',
-    badgeColor: 'sky',
-    title: 'Mengoptimalkan Sistem Sinkronisasi dan Pemuatan Data',
+    id: 'automation-execution-lifecycle-fix',
+    category: 'system',
+    badge: 'EKSEKUSI JADWAL OTOMATIS',
+    badgeColor: 'emerald',
+    title: 'Perbaikan Bug Jadwal Otomatis Tidak Berjalan',
     summary:
-      'Mekanisme sinkronisasi data cerdas berbasis pencocokan read token dan timestamp antara server Firestore dan perangkat lokal:',
+      'Peningkatan menyeluruh pada siklus hidup poller otomatis agar transaksi rutin yang telah melewati waktu jatuh tempo langsung dieksekusi secara andal:',
     details: [
-      'Validasi Timestamp Efisien (1 Read Token): Pengecekan status perubahan server hanya membaca dokumen yang diperlukan untuk memastikan efisiensi maksimal.',
-      'Penarikan Data Terarah (Event-Driven): Penarikan data baru dari server hanya dipicu pada event penting: berpindah antar halaman/menu, mutasi data (tambah/ubah/hapus), reload manual, atau saat membuka detail data.',
-      'Zero-Read Cache Restoration: Jika timestamp perangkat lokal cocok dengan server, seluruh koleksi disajikan instan langsung dari cache lokal tanpa harus menarik kembali data dari Firestore.',
+      'Pemicu Otomatis Saat Aplikasi Dibuka: Evaluasi jadwal langsung berjalan seketika saat pengguna membuka aplikasi, berpindah halaman, atau melakukan interaksi aktif.',
+      'Poller Aktif Latar Depan yang Disiplin: Poller otomatis hanya aktif saat aplikasi berada di latar depan (foreground) dan langsung dimatikan ketika berpindah tab atau aplikasi ditutup demi menghemat daya.',
+      'Pembaruan Status Eksekusi Seketika: Jadwal yang telah jatuh tempo langsung dicatat dan status transaksi hari ini otomatis terbarui menjadi selesai tanpa perlu refresh manual.',
     ],
     icon: RotateCcw,
   },
   {
-    id: 'payment-gateway-modernization',
-    category: 'payment',
-    badge: 'PAYMENT GATEWAY',
-    badgeColor: 'indigo',
-    title: 'Memperbarui Sistem Payment Gateway Duitku V2',
-    summary:
-      'Pembaruan alur pembayaran in-site checkout langganan SisaUang Pro dengan kanal Virtual Account otomatis 24 jam yang lebih andal, aman, dan terverifikasi instan:',
-    details: [
-      'Dukungan 10 Bank Virtual Account Resmi: Mandiri, Permata, BRI (BRIVA), BNI, BSI, BNC (Neo), CIMB Niaga, Danamon, Maybank, dan Bank Sahabat Sampoerna.',
-      'Penonaktifan Sementara QRIS & E-Wallet: Kanal QRIS dan dompet digital (OVO, DANA, ShopeePay) dinonaktifkan sementara dengan keterangan status transparan hingga gateway aktif.',
-      'Penghapusan Kanal yang Tidak Didukung: Menghilangkan opsi BCA VA yang belum didukung serta mematikan simulasi pembayaran manual demi kepatuhan gateway resmi.',
-    ],
-    icon: CreditCard,
-  },
-  {
-    id: 'theme-toggle-and-dark-mode-fix',
-    category: 'ui',
-    badge: 'TAMPILAN & TEMA',
-    badgeColor: 'amber',
-    title: 'Memperbaiki Tombol Dark/Light Mode di Halaman Publik',
-    summary:
-      'Perbaikan menyeluruh pada fungsi penggantian tema gelap/terang serta kenyamanan kontras visual di seluruh landing page dan komponen checkout:',
-    details: [
-      'Reaktivitas Tombol Tema Publik: Memperbaiki aksi tombol toggle tema di navbar publik sehingga transisi dark/light mode berjalan mulus dan reaktif seketika.',
-      'Penyelarasan Warna Komponen Checkout: Memperbaiki styling kartu pilihan pembayaran agar memiliki kontras warna yang nyaman, tajam, dan tidak tampak putih pada mode gelap.',
-      'Konsistensi Preferensi Tema: Menjaga persistensi tema yang dipilih pengguna di seluruh sesi penjelajahan publik maupun dashboard utama.',
-    ],
-    icon: SunMoon,
-  },
-  {
-    id: 'budget-absorption-calculation-fix',
-    category: 'ui',
-    badge: 'KALKULASI ANGGARAN',
-    badgeColor: 'emerald',
-    title: 'Memperbaiki Perhitungan Serapan Anggaran pada Halaman Ringkasan',
-    summary:
-      'Kalkulasi realisasi belanja dan persentase serapan anggaran pada dashboard kini langsung terhitung akurat dan presisi tanpa perlu mengunjungi menu Anggaran terlebih dahulu:',
-    details: [
-      'Sinkronisasi Otomatis Periode Ringkasan: Sistem secara otomatis memuat data transaksi periode terpilih saat halaman Ringkasan pertama kali dibuka.',
-      'Perhitungan Realisasi Pengeluaran Akurat: Nilai total serapan anggaran dan status sisa batas belanja per kategori disinkronkan langsung dari transaksi riil.',
-      'Pencocokan Kategori yang Lebih Tangguh: Mendukung pencocokan kategori berbasis ID unik dan nama secara fleksibel untuk menjaga keakuratan histori anggaran.',
-    ],
-    icon: TrendingUp,
-  },
-  {
-    id: 'server-side-pagination-system',
-    category: 'system',
-    badge: 'PAGINASI TRANSAKSI',
+    id: 'multi-device-automation-deduplication',
+    category: 'database',
+    badge: 'DEDUPLIKASI MULTI-PERANGKAT',
     badgeColor: 'sky',
-    title: 'Memperbaiki Sistem Pagination Berbasis Server-Side',
+    title: 'Perbaikan Bug Transaksi Otomatis Berjalan Lebih dari Satu Kali saat Login di Lebih dari Satu Perangkat',
     summary:
-      'Mekanisme paginasi server-side yang tangguh pada riwayat transaksi tanpa membatasi jumlah data transaksi bulanan pengguna:',
+      'Penerapan mekanisme penguncian sewa klaim atomik terdistribusi (atomic lease claim) dan deduplikasi ID transaksi untuk menjamin integritas data:',
     details: [
-      'Paginasi 25 Data per Halaman: Mengambil 25 transaksi terakhir terlebih dahulu ke state lokal tanpa menarik seluruh riwayat transaksi sekaligus.',
-      'Navigasi Halaman Dinamis: Berpindah halaman memicu pengambilan data secara presisi (misal halaman 2 mengambil data ke 26-50) menggunakan cursor Firestore.',
-      'Dukungan Penuh Filter Periode Bulanan: Pagination tetap muncul dan bekerja sempurna saat filter periode bulanan (misal Juli) diaktifkan, berapapun jumlah transaksinya.',
+      'Klaim Eksekusi Atomik Terdistribusi: Setiap perangkat wajib memperoleh hak klaim eksklusif sebelum mengeksekusi jadwal, sehingga perangkat lain otomatis menolak pencatatan ulang.',
+      'ID Transaksi Deterministik: Pembuatan ID unik harian berbasis aturan dan tanggal mencegah terjadinya pencatatan ganda pada database Cloud Firestore.',
+      'Sinkronisasi Multi-Tab Lintas Jendela: Saluran komunikasi BroadcastChannel lokal saling mengabarkan keberhasilan transaksi secara instan antar-tab yang sedang terbuka.',
     ],
     icon: Layers,
   },
   {
-    id: 'automation-cache-system-fix',
-    category: 'system',
-    badge: 'PENJADWALAN & CACHE',
-    badgeColor: 'indigo',
-    title: 'Memperbaiki Sistem Cache pada Fitur Penjadwalan Transaksi',
+    id: 'pro-free-account-switch-sync',
+    category: 'database',
+    badge: 'SINKRONISASI AKUN PRO & FREE',
+    badgeColor: 'amber',
+    title: 'Perbaikan Bug Sinkronisasi saat Peralihan Akun Pro dan Free',
     summary:
-      'Optimalisasi pengelolaan cache memori dan persistensi lokal pada modul otomatisasi transaksi berulang:',
+      'Penyempurnaan validasi hak akses lisensi langsung ke database Cloud Firestore dan pembersihan tuntas residu data saat berganti akun:',
     details: [
-      'Pencegahan Pembacaan Berulang: Memperbaiki sistem cache agar tidak melakukan refetch jadwal transaksi yang tidak mengalami perubahan.',
-      'Eksekusi Tepat Waktu: Memastikan transaksi rutin berulang (bulanan) tereksekusi sesuai tanggal dan jam yang ditetapkan tanpa menduplikasi data.',
-      'Penyelarasan Status Jadwal: Sinkronisasi instan status jadwal (aktif, tunda, lewati) ke cache lokal dan server secara aman dan konsisten.',
+      'Validasi Status Lisensi Langsung ke Firestore: Pengecekan status Pro atau Free selalu merujuk langsung ke dokumen pengguna di Firestore tanpa mengandalkan cache lokal yang usang.',
+      'Pembersihan Total Residu Sesi: Seluruh cache dompet, mutasi transaksi, aturan otomatisasi, dan status hak akses fitur dibersihkan tuntas setiap kali pengguna keluar atau berganti akun.',
+      'Penegakan Batasan Fitur yang Akurat: Akun Free dipastikan mendapatkan pembatasan fitur sesuai paket dan akun Pro langsung memperoleh akses fitur eksklusif seketika tanpa tertukar.',
     ],
-    icon: Zap,
+    icon: Crown,
   },
 ];
 
 const filterTabs = computed(() => [
   { id: 'all' as const, label: 'Semua Pembaruan', count: changelogItems.length },
   {
+    id: 'system' as const,
+    label: 'Jadwal & Waktu',
+    count: changelogItems.filter((i) => i.category === 'system').length,
+  },
+  {
     id: 'database' as const,
     label: 'Database & Sinkronisasi',
     count: changelogItems.filter((i) => i.category === 'database').length,
-  },
-  {
-    id: 'payment' as const,
-    label: 'Payment Gateway',
-    count: changelogItems.filter((i) => i.category === 'payment').length,
-  },
-  {
-    id: 'ui' as const,
-    label: 'Tampilan & Kalkulasi',
-    count: changelogItems.filter((i) => i.category === 'ui').length,
-  },
-  {
-    id: 'system' as const,
-    label: 'Sistem & Paginasi',
-    count: changelogItems.filter((i) => i.category === 'system').length,
   },
 ]);
 
@@ -186,7 +127,7 @@ function markChangelogSeenAndClose() {
   notificationStore.closeChangelogModal();
 }
 
-// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.0 changelog yet
+// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.1 changelog yet
 watch(
   () => [authStore.isReady, authStore.isAuthenticated, authStore.requiresOtp] as const,
   ([ready, authenticated, needOtp]) => {
@@ -230,7 +171,7 @@ watch(
             </span>
           </div>
           <p class="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-            Versi Final 1.0.0 · {{ RELEASE_DATE }}
+            Versi {{ RELEASE_VERSION }} (Build {{ BUILD_NUMBER }}) · {{ RELEASE_DATE }}
           </p>
         </div>
       </div>
@@ -247,7 +188,7 @@ watch(
               class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-[11px] font-bold uppercase tracking-wider"
             >
               <Rocket class="w-3.5 h-3.5" />
-              <span>Rilis Final · v{{ RELEASE_VERSION }}</span>
+              <span>Rilis Pembaruan · v{{ RELEASE_VERSION }}</span>
             </span>
             <span
               class="inline-flex items-center px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-400/25 text-emerald-300 text-[11px] font-mono font-medium"
@@ -264,10 +205,10 @@ watch(
 
           <div class="space-y-1.5">
             <h3 class="text-base sm:text-lg font-bold tracking-tight text-white">
-              Catatan Pembaruan Sisa Uang v{{ RELEASE_VERSION }} (Final)
+              Catatan Pembaruan Sisa Uang v{{ RELEASE_VERSION }}
             </h3>
             <p class="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Pembaruan versi final <strong class="text-emerald-300 font-mono">v{{ RELEASE_VERSION }}</strong> menghadirkan stabilitas tingkat produksi dengan optimasi efisiensi operasi database, pembaruan sistem payment gateway resmi, paginasi transaksi server-side yang tangguh, perbaikan kalkulasi serapan anggaran, serta penyempurnaan UI dan cache penjadwalan transaksi.
+              Pembaruan versi <strong class="text-emerald-300 font-mono">v{{ RELEASE_VERSION }}</strong> (Build {{ BUILD_NUMBER }}) menghadirkan peningkatan keandalan pada jadwal transaksi otomatisasi, penyelarasan zona waktu WIB, perlindungan transaksi ganda lintas perangkat, serta penyempurnaan sinkronisasi saat beralih akun Pro dan Free.
             </p>
           </div>
         </div>
