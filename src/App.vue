@@ -2174,7 +2174,59 @@ async function handleSubmitProPayment() {
                   <span>{{ item.badge }}</span>
                 </span>
               </a>
+              
+              <!-- Mobile Drawer Utilitas Accordion: Menu Utama dengan Sub-menu Otomatisasi -->
+              <div class="pt-1">
+                <button
+                  type="button"
+                  class="w-full min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors select-none text-left cursor-pointer"
+                  :class="
+                    isUtilitiesRouteActive
+                      ? 'bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  "
+                  :aria-expanded="utilitiesAccordionOpen"
+                  @click="toggleUtilitiesAccordion"
+                >
+                  <div class="flex items-center gap-3 truncate min-w-0">
+                    <Wrench class="w-4 h-4 shrink-0" />
+                    <span class="truncate">{{ t('nav.utilities') }}</span>
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <span
+                      v-if="isUtilitiesRouteActive"
+                      class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
+                    />
+                    <ChevronDown
+                      class="w-4 h-4 transition-transform duration-200"
+                      :class="{ 'rotate-180': utilitiesAccordionOpen }"
+                    />
+                  </div>
+                </button>
 
+                <!-- Accordion Submenu: Otomatisasi -->
+                <div
+                  v-show="utilitiesAccordionOpen"
+                  class="mt-1 pl-3 py-1 space-y-1 border-l-2 border-emerald-200/80 dark:border-emerald-900/60 ml-4 transition-all"
+                >
+                  <a
+                    href="/utilities/automation"
+                    class="min-h-[40px] flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                    :class="
+                      route.path === '/utilities/automation'
+                        ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    "
+                    @click.prevent="navigateFromMobileDrawer('/utilities/automation')"
+                  >
+                    <div class="flex items-center gap-2.5 truncate min-w-0">
+                      <Clock class="w-4 h-4 shrink-0" />
+                      <span class="truncate">{{ t('nav.automation') }}</span>
+                    </div>
+                  </a>
+                </div>
+              </div>
+              
               <!-- Mobile Drawer Pengaturan Accordion: Menu Utama dengan Sub-menu Umum & Laporan -->
               <div class="pt-1">
                 <button
@@ -2245,57 +2297,6 @@ async function handleSubmitProPayment() {
                 </div>
               </div>
 
-              <!-- Mobile Drawer Utilitas Accordion: Menu Utama dengan Sub-menu Otomatisasi -->
-              <div class="pt-1">
-                <button
-                  type="button"
-                  class="w-full min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors select-none text-left cursor-pointer"
-                  :class="
-                    isUtilitiesRouteActive
-                      ? 'bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold'
-                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  "
-                  :aria-expanded="utilitiesAccordionOpen"
-                  @click="toggleUtilitiesAccordion"
-                >
-                  <div class="flex items-center gap-3 truncate min-w-0">
-                    <Wrench class="w-4 h-4 shrink-0" />
-                    <span class="truncate">{{ t('nav.utilities') }}</span>
-                  </div>
-                  <div class="flex items-center gap-1.5 shrink-0">
-                    <span
-                      v-if="isUtilitiesRouteActive"
-                      class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
-                    />
-                    <ChevronDown
-                      class="w-4 h-4 transition-transform duration-200"
-                      :class="{ 'rotate-180': utilitiesAccordionOpen }"
-                    />
-                  </div>
-                </button>
-
-                <!-- Accordion Submenu: Otomatisasi -->
-                <div
-                  v-show="utilitiesAccordionOpen"
-                  class="mt-1 pl-3 py-1 space-y-1 border-l-2 border-emerald-200/80 dark:border-emerald-900/60 ml-4 transition-all"
-                >
-                  <a
-                    href="/utilities/automation"
-                    class="min-h-[40px] flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer"
-                    :class="
-                      route.path === '/utilities/automation'
-                        ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
-                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                    "
-                    @click.prevent="navigateFromMobileDrawer('/utilities/automation')"
-                  >
-                    <div class="flex items-center gap-2.5 truncate min-w-0">
-                      <Clock class="w-4 h-4 shrink-0" />
-                      <span class="truncate">{{ t('nav.automation') }}</span>
-                    </div>
-                  </a>
-                </div>
-              </div>
             </nav>
 
             <!-- Mobile & Tablet Drawer Navigation: Super Admin (No Finance Menus) -->
