@@ -16,7 +16,7 @@ import AppModal from './AppModal.vue';
 const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_1';
 const RELEASE_VERSION = '1.0.1';
 const RELEASE_DATE = 'November 2026';
-const BUILD_NUMBER = '10116';
+const BUILD_NUMBER = '10117';
 
 const notificationStore = useNotificationStore();
 const authStore = useAuthStore();
