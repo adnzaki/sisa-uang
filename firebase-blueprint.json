@@ -419,6 +419,11 @@
           "minLength": 8,
           "maxLength": 30
         },
+        "automationRuleId": {
+          "type": "string",
+          "description": "ID aturan otomatisasi jika transaksi berasal dari jadwal otomatis",
+          "maxLength": 128
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",

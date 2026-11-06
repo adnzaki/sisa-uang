@@ -525,13 +525,19 @@ function formatDaysDisplay(days: number[]): string {
   return `Tanggal ${days.join(', ')} setiap bulan`;
 }
 
+function isRuleExecutedToday(rule: AutomationItem): boolean {
+  const { dateIso: todayWibIso } = getWibDateTime();
+  const localIso = getLocalTodayIsoDate();
+  return rule.lastExecutedDate === todayWibIso || rule.lastExecutedDate === localIso;
+}
+
 function getExecutionStatusText(rule: AutomationItem): { text: string; color: string } {
   const { dateIso: todayWibIso, timeHhMm: currentWibTime, dayOfMonth: todayDay } = getWibDateTime();
   const localIso = getLocalTodayIsoDate();
   const localHhMm = `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`;
 
   // 1. Sudah dicatat hari ini (cek tanggal WIB atau lokal)
-  if (rule.lastExecutedDate === todayWibIso || rule.lastExecutedDate === localIso) {
+  if (isRuleExecutedToday(rule)) {
     return { text: 'Sudah dicatat hari ini', color: 'text-emerald-600 dark:text-emerald-400 font-semibold' };
   }
 
@@ -793,13 +799,19 @@ function getExecutionStatusText(rule: AutomationItem): { text: string; color: st
           <!-- Button "Catat Sekarang (Lebih Cepat Dari Jadwal)" -->
           <button
             type="button"
-            :disabled="executingRuleId === rule.id"
-            class="flex-1 min-h-[36px] px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-            title="Catat lebih cepat dari jadwal untuk hari ini"
+            :disabled="executingRuleId === rule.id || isRuleExecutedToday(rule)"
+            class="flex-1 min-h-[36px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+            :class="
+              isRuleExecutedToday(rule)
+                ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed opacity-60'
+                : 'bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 cursor-pointer disabled:opacity-50'
+            "
+            :title="isRuleExecutedToday(rule) ? 'Transaksi untuk hari ini sudah dicatat' : 'Catat lebih cepat dari jadwal untuk hari ini'"
             @click="handleExecuteEarly(rule)"
           >
-            <Play class="w-3 h-3 fill-current" />
-            <span>Catat Lebih Cepat</span>
+            <Check v-if="isRuleExecutedToday(rule)" class="w-3.5 h-3.5 text-emerald-500" />
+            <Play v-else class="w-3 h-3 fill-current" />
+            <span>{{ isRuleExecutedToday(rule) ? 'Sudah Dicatat Hari Ini' : 'Catat Lebih Cepat' }}</span>
           </button>
 
           <!-- Edit & Delete -->

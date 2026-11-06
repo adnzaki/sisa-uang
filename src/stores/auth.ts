@@ -1602,8 +1602,8 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(loggedInUser));
       purgeForeignLocalStorage(loggedInUser.uid);
 
-      // Step C: For direct email login, synchronize Firebase Auth session if applicable
-      if (!isMigratedUserUid && cleanIdentifier.includes('@')) {
+      // Step C: For email or username login, synchronize Firebase Auth session if applicable
+      if (resolvedEmail && resolvedEmail.includes('@')) {
         try {
           await signInWithEmailAndPassword(auth, resolvedEmail, passwordInput);
         } catch {

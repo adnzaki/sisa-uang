@@ -967,20 +967,22 @@ export const useAutomationStore = defineStore('automation', () => {
     // 5. Cloud Firestore Direct Document Idempotency Check:
     // Before creating or committing, verify if the deterministic document already exists in Cloud Firestore
     try {
-      await financeStore.ensureFirestoreSessionForUser(uid);
-      const existingDocSnap = await getDoc(doc(db, 'transactions', autoTxId));
-      if (existingDocSnap.exists() && !existingDocSnap.data()?.deleted) {
-        rule.lastExecutedDate = todayIso;
-        rule.snoozedUntil = undefined;
-        writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
-        if (pendingConfirmation.value?.id === rule.id) {
-          dismissCurrentConfirmation();
+      const canSync = await financeStore.ensureFirestoreSessionForUser(uid);
+      if (canSync) {
+        const existingDocSnap = await getDoc(doc(db, 'transactions', autoTxId));
+        if (existingDocSnap.exists() && !existingDocSnap.data()?.deleted) {
+          rule.lastExecutedDate = todayIso;
+          rule.snoozedUntil = undefined;
+          writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+          if (pendingConfirmation.value?.id === rule.id) {
+            dismissCurrentConfirmation();
+          }
+          notify.notifyInfo(
+            'Transaksi Sudah Tersimpan di Database',
+            `Transaksi otomatis "${rule.name}" untuk hari ini sudah tersimpan di Cloud Firestore.`
+          );
+          return true;
         }
-        notify.notifyInfo(
-          'Transaksi Sudah Tersimpan di Database',
-          `Transaksi otomatis "${rule.name}" untuk hari ini sudah tersimpan di Cloud Firestore.`
-        );
-        return true;
       }
     } catch {
       // Continue to execution
@@ -1028,16 +1030,18 @@ export const useAutomationStore = defineStore('automation', () => {
 
       // Cloud Firestore sync
       try {
-        await financeStore.ensureFirestoreSessionForUser(uid);
-        await setDoc(
-          doc(db, 'automations', rule.id),
-          {
-            lastExecutedDate: todayIso,
-            snoozedUntil: null,
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true }
-        );
+        const canSync = await financeStore.ensureFirestoreSessionForUser(uid);
+        if (canSync) {
+          await setDoc(
+            doc(db, 'automations', rule.id),
+            {
+              lastExecutedDate: todayIso,
+              snoozedUntil: null,
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
+        }
       } catch (err: any) {
         console.warn('Firestore executeTransaction notice:', err?.message || err);
       }
