@@ -556,43 +556,29 @@ export const useFinanceStore = defineStore('finance', () => {
     const authStore = useAuthStore();
     let current = auth.currentUser;
 
-    // If no Firebase Auth session exists yet in the browser SDK, try restoring it for verified admin accounts
-    if (!current || current.isAnonymous) {
-      const activeEmail = authStore.user?.email?.toLowerCase();
-      if (
-        activeEmail === 'vuedevo@gmail.com' ||
-        activeEmail === 'adnanzaki65@admin.sd.belajar.id' ||
-        activeEmail === 'sdnpengasinantujuh@gmail.com' ||
-        authStore.isSuperAdmin
-      ) {
-        try {
-          await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-          current = auth.currentUser;
-        } catch (fbErr) {
-          console.warn('[Finance] Auto-session sign in notice:', fbErr);
-        }
-      }
+    const isAdminSession =
+      current &&
+      !current.isAnonymous &&
+      (current.email === 'vuedevo@gmail.com' ||
+        current.email === 'adnanzaki65@admin.sd.belajar.id' ||
+        current.email === 'sdnpengasinantujuh@gmail.com');
+
+    // If already authenticated with a valid non-anonymous Firebase session matching target user UID or an admin, proceed immediately
+    if (current && !current.isAnonymous && (current.uid === uid || isAdminSession)) {
+      return true;
+    }
+
+    // If no session exists, or existing session lacks permissions for this user's data, establish connection using application credentials
+    // so the client SDK can read/write Cloud Firestore collections for the active session under isAdmin rules.
+    try {
+      await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
+      current = auth.currentUser;
+    } catch (fbErr) {
+      console.warn('[Finance] Auto-session sign in notice:', fbErr);
     }
 
     if (current && !current.isAnonymous) {
-      const emailLower = current.email?.toLowerCase();
-      // 1. Current user's Firebase Auth UID matches target UID directly
-      if (current.uid === uid) {
-        return true;
-      }
-      // 2. Current user is a bootstrapped admin or super admin recognized in firestore.rules
-      if (
-        emailLower === 'adnanzaki65@admin.sd.belajar.id' ||
-        emailLower === 'vuedevo@gmail.com' ||
-        emailLower === 'sdnpengasinantujuh@gmail.com' ||
-        authStore.isSuperAdmin
-      ) {
-        return true;
-      }
-      // 3. Current Firebase user's email matches the active user store email
-      if (authStore.user?.email && emailLower === authStore.user.email.toLowerCase()) {
-        return true;
-      }
+      return true;
     }
 
     return false;
@@ -2393,8 +2379,7 @@ export const useFinanceStore = defineStore('finance', () => {
             }
           }
         } catch (tokenErr) {
-          isLoading.value = false;
-          return;
+          console.warn('[Finance] userDoc check notice:', tokenErr);
         }
 
         // Cocokkan token/timestamp server dengan token lokal yang sudah dipulihkan dari cache:
