@@ -76,16 +76,25 @@ const phone = ref('085129634505');
 // BV: BSI VA
 // NC: BNC (Bank Neo Commerce) VA
 // B1: CIMB Niaga VA
+// Duitku Payment Channels
+// SQ: QRIS Instan (Nusapay) - Officially Activated
+// 10 Supported Virtual Accounts:
+// M2: Mandiri VA
+// BT: Permata Bank VA
+// BR: BRI VA (BRIVA)
+// I1: BNI VA
+// BV: BSI VA
+// NC: BNC (Bank Neo Commerce) VA
+// B1: CIMB Niaga VA
 // DM: Danamon VA
 // VA: Maybank VA
 // S1: Sampoerna VA
 //
-// Disabled Temporarily (Belum Aktif):
-// SP: QRIS
-// OV: OVO
-// DA: DANA
-// SL: ShopeePay
-const paymentMethod = ref<string>('M2');
+// Direct E-Wallet (Gunakan QRIS):
+// OV: OVO Direct
+// DA: DANA Direct
+// SL: ShopeePay Direct
+const paymentMethod = ref<string>('SQ');
 
 export interface PaymentChannelItem {
   code: string;
@@ -97,6 +106,15 @@ export interface PaymentChannelItem {
   disabled?: boolean;
   disabledNote?: string;
 }
+
+const supportedQrisChannel: PaymentChannelItem = {
+  code: 'SQ',
+  name: 'QRIS Instan (Nusapay)',
+  shortName: 'QRIS Instan',
+  sub: 'BCA, Mandiri, BRI, BNI, GoPay, OVO, DANA, ShopeePay, LinkAja',
+  bankName: 'QRIS Nasional (Nusapay)',
+  category: 'qris',
+};
 
 const supportedVaChannels: PaymentChannelItem[] = [
   { code: 'M2', name: 'Bank Mandiri', shortName: 'Mandiri', sub: 'Livin by Mandiri / ATM', bankName: 'Bank Mandiri', category: 'va' },
@@ -112,10 +130,9 @@ const supportedVaChannels: PaymentChannelItem[] = [
 ];
 
 const disabledChannels: PaymentChannelItem[] = [
-  { code: 'SP', name: 'QRIS Instan', shortName: 'QRIS', sub: 'Pindai barcode semua aplikasi', bankName: 'QRIS Nasional', category: 'qris', disabled: true, disabledNote: 'Sementara belum aktif' },
-  { code: 'OV', name: 'OVO E-Wallet', shortName: 'OVO', sub: 'Pembayaran instan via OVO', bankName: 'OVO', category: 'ewallet', disabled: true, disabledNote: 'Sementara belum aktif' },
-  { code: 'DA', name: 'DANA E-Wallet', shortName: 'DANA', sub: 'Pembayaran instan via DANA', bankName: 'DANA', category: 'ewallet', disabled: true, disabledNote: 'Sementara belum aktif' },
-  { code: 'SL', name: 'ShopeePay', shortName: 'ShopeePay', sub: 'Pembayaran instan ShopeePay', bankName: 'ShopeePay', category: 'ewallet', disabled: true, disabledNote: 'Sementara belum aktif' },
+  { code: 'OV', name: 'OVO Direct', shortName: 'OVO', sub: 'Gunakan QRIS untuk membayar via OVO', bankName: 'OVO', category: 'ewallet', disabled: true, disabledNote: 'Gunakan QRIS di atas' },
+  { code: 'DA', name: 'DANA Direct', shortName: 'DANA', sub: 'Gunakan QRIS untuk membayar via DANA', bankName: 'DANA', category: 'ewallet', disabled: true, disabledNote: 'Gunakan QRIS di atas' },
+  { code: 'SL', name: 'ShopeePay Direct', shortName: 'ShopeePay', sub: 'Gunakan QRIS untuk membayar via ShopeePay', bankName: 'ShopeePay', category: 'ewallet', disabled: true, disabledNote: 'Gunakan QRIS di atas' },
 ];
 
 // Steps: 'form' | 'payment' | 'success'
@@ -161,6 +178,8 @@ const invoiceData = ref<{
 });
 
 const channelLabels: Record<string, { label: string; sub: string; bank: string; category: 'qris' | 'va' | 'ewallet' }> = {
+  SQ: { label: 'QRIS Instan', sub: 'Semua Bank & E-Wallet (Nusapay)', bank: 'QRIS Nasional (Nusapay)', category: 'qris' },
+  SP: { label: 'QRIS Instan', sub: 'Semua Bank & E-Wallet', bank: 'QRIS Nasional', category: 'qris' },
   M2: { label: 'Mandiri Virtual Account', sub: 'Livin by Mandiri / ATM', bank: 'Bank Mandiri', category: 'va' },
   BT: { label: 'Permata Bank VA', sub: 'PermataME / ATM Bersama', bank: 'Permata Bank', category: 'va' },
   BR: { label: 'BRI Virtual Account', sub: 'BRImo / ATM BRI (BRIVA)', bank: 'Bank BRI', category: 'va' },
@@ -171,10 +190,9 @@ const channelLabels: Record<string, { label: string; sub: string; bank: string; 
   DM: { label: 'Danamon Virtual Account', sub: 'D-Bank PRO / ATM Danamon', bank: 'Bank Danamon', category: 'va' },
   VA: { label: 'Maybank Virtual Account', sub: 'M2U ID / ATM Maybank', bank: 'Maybank Indonesia', category: 'va' },
   S1: { label: 'Sampoerna Virtual Account', sub: 'Sampoerna Mobile / ATM', bank: 'Bank Sahabat Sampoerna', category: 'va' },
-  SP: { label: 'QRIS Instan', sub: 'Semua Bank & E-Wallet', bank: 'QRIS Nasional', category: 'qris' },
-  OV: { label: 'OVO E-Wallet', sub: 'Pembayaran instan via OVO', bank: 'OVO', category: 'ewallet' },
-  DA: { label: 'DANA E-Wallet', sub: 'Pembayaran instan via DANA', bank: 'DANA', category: 'ewallet' },
-  SL: { label: 'ShopeePay', sub: 'Pembayaran instan ShopeePay', bank: 'ShopeePay', category: 'ewallet' },
+  OV: { label: 'OVO Direct', sub: 'Pembayaran instan via OVO', bank: 'OVO', category: 'ewallet' },
+  DA: { label: 'DANA Direct', sub: 'Pembayaran instan via DANA', bank: 'DANA', category: 'ewallet' },
+  SL: { label: 'ShopeePay Direct', sub: 'Pembayaran instan ShopeePay', bank: 'ShopeePay', category: 'ewallet' },
 };
 
 const currentPrice = computed(() => {
@@ -361,10 +379,11 @@ async function proceedToPayment() {
     return;
   }
 
+  const isQris = paymentMethod.value === 'SQ' || paymentMethod.value === 'SP';
   const selectedVa = supportedVaChannels.find((ch) => ch.code === paymentMethod.value);
-  if (!selectedVa) {
+  if (!isQris && !selectedVa) {
     errorMessage.value =
-      'Metode pembayaran QRIS dan e-Wallet sementara belum aktif. Silakan pilih salah satu dari 10 Virtual Account yang didukung.';
+      'Silakan pilih metode pembayaran yang didukung (QRIS Instan atau salah satu dari 10 Virtual Account).';
     return;
   }
 
@@ -408,6 +427,16 @@ async function proceedToPayment() {
         });
       } catch (e) {
         console.warn('QR code generation failed, using fallback display', e);
+      }
+    } else if (data.paymentUrl && (paymentMethod.value === 'SQ' || paymentMethod.value === 'SP')) {
+      try {
+        qrisDataUrl.value = await QRCode.toDataURL(data.paymentUrl, {
+          width: 320,
+          margin: 1,
+          color: { dark: '#0f172a', light: '#ffffff' },
+        });
+      } catch (e) {
+        console.warn('QR URL code generation failed', e);
       }
     }
 
@@ -659,17 +688,80 @@ function handleClose() {
           </div>
         </div>
 
-        <!-- Payment Method Choice: 10 Supported Virtual Accounts (Active) & Disabled Channels -->
+        <!-- Payment Method Choice: QRIS (Active & Recommended) + 10 Supported Virtual Accounts -->
         <div class="space-y-4">
+          <!-- Active QRIS (Nusapay - Semua Bank & E-Wallet) -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between">
+              <label class="block text-xs font-semibold text-slate-800 dark:text-slate-200">
+                Pilih Metode Pembayaran
+              </label>
+              <span class="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/70 px-2 py-0.5 rounded-md border border-emerald-200/70 dark:border-emerald-800/70">
+                <CheckCircle2 class="w-3 h-3" />
+                <span>Otomatis &amp; Real-time</span>
+              </span>
+            </div>
+
+            <!-- QRIS Button Card (Officially Activated via Nusapay) -->
+            <button
+              type="button"
+              class="w-full p-3 sm:p-3.5 rounded-2xl border text-left transition-all duration-150 relative cursor-pointer group flex items-center justify-between gap-3 shadow-xs"
+              :class="
+                paymentMethod === 'SQ' || paymentMethod === 'SP'
+                  ? 'border-emerald-600 dark:border-emerald-500 bg-emerald-50/90 dark:bg-emerald-950/60 ring-2 ring-emerald-500/40'
+                  : 'border-slate-200 dark:border-slate-700/80 hover:border-slate-300 dark:hover:border-slate-600 bg-slate-50/80 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800'
+              "
+              @click="paymentMethod = 'SQ'"
+            >
+              <div class="flex items-center gap-3 min-w-0">
+                <div
+                  class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors"
+                  :class="
+                    paymentMethod === 'SQ' || paymentMethod === 'SP'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
+                  "
+                >
+                  <QrCode class="w-5 h-5" />
+                </div>
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="font-bold text-sm text-slate-900 dark:text-slate-100">
+                      QRIS Instan (Nusapay)
+                    </span>
+                    <span class="text-[9px] font-bold tracking-wider px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 uppercase">
+                      Aktif
+                    </span>
+                  </div>
+                  <div class="text-[11px] text-slate-600 dark:text-slate-400 truncate mt-0.5">
+                    Pindai via BCA, Mandiri, BRI, BNI, GoPay, OVO, DANA, ShopeePay &amp; semua aplikasi
+                  </div>
+                </div>
+              </div>
+
+              <div class="shrink-0 flex items-center">
+                <span
+                  class="w-5 h-5 rounded-full border flex items-center justify-center transition-colors"
+                  :class="
+                    paymentMethod === 'SQ' || paymentMethod === 'SP'
+                      ? 'border-emerald-600 bg-emerald-600 text-white'
+                      : 'border-slate-300 dark:border-slate-600'
+                  "
+                >
+                  <Check v-if="paymentMethod === 'SQ' || paymentMethod === 'SP'" class="w-3 h-3 stroke-[3]" />
+                </span>
+              </div>
+            </button>
+          </div>
+
           <!-- Active 10 Virtual Accounts -->
           <div class="space-y-2">
             <div class="flex items-center justify-between">
               <label class="block text-xs font-semibold text-slate-800 dark:text-slate-200">
-                Pilih Bank Virtual Account (10 Bank Didukung)
+                Atau Pilih Bank Virtual Account (10 Bank)
               </label>
-              <span class="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/70 px-2 py-0.5 rounded-md border border-emerald-200/70 dark:border-emerald-800/70">
-                <CheckCircle2 class="w-3 h-3" />
-                <span>Aktif &amp; Otomatis</span>
+              <span class="text-[11px] text-slate-500 dark:text-slate-400">
+                Transfer ATM / m-Banking
               </span>
             </div>
             <p class="text-[11px] text-slate-500 dark:text-slate-400">
@@ -737,43 +829,15 @@ function handleClose() {
             </div>
           </div>
 
-          <!-- Disabled Payment Methods Notice & Placeholders -->
-          <div class="p-3 rounded-xl bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/60 space-y-2">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-1.5 text-xs font-semibold text-amber-800 dark:text-amber-300">
-                <AlertCircle class="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                <span>QRIS &amp; E-Wallet (Sementara Dinonaktifkan)</span>
-              </div>
-              <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-200/60 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200">
-                Belum Aktif
-              </span>
+          <!-- E-Wallet Information Card -->
+          <div class="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/80 space-y-1.5">
+            <div class="flex items-center gap-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200">
+              <Smartphone class="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span>Bayar dengan OVO, DANA, GoPay, atau ShopeePay?</span>
             </div>
-            <p class="text-[11px] text-amber-900/80 dark:text-amber-300/80 leading-relaxed">
-              Metode pembayaran <strong>QRIS</strong> dan <strong>e-Wallet (OVO, DANA, ShopeePay)</strong> dinonaktifkan sementara karena belum aktif di gateway. Silakan gunakan salah satu dari <strong>10 Virtual Account</strong> di atas.
+            <p class="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+              Silakan pilih opsi <strong>QRIS Instan</strong> di atas. Buka aplikasi e-Wallet Anda (OVO, DANA, GoPay, ShopeePay), lalu gunakan menu <strong>Scan QRIS</strong> untuk melakukan pembayaran secara instan.
             </p>
-
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
-              <div
-                v-for="item in disabledChannels"
-                :key="item.code"
-                class="p-2 rounded-lg border border-dashed border-amber-300/60 dark:border-amber-800/60 bg-white/60 dark:bg-slate-900/40 text-slate-400 dark:text-slate-500 flex flex-col justify-between cursor-not-allowed select-none opacity-65"
-              >
-                <div class="flex items-center justify-between mb-1">
-                  <component :is="item.type === 'qris' ? QrCode : Smartphone" class="w-3.5 h-3.5 text-slate-400" />
-                  <span class="text-[9px] font-semibold text-amber-700 dark:text-amber-400">
-                    Tidak Aktif
-                  </span>
-                </div>
-                <div>
-                  <div class="font-semibold text-xs text-slate-500 dark:text-slate-400">
-                    {{ item.name }}
-                  </div>
-                  <div class="text-[9px] text-slate-400 truncate">
-                    {{ item.disabledNote }}
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
 
@@ -863,33 +927,74 @@ function handleClose() {
           <span class="leading-relaxed">{{ checkStatusNotice }}</span>
         </div>
 
-        <!-- 1. QRIS Payment Channel -->
-        <div v-if="paymentMethod === 'SP'" class="flex flex-col items-center text-center space-y-3">
+        <!-- 1. QRIS Payment Channel (SQ Nusapay / SP) -->
+        <div v-if="paymentMethod === 'SQ' || paymentMethod === 'SP'" class="flex flex-col items-center text-center space-y-3.5">
           <div class="text-xs text-slate-600 dark:text-slate-400 flex items-center gap-1.5">
             <Clock class="w-4 h-4 text-emerald-600" />
-            <span>Pindai QRIS di bawah ini dengan aplikasi perbankan atau e-wallet Anda:</span>
+            <span>Pindai barcode QRIS di bawah ini dengan aplikasi perbankan atau e-wallet Anda:</span>
           </div>
 
-          <!-- Dynamic QRIS Image -->
+          <!-- Dynamic QRIS Image Container -->
           <div class="p-4 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center">
             <img
               v-if="qrisDataUrl"
               :src="qrisDataUrl"
               alt="QRIS SisaUang Duitku"
-              class="w-52 h-52 object-contain"
+              class="w-56 h-56 object-contain"
             />
-            <div v-else class="w-52 h-52 flex items-center justify-center bg-slate-100 rounded-xl">
-              <QrCode class="w-16 h-16 text-slate-400 animate-pulse" />
+            <div v-else class="w-56 h-56 flex flex-col items-center justify-center bg-slate-100 rounded-xl p-4 text-center">
+              <QrCode class="w-16 h-16 text-slate-400 animate-pulse mb-2" />
+              <span class="text-xs text-slate-500 font-medium">Menyiapkan kode QRIS...</span>
             </div>
 
-            <div class="mt-2 text-[11px] font-bold tracking-wider text-slate-800 uppercase">
-              QRIS NASIONAL · RESMI
+            <div class="mt-2 text-[11px] font-bold tracking-wider text-slate-800 uppercase flex items-center gap-1.5">
+              <CheckCircle2 class="w-3.5 h-3.5 text-emerald-600" />
+              <span>QRIS NASIONAL (NUSAPAY) · RESMI</span>
             </div>
           </div>
 
           <p class="text-xs text-slate-500 dark:text-slate-400 max-w-sm">
-            Mendukung <strong>Mandiri, BRI, BNI, Permata, GoPay, ShopeePay, OVO, Dana, LinkAja</strong>, dan seluruh aplikasi berlogo QRIS.
+            Mendukung <strong>BCA, Mandiri, BRI, BNI, Permata, Danamon, GoPay, OVO, DANA, ShopeePay, LinkAja</strong>, dan seluruh aplikasi berlogo QRIS.
           </p>
+
+          <!-- Petunjuk Pindai QRIS -->
+          <div class="p-3.5 sm:p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/30 text-left w-full space-y-2.5">
+            <div class="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
+              <FileText class="w-3.5 h-3.5 text-emerald-600" />
+              <span>Petunjuk Pembayaran QRIS:</span>
+            </div>
+            <ol class="space-y-2 text-xs text-slate-600 dark:text-slate-300">
+              <li class="flex items-start gap-2.5 leading-relaxed">
+                <span class="w-5 h-5 rounded-full bg-slate-200/90 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">1</span>
+                <div>Buka aplikasi mobile banking atau e-wallet favorit Anda (BCA, Mandiri, BRI, BNI, GoPay, OVO, DANA, ShopeePay, dll.).</div>
+              </li>
+              <li class="flex items-start gap-2.5 leading-relaxed">
+                <span class="w-5 h-5 rounded-full bg-slate-200/90 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">2</span>
+                <div>Pilih menu <strong>Scan / Bayar QR</strong>, lalu arahkan kamera ke barcode QRIS di atas.</div>
+              </li>
+              <li class="flex items-start gap-2.5 leading-relaxed">
+                <span class="w-5 h-5 rounded-full bg-slate-200/90 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">3</span>
+                <div>Pastikan nominal pembayaran <strong>{{ invoiceData.formattedAmount }}</strong> dan nama penerima adalah <strong>DUITKU / SISAUANG PRO</strong>.</div>
+              </li>
+              <li class="flex items-start gap-2.5 leading-relaxed">
+                <span class="w-5 h-5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">4</span>
+                <div>Konfirmasi dan masukkan PIN transaksi Anda. Sistem akan memverifikasi dan mengaktifkan lisensi Pro secara otomatis dalam hitungan detik!</div>
+              </li>
+            </ol>
+          </div>
+
+          <!-- Opsional: Link Pembayaran Duitku jika dibuka via browser / external QR -->
+          <div v-if="invoiceData.paymentUrl" class="w-full text-center">
+            <a
+              :href="invoiceData.paymentUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-1.5 text-xs text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 hover:underline"
+            >
+              <span>Buka halaman pembayaran QRIS di tab baru</span>
+              <ExternalLink class="w-3 h-3" />
+            </a>
+          </div>
         </div>
 
         <!-- 2. Virtual Account Channel (10 Supported Banks) -->

@@ -4,14 +4,14 @@ import fs from 'fs';
 import path from 'path';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
-import { PRERENDERED_PAGES } from './src/prerender/pages';
-import { injectPrerenderedHtml } from './src/prerender/injector';
+import { PRERENDERED_PAGES } from './src/prerender/pages.ts';
+import { injectPrerenderedHtml } from './src/prerender/injector.ts';
 
 function ssgPrerenderPlugin() {
   return {
     name: 'vite-plugin-sisauang-ssg-prerender',
     closeBundle() {
-      const distDir = path.resolve(__dirname, 'dist');
+      const distDir = path.resolve(process.cwd(), 'dist');
       const indexHtmlPath = path.join(distDir, 'index.html');
       if (!fs.existsSync(indexHtmlPath)) return;
 
@@ -52,7 +52,7 @@ function ssgPrerenderPlugin() {
   };
 }
 
-import pkg from './package.json';
+import pkg from './package.json' with { type: 'json' };
 
 export default defineConfig(() => {
   return {
@@ -176,7 +176,7 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, './src'),
+        '@': path.resolve(process.cwd(), './src'),
       },
     },
     server: {

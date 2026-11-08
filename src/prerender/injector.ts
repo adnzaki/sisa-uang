@@ -1,4 +1,4 @@
-import { PRERENDERED_PAGES, PreRenderPageData } from './pages';
+import { PRERENDERED_PAGES, PreRenderPageData } from './pages.ts';
 
 export function getPrerenderDataForPath(urlPath: string): PreRenderPageData | null {
   const clean = urlPath.split('?')[0].split('#')[0].replace(/\/$/, '') || '/';

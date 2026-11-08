@@ -1,0 +1,38 @@
+[
+  {
+    "merchantOrderId": "SU-1794130881990-F4349A",
+    "reference": "DS3639926E6HXNV3LXNTDAZA",
+    "paymentUrl": "https://sandbox.duitku.com/topup/topupdirectv2.aspx?ref=SP26U12B6OHBZQS4CQV",
+    "qrString": "00020101021226610016ID.CO.SHOPEE.WWW01189360091800202688450208202688450303UKE520479885303360540821500.005802ID5906Duitku6015KAB. BANGKA BAR6105333156222051813083246072606025563042616",
+    "amount": 21500,
+    "plan": "monthly",
+    "customerName": "Test User",
+    "customerEmail": "vuedevo@gmail.com",
+    "customerPhone": "085129634505",
+    "userUid": "test12345",
+    "paymentMethod": "SP",
+    "statusCode": "00",
+    "statusMessage": "SUCCESS",
+    "status": "PENDING",
+    "createdAt": "2026-11-08T09:41:23.754Z",
+    "expiresAt": "2026-11-09T09:41:23.754Z"
+  },
+  {
+    "merchantOrderId": "SU-1794130996664-BDE2A4",
+    "reference": "DS3639926GJ0NRR84WI0R07S",
+    "paymentUrl": "https://sandbox.duitku.com/topup/topupdirectv2.aspx?ref=SP26LDF7XZC2QJNUVJ4",
+    "qrString": "00020101021226610016ID.CO.SHOPEE.WWW01189360091800202688450208202688450303UKE520479885303360540821500.005802ID5906Duitku6015KAB. BANGKA BAR610533315622205181161100942314840076304413A",
+    "amount": 21500,
+    "plan": "monthly",
+    "customerName": "Test User",
+    "customerEmail": "vuedevo@gmail.com",
+    "customerPhone": "085129634505",
+    "userUid": "test12345",
+    "paymentMethod": "SP",
+    "statusCode": "00",
+    "statusMessage": "SUCCESS",
+    "status": "PENDING",
+    "createdAt": "2026-11-08T09:43:19.164Z",
+    "expiresAt": "2026-11-09T09:43:19.164Z"
+  }
+]

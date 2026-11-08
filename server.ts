@@ -3353,36 +3353,35 @@ async function startServer() {
         category: 'va',
         status: 'active',
       },
-      // Disabled Payment Channels (Temporarily inactive)
+      // Active QRIS via Nusapay (Resmi diaktifkan Duitku)
       {
-        paymentMethod: 'SP',
-        paymentName: 'QRIS Instan (Sementara Belum Aktif)',
-        paymentImage: 'https://images.duitku.com/hotlink-ok/SP.PNG',
+        paymentMethod: 'SQ',
+        paymentName: 'QRIS Instan (Nusapay)',
+        paymentImage: 'https://images.duitku.com/hotlink-ok/SQ.PNG',
         totalFee: '0',
         category: 'qris',
-        status: 'inactive',
-        disabled: true,
-        disabledReason: 'Sementara belum aktif',
+        status: 'active',
       },
+      // Disabled Direct E-Wallet Channels (Sementara belum aktif langsung, gunakan QRIS)
       {
         paymentMethod: 'OV',
-        paymentName: 'OVO E-Wallet (Sementara Belum Aktif)',
+        paymentName: 'OVO Direct (Gunakan QRIS)',
         paymentImage: 'https://images.duitku.com/hotlink-ok/OV.PNG',
         totalFee: '0',
         category: 'ewallet',
         status: 'inactive',
         disabled: true,
-        disabledReason: 'Sementara belum aktif',
+        disabledReason: 'Sementara belum aktif (Gunakan QRIS)',
       },
       {
         paymentMethod: 'DA',
-        paymentName: 'DANA E-Wallet (Sementara Belum Aktif)',
+        paymentName: 'DANA Direct (Gunakan QRIS)',
         paymentImage: 'https://images.duitku.com/hotlink-ok/DA.PNG',
         totalFee: '0',
         category: 'ewallet',
         status: 'inactive',
         disabled: true,
-        disabledReason: 'Sementara belum aktif',
+        disabledReason: 'Sementara belum aktif (Gunakan QRIS)',
       },
     ];
 
@@ -3407,19 +3406,24 @@ async function startServer() {
       if (response.ok) {
         const data: any = await response.json();
         if (Array.isArray(data?.paymentFee) && data.paymentFee.length > 0) {
-          // Filter out BCA VA (BC) completely and mark QRIS/e-wallets as disabled
+          // Filter out BCA VA (BC) completely and keep QRIS ('SQ', 'SP', 'NQ') active
           const sanitizedMethods = data.paymentFee
             .filter((p: any) => p && p.paymentMethod !== 'BC')
             .map((p: any) => {
-              if (['SP', 'NQ', 'OV', 'DA', 'SL', 'LA', 'SA', 'OL'].includes(p.paymentMethod)) {
+              // Only direct e-wallets remain temporarily disabled
+              if (['OV', 'DA', 'SL', 'LA', 'SA', 'OL'].includes(p.paymentMethod)) {
                 return {
                   ...p,
                   disabled: true,
                   status: 'inactive',
-                  disabledReason: 'Sementara belum aktif',
+                  disabledReason: 'Sementara belum aktif (Gunakan QRIS)',
                 };
               }
-              return p;
+              return {
+                ...p,
+                disabled: false,
+                status: 'active',
+              };
             });
 
           res.json({
@@ -3457,24 +3461,26 @@ async function startServer() {
         return;
       }
 
-      // Enforce supported 10 Virtual Accounts and reject BCA / disabled methods
+      // Enforce supported 10 Virtual Accounts and QRIS methods
       const SUPPORTED_VA_CODES = ['M2', 'BT', 'BR', 'I1', 'BV', 'NC', 'B1', 'DM', 'VA', 'S1'];
+      const SUPPORTED_QRIS_CODES = ['SQ', 'SP', 'NQ'];
 
       if (paymentMethod === 'BC') {
         res.status(400).json({ error: 'Metode pembayaran BCA Virtual Account tidak didukung.' });
         return;
       }
 
-      if (paymentMethod === 'SP' || ['NQ', 'OV', 'DA', 'SL', 'LA', 'SA', 'OL'].includes(paymentMethod)) {
+      // Reject only disabled direct e-wallets
+      if (['OV', 'DA', 'SL', 'LA', 'SA', 'OL'].includes(paymentMethod)) {
         res.status(400).json({
-          error: 'Metode pembayaran QRIS dan e-Wallet sementara belum aktif. Silakan gunakan salah satu dari 10 Virtual Account yang didukung.',
+          error: 'Metode pembayaran direct e-wallet belum aktif secara langsung. Silakan gunakan QRIS Instan (dapat di-scan via OVO, DANA, GoPay, ShopeePay) atau salah satu dari 10 Virtual Account.',
         });
         return;
       }
 
-      if (!SUPPORTED_VA_CODES.includes(paymentMethod)) {
+      if (!SUPPORTED_VA_CODES.includes(paymentMethod) && !SUPPORTED_QRIS_CODES.includes(paymentMethod)) {
         res.status(400).json({
-          error: `Metode pembayaran ${paymentMethod} tidak didukung. Pilihan Virtual Account: Mandiri, Permata, BRI, BNI, BSI, BNC, CIMB Niaga, Danamon, Maybank, Sampoerna.`,
+          error: `Metode pembayaran ${paymentMethod} tidak didukung. Pilihan yang tersedia: QRIS Instan atau Virtual Account (Mandiri, Permata, BRI, BNI, BSI, BNC, CIMB Niaga, Danamon, Maybank, Sampoerna).`,
         });
         return;
       }
@@ -3521,7 +3527,9 @@ async function startServer() {
         returnUrl,
       };
 
-      const duitkuRes = await fetch(`${DUITKU_BASE_URL}/v2/inquiry`, {
+      let effectivePaymentMethod = paymentMethod;
+
+      let duitkuRes = await fetch(`${DUITKU_BASE_URL}/v2/inquiry`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3530,10 +3538,36 @@ async function startServer() {
         body: JSON.stringify(inquiryPayload),
       });
 
-      const duitkuData: any = await duitkuRes.json();
+      let duitkuData: any = await duitkuRes.json();
+
+      // If QRIS was requested and the requested channel (e.g. SQ in Sandbox or SP in Production) is not active, try fallback QRIS channel
+      if ((paymentMethod === 'SQ' || paymentMethod === 'SP') && (!duitkuRes.ok || duitkuData.statusCode !== '00')) {
+        const fallbackMethod = paymentMethod === 'SQ' ? 'SP' : 'SQ';
+        try {
+          const retryRes = await fetch(`${DUITKU_BASE_URL}/v2/inquiry`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+            body: JSON.stringify({
+              ...inquiryPayload,
+              paymentMethod: fallbackMethod,
+            }),
+          });
+          const retryData: any = await retryRes.json();
+          if (retryRes.ok && retryData.statusCode === '00') {
+            duitkuRes = retryRes;
+            duitkuData = retryData;
+            effectivePaymentMethod = fallbackMethod;
+          }
+        } catch {
+          // ignore fallback error and keep initial result
+        }
+      }
 
       if (!duitkuRes.ok || duitkuData.statusCode !== '00') {
-        const errorMsg = duitkuData.statusMessage || 'Gagal membuat transaksi di Duitku.';
+        const errorMsg = duitkuData.statusMessage || duitkuData.Message || 'Gagal membuat transaksi di Duitku.';
         appendLog(
           userUid || 'duitku_checkout',
           customerEmail,
@@ -3561,7 +3595,7 @@ async function startServer() {
         customerEmail,
         customerPhone,
         userUid,
-        paymentMethod,
+        paymentMethod: effectivePaymentMethod,
         statusCode: duitkuData.statusCode,
         statusMessage: duitkuData.statusMessage,
         status: 'PENDING',
