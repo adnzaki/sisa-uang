@@ -50,13 +50,20 @@ const themeStore = useThemeStore();
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
 
-onMounted(() => {
-  themeStore.loadReportSignatureConfig(authStore.user?.uid);
+onMounted(async () => {
+  const uid = authStore.user?.uid;
+  if (uid && uid !== 'guest' && !financeStore.isSyncedWithFirestore) {
+    await financeStore.initFinanceData(uid);
+  }
+  themeStore.loadReportSignatureConfig(uid);
 });
 
 watch(
   () => authStore.user?.uid,
-  (uid) => {
+  async (uid) => {
+    if (uid && uid !== 'guest' && !financeStore.isSyncedWithFirestore) {
+      await financeStore.initFinanceData(uid);
+    }
     themeStore.loadReportSignatureConfig(uid);
   }
 );
@@ -385,22 +392,24 @@ const walletOptions = computed<SelectOptionItem[]>(() => {
   ];
 });
 
-// Dropdown 3: Kepemilikan ("Semua Kepemilikan" + unique fund owners)
+// Dropdown 3: Kepemilikan ("Semua Kepemilikan" + active fund owners only)
 const ownerOptions = computed<SelectOptionItem[]>(() => {
   const names = new Set<string>();
+
+  // 1. Ambil dari ringkasan kepemilikan aktif (hanya pemilik aktif pada dompet aktif)
   for (const item of financeStore.ownershipSummary) {
     if (item.displayHolderName) {
       names.add(item.displayHolderName);
     }
   }
-  for (const tx of financeStore.transactions) {
-    if (tx.fundOwnerName) {
-      names.add(formatHolderName(tx.fundOwnerName));
-    }
-    if (tx.toFundOwnerName) {
-      names.add(formatHolderName(tx.toFundOwnerName));
+
+  // 2. Cross-check dengan walletOwners aktif (memastikan tidak ada yang berstatus deleted: true)
+  for (const fo of financeStore.walletOwners) {
+    if (!fo.deleted && fo.holderName) {
+      names.add(formatHolderName(fo.holderName));
     }
   }
+
   const sortedNames = Array.from(names).sort((a, b) => a.localeCompare(b));
   return [
     { value: 'all', label: 'Semua Kepemilikan' },
@@ -410,6 +419,21 @@ const ownerOptions = computed<SelectOptionItem[]>(() => {
     })),
   ];
 });
+
+// Guard: jika pemilik dana yang sebelumnya dipilih telah dihapus, reset filter ke 'all'
+watch(
+  ownerOptions,
+  (options) => {
+    const validValues = new Set(options.map((o) => o.value));
+    if (selectedOwner.value !== 'all' && !validValues.has(selectedOwner.value)) {
+      selectedOwner.value = 'all';
+    }
+    if (pdfSelectedOwner.value !== 'all' && !validValues.has(pdfSelectedOwner.value)) {
+      pdfSelectedOwner.value = 'all';
+    }
+  },
+  { immediate: true }
+);
 
 const selectedWalletLabel = computed(() => {
   if (selectedWallet.value === 'all') return 'Semua Sumber Dana';
