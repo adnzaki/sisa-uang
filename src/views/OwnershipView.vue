@@ -25,12 +25,16 @@ const notificationStore = useNotificationStore();
 // 1. Modal: Add Fund Owner (Either from Top Button or from a specific Wallet Card)
 const showAddHolderModal = ref(false);
 const selectedWalletId = ref<string>('');
-const newHolderName = ref('');
+const isNewHolderCustom = ref(false);
+const selectedHolderOwner = ref('Pribadi');
+const customNewHolderName = ref('');
 const newHolderBalance = ref<number | ''>('');
 
 // 2. Modal: Edit Single Fund Owner (Tap on Holder Row)
 const editingHolder = ref<{ holder: WalletOwnerItem; walletName: string } | null>(null);
-const editHolderName = ref('');
+const isEditHolderCustom = ref(false);
+const editSelectedHolderOwner = ref('Pribadi');
+const editCustomHolderName = ref('');
 const editHolderBalance = ref<number | ''>(0);
 
 function formatNominalDisplay(val: number | string | ''): string {
@@ -125,35 +129,110 @@ const walletSelectOptions = computed<SelectOptionItem[]>(() =>
   }))
 );
 
+const existingOwnerOptions = computed<SelectOptionItem[]>(() => {
+  const currentWalletHolderNames = selectedWalletId.value
+    ? financeStore
+        .getHoldersByWalletId(selectedWalletId.value)
+        .map((h) => h.holderName.toLowerCase())
+    : [];
+
+  const map = new Map<string, SelectOptionItem>();
+  for (const o of financeStore.ownershipSummary) {
+    const raw = String(o.rawHolderName || '').trim();
+    if (!raw) continue;
+    if (!map.has(raw.toLowerCase())) {
+      const isAlreadyInWallet = currentWalletHolderNames.includes(raw.toLowerCase());
+      map.set(raw.toLowerCase(), {
+        value: raw,
+        label: formatHolderName(raw),
+        sublabel: isAlreadyInWallet ? 'Sudah ada di dompet ini' : `${o.walletCount} sumber dana`,
+      });
+    }
+  }
+  for (const fo of financeStore.walletOwners) {
+    if (fo.deleted) continue;
+    const raw = String(fo.holderName || '').trim();
+    if (!raw) continue;
+    if (!map.has(raw.toLowerCase())) {
+      const isAlreadyInWallet = currentWalletHolderNames.includes(raw.toLowerCase());
+      map.set(raw.toLowerCase(), {
+        value: raw,
+        label: formatHolderName(raw),
+        sublabel: isAlreadyInWallet ? 'Sudah ada di dompet ini' : 'Sumber Dana',
+      });
+    }
+  }
+  const result = Array.from(map.values());
+  if (result.length === 0) {
+    result.push({
+      value: 'Pribadi',
+      label: 'Pribadi',
+      sublabel: 'Default',
+    });
+  }
+  return result;
+});
+
+function enableCustomNewHolder() {
+  if (!authStore.isProUser && financeStore.ownershipSummary.length >= 2) {
+    notificationStore.openProModal({
+      featureTitle: 'Batas Maksimal 2 Kepemilikan Dana',
+      featureDescription:
+        'Pengguna paket Free hanya dapat memiliki maksimal 2 kepemilikan dana berbeda. Pilih dari daftar kepemilikan yang sudah ada atau berlangganan SisaUang Pro untuk membuat kepemilikan baru tanpa batas.',
+      limitSummary: `${financeStore.ownershipSummary.length} / 2 Kepemilikan Aktif`,
+    });
+    return;
+  }
+  isNewHolderCustom.value = true;
+  customNewHolderName.value = '';
+}
+
+function enableCustomEditHolder() {
+  if (!authStore.isProUser && financeStore.ownershipSummary.length >= 2) {
+    notificationStore.openProModal({
+      featureTitle: 'Batas Maksimal 2 Kepemilikan Dana',
+      featureDescription:
+        'Pengguna paket Free hanya dapat memiliki maksimal 2 kepemilikan dana berbeda. Pilih dari daftar kepemilikan yang sudah ada atau berlangganan SisaUang Pro untuk membuat kepemilikan baru tanpa batas.',
+      limitSummary: `${financeStore.ownershipSummary.length} / 2 Kepemilikan Aktif`,
+    });
+    return;
+  }
+  isEditHolderCustom.value = true;
+  editCustomHolderName.value = '';
+}
+
 function openAddHolderModal(wallet?: WalletItem) {
   const walletHoldersCount = wallet
     ? financeStore.getHoldersByWalletId(wallet.id).length
     : 0;
 
-  if (
-    !authStore.isProUser &&
-    (financeStore.ownershipSummary.length >= 2 || walletHoldersCount >= 2)
-  ) {
+  if (!authStore.isProUser && walletHoldersCount >= 2) {
     notificationStore.openProModal({
-      featureTitle: 'Batas Maksimal 2 Kepemilikan Dana',
+      featureTitle: 'Batas Maksimal 2 Pemilik per Dompet',
       featureDescription:
-        'Pengguna paket Free hanya dapat menambahkan maksimal 2 kepemilikan dana. Berlangganan SisaUang Pro untuk menambahkan lebih dari 2 kepemilikan dana tanpa batas.',
-      limitSummary: `${Math.max(financeStore.ownershipSummary.length, walletHoldersCount)} / 2 Kepemilikan Aktif`,
+        'Pengguna paket Free hanya dapat menambahkan maksimal 2 pemilik dana dalam 1 sumber dana. Berlangganan SisaUang Pro untuk menambahkan lebih dari 2 pemilik tanpa batas.',
+      limitSummary: `${walletHoldersCount} / 2 Pemilik di Dompet Ini`,
     });
     return;
   }
 
-  selectedWalletId.value = wallet?.id || '';
-  newHolderName.value = '';
+  selectedWalletId.value = wallet?.id || (financeStore.wallets[0]?.id || '');
+  isNewHolderCustom.value = false;
+  selectedHolderOwner.value = (existingOwnerOptions.value[0]?.value as string) || 'Pribadi';
+  customNewHolderName.value = '';
   newHolderBalance.value = '';
   showAddHolderModal.value = true;
 }
 
 async function handleAddHolder() {
-  if (!selectedWalletId.value || !newHolderName.value.trim()) return;
+  const targetHolder = isNewHolderCustom.value
+    ? customNewHolderName.value.trim()
+    : String(selectedHolderOwner.value || '').trim() || 'Pribadi';
+  if (!selectedWalletId.value || !targetHolder) return;
+
   const created = await financeStore.addWalletOwner({
     walletId: selectedWalletId.value,
-    holderName: newHolderName.value.trim(),
+    holderName: targetHolder,
     balance: Number(newHolderBalance.value || 0),
   });
   if (created) {
@@ -163,14 +242,21 @@ async function handleAddHolder() {
 
 function openEditHolderModal(holder: WalletOwnerItem, walletName: string) {
   editingHolder.value = { holder, walletName };
-  editHolderName.value = formatHolderName(holder.holderName);
+  isEditHolderCustom.value = false;
+  editSelectedHolderOwner.value = holder.holderName;
+  editCustomHolderName.value = '';
   editHolderBalance.value = Number(holder.balance || 0);
 }
 
 async function handleSaveEditHolder() {
-  if (!editingHolder.value || !editHolderName.value.trim()) return;
+  if (!editingHolder.value) return;
+  const targetHolder = isEditHolderCustom.value
+    ? editCustomHolderName.value.trim()
+    : String(editSelectedHolderOwner.value || '').trim() || 'Pribadi';
+  if (!targetHolder) return;
+
   await financeStore.updateWalletOwner(editingHolder.value.holder.id, {
-    holderName: editHolderName.value.trim(),
+    holderName: targetHolder,
     balance: Number(editHolderBalance.value || 0),
   });
   editingHolder.value = null;
@@ -405,14 +491,50 @@ async function handleDeleteGlobalOwner() {
           placeholder="Sumber Dana"
         />
 
-        <input
-          v-model="newHolderName"
-          type="text"
-          required
-          maxlength="60"
-          placeholder="Nama Pemilik Dana (Misal: Pribadi, Istri, Tabungan Anak)"
-          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
-        />
+        <div class="space-y-1.5">
+          <template v-if="!isNewHolderCustom">
+            <CustomSelect
+              v-model="selectedHolderOwner"
+              :options="existingOwnerOptions"
+              placeholder="Pilih Pemilik Dana"
+            />
+            <div class="flex items-center justify-between px-1 text-xs">
+              <span class="text-slate-400 dark:text-slate-500 text-[11px]">
+                Pilih dari kepemilikan yang sudah ada
+              </span>
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors"
+                @click="enableCustomNewHolder"
+              >
+                <Plus class="w-3.5 h-3.5 shrink-0" />
+                <span>Tambah Pemilik</span>
+              </button>
+            </div>
+          </template>
+          <template v-else>
+            <input
+              v-model="customNewHolderName"
+              type="text"
+              required
+              maxlength="60"
+              placeholder="Nama Pemilik Dana (Misal: Pribadi, Istri, Tabungan Anak)"
+              class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+            />
+            <div class="flex items-center justify-between px-1 text-xs">
+              <span class="text-slate-400 dark:text-slate-500 text-[11px]">
+                Ketik nama kepemilikan baru
+              </span>
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors"
+                @click="isNewHolderCustom = false"
+              >
+                <span>← Pilih dari Daftar Pemilik</span>
+              </button>
+            </div>
+          </template>
+        </div>
 
         <input
           :value="newHolderBalanceDisplay"
@@ -453,14 +575,53 @@ async function handleDeleteGlobalOwner() {
         class="space-y-3.5"
         @submit.prevent="handleSaveEditHolder"
       >
-        <input
-          v-model="editHolderName"
-          type="text"
-          required
-          maxlength="60"
-          placeholder="Nama Pemilik Dana"
-          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
-        />
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 px-1">
+            Pemilik Dana
+          </label>
+          <template v-if="!isEditHolderCustom">
+            <CustomSelect
+              v-model="editSelectedHolderOwner"
+              :options="existingOwnerOptions"
+              placeholder="Pilih Pemilik Dana"
+            />
+            <div class="flex items-center justify-between px-1 text-xs">
+              <span class="text-slate-400 dark:text-slate-500 text-[11px]">
+                Pilih dari kepemilikan yang sudah ada
+              </span>
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors"
+                @click="enableCustomEditHolder"
+              >
+                <Plus class="w-3.5 h-3.5 shrink-0" />
+                <span>Tambah Pemilik</span>
+              </button>
+            </div>
+          </template>
+          <template v-else>
+            <input
+              v-model="editCustomHolderName"
+              type="text"
+              required
+              maxlength="60"
+              placeholder="Nama Pemilik Dana"
+              class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-sm sm:text-base text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+            />
+            <div class="flex items-center justify-between px-1 text-xs">
+              <span class="text-slate-400 dark:text-slate-500 text-[11px]">
+                Ketik nama kepemilikan baru
+              </span>
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors"
+                @click="isEditHolderCustom = false"
+              >
+                <span>← Pilih dari Daftar Pemilik</span>
+              </button>
+            </div>
+          </template>
+        </div>
 
         <input
           :value="editHolderBalanceDisplay"
