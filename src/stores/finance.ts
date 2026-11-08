@@ -4164,6 +4164,12 @@ export const useFinanceStore = defineStore('finance', () => {
         if (resolvedCategoryId) {
           firestoreTxData.categoryId = resolvedCategoryId;
         }
+        if (payload.automationRuleId) {
+          firestoreTxData.automationRuleId = payload.automationRuleId;
+        }
+        if (payload.type === 'transfer' && numericAdminFee > 0) {
+          firestoreTxData.adminFee = numericAdminFee;
+        }
         if (payload.type === 'transfer' && destWallet) {
           firestoreTxData.toWalletId = destWallet.id;
           firestoreTxData.toWalletName = destWallet.name;
@@ -4247,6 +4253,7 @@ export const useFinanceStore = defineStore('finance', () => {
       categoryId: resolvedCategoryId,
       automationRuleId: payload.automationRuleId,
       amount: numericAmount,
+      adminFee: payload.type === 'transfer' ? numericAdminFee : 0,
       note: safeNote,
       date: safeDate,
       deleted: false,
@@ -4525,6 +4532,12 @@ export const useFinanceStore = defineStore('finance', () => {
       if (resolvedCategoryId) {
         updatePayload.categoryId = resolvedCategoryId;
       }
+      if (oldTx.automationRuleId) {
+        updatePayload.automationRuleId = oldTx.automationRuleId;
+      }
+      if (payload.type === 'transfer') {
+        updatePayload.adminFee = numericAdminFee;
+      }
       if (payload.type === 'transfer' && newDestWallet) {
         updatePayload.toWalletId = newDestWallet.id;
         updatePayload.toWalletName = newDestWallet.name;
@@ -4577,7 +4590,9 @@ export const useFinanceStore = defineStore('finance', () => {
         type: payload.type,
         category: safeCategory,
         categoryId: resolvedCategoryId,
+        automationRuleId: oldTx.automationRuleId,
         amount: numericAmount,
+        adminFee: payload.type === 'transfer' ? numericAdminFee : 0,
         note: safeNote,
         date: safeDate,
       };

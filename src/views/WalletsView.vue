@@ -443,6 +443,9 @@ async function handleDeleteEditingWallet() {
         />
 
         <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 px-1">
+            Pemilik Dana
+          </label>
           <template v-if="!isCustomHolder">
             <CustomSelect
               v-model="selectedHolder"
@@ -455,7 +458,7 @@ async function handleDeleteEditingWallet() {
               </span>
               <button
                 type="button"
-                class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors"
+                class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors cursor-pointer"
                 @click="enableCustomHolder"
               >
                 <Plus class="w-3.5 h-3.5 shrink-0" />

@@ -8,25 +8,29 @@ import {
   Clock,
   RotateCcw,
   Crown,
+  QrCode,
+  Wrench,
+  Database,
+  Users,
 } from 'lucide-vue-next';
 import { useNotificationStore } from '../stores/notification';
 import { useAuthStore } from '../stores/auth';
 import AppModal from './AppModal.vue';
 
-const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_1';
-const RELEASE_VERSION = '1.0.1';
+const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_2';
+const RELEASE_VERSION = '1.0.2';
 const RELEASE_DATE = 'November 2026';
-const BUILD_NUMBER = '10118';
+const BUILD_NUMBER = '10219';
 
 const notificationStore = useNotificationStore();
 const authStore = useAuthStore();
 
-type ChangelogCategory = 'all' | 'system' | 'database';
+type ChangelogCategory = 'all' | 'payment' | 'navigation' | 'database' | 'feature';
 const activeFilter = ref<ChangelogCategory>('all');
 
 export interface ChangelogItem {
   id: string;
-  category: 'system' | 'database';
+  category: 'payment' | 'navigation' | 'database' | 'feature';
   badge: string;
   badgeColor: 'emerald' | 'indigo' | 'amber' | 'rose' | 'sky';
   isProExclusive?: boolean;
@@ -38,78 +42,88 @@ export interface ChangelogItem {
 
 const changelogItems: ChangelogItem[] = [
   {
-    id: 'automation-timezone-alignment',
-    category: 'system',
-    badge: 'ZONA WAKTU OTOMATISASI',
-    badgeColor: 'indigo',
-    title: 'Perbaikan Zona Waktu untuk Jadwal Otomatis',
-    summary:
-      'Penyelarasan menyeluruh evaluasi jadwal otomatis menggunakan acuan presisi Waktu Indonesia Barat (WIB / UTC+7) guna mencegah selisih waktu antara server dan perangkat:',
-    details: [
-      'Standardisasi Jam Eksekusi Berbasis WIB: Seluruh penghitungan tanggal dan jam jatuh tempo otomatis diseragamkan ke zona waktu Asia/Jakarta (UTC+7).',
-      'Endpoint Diagnostik Sinkronisasi Jam (/api/time): Menyediakan acuan waktu server yang presisi untuk mendeteksi deviasi jam lokal dan mencegah eksekusi tertunda.',
-      'Pencegahan Pergeseran Jam Eksekusi: Menghilangkan potensi pergeseran jadwal yang sebelumnya dapat terhambat oleh perbedaan zona waktu antara server UTC dan perangkat lokal.',
-    ],
-    icon: Clock,
-  },
-  {
-    id: 'automation-execution-lifecycle-fix',
-    category: 'system',
-    badge: 'EKSEKUSI JADWAL OTOMATIS',
+    id: 'qris-nusapay-support',
+    category: 'payment',
+    badge: 'PEMBAYARAN QRIS (NUSAPAY)',
     badgeColor: 'emerald',
-    title: 'Perbaikan Bug Jadwal Otomatis Tidak Berjalan',
+    title: 'Dukungan Pembayaran Instan via QRIS (Nusapay)',
     summary:
-      'Peningkatan menyeluruh pada siklus hidup poller otomatis agar transaksi rutin yang telah melewati waktu jatuh tempo langsung dieksekusi secara andal:',
+      'Integrasi resmi metode pembayaran instan QRIS melalui kanal gateway Nusapay dengan verifikasi transaksi real-time dan aktivasi otomatis paket SisaUang Pro:',
     details: [
-      'Pemicu Otomatis Saat Aplikasi Dibuka: Evaluasi jadwal langsung berjalan seketika saat pengguna membuka aplikasi, berpindah halaman, atau melakukan interaksi aktif.',
-      'Poller Aktif Latar Depan yang Disiplin: Poller otomatis hanya aktif saat aplikasi berada di latar depan (foreground) dan langsung dimatikan ketika berpindah tab atau aplikasi ditutup demi menghemat daya.',
-      'Pembaruan Status Eksekusi Seketika: Jadwal yang telah jatuh tempo langsung dicatat dan status transaksi hari ini otomatis terbarui menjadi selesai tanpa perlu refresh manual.',
+      'Barcode QRIS Standar Nasional Dinamis: Mendukung pemindaian langsung dari seluruh aplikasi perbankan (BCA, Mandiri, BRI, BNI, Permata, dll.) serta dompet digital ternama (GoPay, OVO, DANA, ShopeePay, LinkAja).',
+      'Aktivasi Lisensi Pro Otomatis Tanpa Upload Bukti: Sistem pembayaran secara seketika memverifikasi notifikasi gateway dan langsung meningkatkan status akun ke SisaUang Pro tanpa perlu upload bukti transfer.',
+      'Fallback Multi-Kanal Cerdas: Arsitektur payment gateway dilengkapi sistem failover cerdas demi menjamin ketersediaan layanan QRIS yang stabil dan dapat diandalkan setiap saat.',
     ],
-    icon: RotateCcw,
+    icon: QrCode,
   },
   {
-    id: 'multi-device-automation-deduplication',
+    id: 'utilities-menu-reorder',
+    category: 'navigation',
+    badge: 'NAVIGASI & TATA LETAK',
+    badgeColor: 'indigo',
+    title: 'Pemindahan Menu Utilitas ke Posisi Atas Pengaturan',
+    summary:
+      'Penyempurnaan hierarki navigasi dan penataan urutan menu guna menghadirkan alur kerja yang lebih ergonomis dan teratur:',
+    details: [
+      'Penempatan Strategis Menu Utilitas: Menu Utilitas beserta submenu Otomatisasi kini diposisikan tepat di atas Pengaturan pada bilah navigasi utama.',
+      'Tata Letak Sinkron Desktop & Mobile: Tatanan menu diterapkan secara konsisten baik pada sidebar desktop layar lebar maupun panel drawer navigasi pada layar ponsel.',
+      'Akses Cepat Fitur Otomatisasi: Memudahkan pengguna membuka dan memantau jadwal transaksi rutin harian tanpa harus menggulir melewati menu pengaturan umum.',
+    ],
+    icon: Wrench,
+  },
+  {
+    id: 'automation-transaction-schema-sync',
     category: 'database',
-    badge: 'DEDUPLIKASI MULTI-PERANGKAT',
+    badge: 'SINKRONISASI SKEMA DATA',
     badgeColor: 'sky',
-    title: 'Perbaikan Bug Transaksi Otomatis Berjalan Lebih dari Satu Kali saat Login di Lebih dari Satu Perangkat',
+    title: 'Sinkronisasi Skema Otomatisasi dan Transaksi',
     summary:
-      'Penerapan mekanisme penguncian sewa klaim atomik terdistribusi (atomic lease claim) dan deduplikasi ID transaksi untuk menjamin integritas data:',
+      'Penyelarasan menyeluruh antara struktur skema data jadwal otomatisasi dengan catatan mutasi transaksi pada database Cloud Firestore:',
     details: [
-      'Klaim Eksekusi Atomik Terdistribusi: Setiap perangkat wajib memperoleh hak klaim eksklusif sebelum mengeksekusi jadwal, sehingga perangkat lain otomatis menolak pencatatan ulang.',
-      'ID Transaksi Deterministik: Pembuatan ID unik harian berbasis aturan dan tanggal mencegah terjadinya pencatatan ganda pada database Cloud Firestore.',
-      'Sinkronisasi Multi-Tab Lintas Jendela: Saluran komunikasi BroadcastChannel lokal saling mengabarkan keberhasilan transaksi secara instan antar-tab yang sedang terbuka.',
+      'Standardisasi Parameter Transaksi Otomatis: Menyelaraskan seluruh atribut transaksi terjadwal, meliputi ID aturan (automationRuleId), relasi kategori, rincian kepemilikan dana, serta biaya admin transfer.',
+      'Pencegahan Transaksi Ganda Multi-Perangkat: Penerapan ID transaksi deterministik harian yang sinkron memastikan transaksi otomatis hanya dicatat tepat satu kali meski aplikasi terbuka di banyak tab atau perangkat.',
+      'Integritas Saldo & Akuntansi Presisi: Seluruh mutasi saldo dompet dan rincian alokasi kepemilikan dana hasil eksekusi otomatis tersinkronisasi akurat sesuai aturan akuntansi ganda.',
     ],
-    icon: Layers,
+    icon: Database,
   },
   {
-    id: 'pro-free-account-switch-sync',
-    category: 'database',
-    badge: 'SINKRONISASI AKUN PRO & FREE',
+    id: 'wallet-existing-owner-selector',
+    category: 'feature',
+    badge: 'MANAJEMEN DOMPET',
     badgeColor: 'amber',
-    title: 'Perbaikan Bug Sinkronisasi saat Peralihan Akun Pro dan Free',
+    title: 'Dukungan Pemilihan Pemilik Dana yang Sudah Ada pada Form Dompet',
     summary:
-      'Penyempurnaan validasi hak akses lisensi langsung ke database Cloud Firestore dan pembersihan tuntas residu data saat berganti akun:',
+      'Peningkatan fleksibilitas form penambahan dan pengubahan dompet dengan fitur pemilihan pemilik dana yang telah terdaftar sebelumnya:',
     details: [
-      'Validasi Status Lisensi Langsung ke Firestore: Pengecekan status Pro atau Free selalu merujuk langsung ke dokumen pengguna di Firestore tanpa mengandalkan cache lokal yang usang.',
-      'Pembersihan Total Residu Sesi: Seluruh cache dompet, mutasi transaksi, aturan otomatisasi, dan status hak akses fitur dibersihkan tuntas setiap kali pengguna keluar atau berganti akun.',
-      'Penegakan Batasan Fitur yang Akurat: Akun Free dipastikan mendapatkan pembatasan fitur sesuai paket dan akun Pro langsung memperoleh akses fitur eksklusif seketika tanpa tertukar.',
+      'Pilihan Cepat Pemilik Dana Terdaftar: Form pembuatan dan pengubahan dompet kini menyediakan opsi pilihan langsung dari seluruh kepemilikan dana yang telah ada tanpa perlu mengetik ulang nama dari awal.',
+      'Fleksibilitas Tambah Pemilik Baru: Tetap menyediakan opsi beralih instan untuk mengetik nama pemilik baru secara leluasa bila ingin membuat alokasi terpisah.',
+      'Pencegahan Typo & Duplikasi Kepemilikan: Mencegah timbulnya variasi penamaan pemilik dana yang serupa sehingga laporan keuangan per kepemilikan tetap rapi dan konsisten.',
     ],
-    icon: Crown,
+    icon: Users,
   },
 ];
 
 const filterTabs = computed(() => [
   { id: 'all' as const, label: 'Semua Pembaruan', count: changelogItems.length },
   {
-    id: 'system' as const,
-    label: 'Jadwal & Waktu',
-    count: changelogItems.filter((i) => i.category === 'system').length,
+    id: 'payment' as const,
+    label: 'QRIS (Nusapay)',
+    count: changelogItems.filter((i) => i.category === 'payment').length,
+  },
+  {
+    id: 'navigation' as const,
+    label: 'Tata Letak Menu',
+    count: changelogItems.filter((i) => i.category === 'navigation').length,
   },
   {
     id: 'database' as const,
-    label: 'Database & Sinkronisasi',
+    label: 'Skema Database',
     count: changelogItems.filter((i) => i.category === 'database').length,
+  },
+  {
+    id: 'feature' as const,
+    label: 'Manajemen Dompet',
+    count: changelogItems.filter((i) => i.category === 'feature').length,
   },
 ]);
 
@@ -127,7 +141,7 @@ function markChangelogSeenAndClose() {
   notificationStore.closeChangelogModal();
 }
 
-// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.1 changelog yet
+// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.2 changelog yet
 watch(
   () => [authStore.isReady, authStore.isAuthenticated, authStore.requiresOtp] as const,
   ([ready, authenticated, needOtp]) => {
@@ -208,7 +222,7 @@ watch(
               Catatan Pembaruan Sisa Uang v{{ RELEASE_VERSION }}
             </h3>
             <p class="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Pembaruan versi <strong class="text-emerald-300 font-mono">v{{ RELEASE_VERSION }}</strong> (Build {{ BUILD_NUMBER }}) menghadirkan peningkatan keandalan pada jadwal transaksi otomatisasi, penyelarasan zona waktu WIB, perlindungan transaksi ganda lintas perangkat, serta penyempurnaan sinkronisasi saat beralih akun Pro dan Free.
+              Pembaruan versi <strong class="text-emerald-300 font-mono">v{{ RELEASE_VERSION }}</strong> (Build {{ BUILD_NUMBER }}) menghadirkan dukungan pembayaran instan via QRIS (Nusapay), penataan posisi menu Utilitas di atas Pengaturan, sinkronisasi skema otomatisasi dan transaksi, serta kemudahan memilih pemilik dana yang sudah ada pada form dompet.
             </p>
           </div>
         </div>
