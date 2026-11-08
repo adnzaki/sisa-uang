@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import {
   Sparkles,
   Rocket,
@@ -17,6 +17,8 @@ import { useNotificationStore } from '../stores/notification';
 import { useAuthStore } from '../stores/auth';
 import AppModal from './AppModal.vue';
 
+const LAST_SEEN_VERSION_KEY = 'sisa_uang_last_seen_app_version';
+const JUST_UPDATED_FLAG_KEY = 'sisa_uang_app_just_updated';
 const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_2';
 const RELEASE_VERSION = '1.0.2';
 const RELEASE_DATE = 'November 2026';
@@ -134,28 +136,97 @@ const filteredChangelog = computed(() => {
 
 function markChangelogSeenAndClose() {
   try {
+    localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
     localStorage.setItem(CHANGELOG_SEEN_KEY, 'true');
+    localStorage.removeItem(JUST_UPDATED_FLAG_KEY);
+    sessionStorage.removeItem(JUST_UPDATED_FLAG_KEY);
   } catch {
     // Ignore storage error
   }
   notificationStore.closeChangelogModal();
 }
 
-// Automatically show the release notes modal once for authenticated users who haven't seen v1.0.2 changelog yet
+// Watch modal closure to ensure seen keys are recorded even if dismissed via backdrop or Esc
 watch(
-  () => [authStore.isReady, authStore.isAuthenticated, authStore.requiresOtp] as const,
-  ([ready, authenticated, needOtp]) => {
-    if (!ready || !authenticated || needOtp) return;
-    try {
-      const alreadySeen = localStorage.getItem(CHANGELOG_SEEN_KEY) === 'true';
-      if (!alreadySeen) {
-        notificationStore.openChangelogModal();
+  () => notificationStore.changelogModalOpen,
+  (isOpen) => {
+    if (!isOpen) {
+      try {
+        localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
+        localStorage.setItem(CHANGELOG_SEEN_KEY, 'true');
+        localStorage.removeItem(JUST_UPDATED_FLAG_KEY);
+        sessionStorage.removeItem(JUST_UPDATED_FLAG_KEY);
+      } catch {
+        // Ignore storage error
       }
-    } catch {
-      // Ignore storage error
     }
-  },
-  { immediate: true }
+  }
+);
+
+// One-time evaluation: Only show automatically when the application was JUST updated
+let hasEvaluatedAutoOpen = false;
+
+function checkAutoOpenOnUpdate() {
+  if (hasEvaluatedAutoOpen || typeof window === 'undefined') return;
+
+  // Do not interrupt if user is in the middle of OTP verification
+  if (authStore.requiresOtp) return;
+
+  hasEvaluatedAutoOpen = true;
+
+  try {
+    const prevVersion = localStorage.getItem(LAST_SEEN_VERSION_KEY);
+    const sessionJustUpdated = sessionStorage.getItem(JUST_UPDATED_FLAG_KEY) === 'true';
+    const localJustUpdated = localStorage.getItem(JUST_UPDATED_FLAG_KEY) === 'true';
+    const legacyAlreadySeen = localStorage.getItem(CHANGELOG_SEEN_KEY) === 'true';
+
+    // Clear one-time reload flags
+    if (sessionJustUpdated) sessionStorage.removeItem(JUST_UPDATED_FLAG_KEY);
+    if (localJustUpdated) localStorage.removeItem(JUST_UPDATED_FLAG_KEY);
+
+    // If user has already seen or was already running this version, never pop up on reload or normal open
+    const alreadyOnThisVersion = prevVersion === RELEASE_VERSION;
+    if (alreadyOnThisVersion || legacyAlreadySeen) {
+      localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
+      localStorage.setItem(CHANGELOG_SEEN_KEY, 'true');
+      return;
+    }
+
+    // Condition 1: Upgraded from an older stored version (e.g. 1.0.1 -> 1.0.2)
+    const isUpgradedFromOlderVersion = Boolean(prevVersion && prevVersion !== RELEASE_VERSION);
+
+    // Condition 2: Explicit reload update triggered by PWA / update banner
+    const isExplicitUpdateReload = sessionJustUpdated || localJustUpdated;
+
+    if (isUpgradedFromOlderVersion || isExplicitUpdateReload) {
+      // Show automatically once because the app was just updated
+      localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
+      localStorage.setItem(CHANGELOG_SEEN_KEY, 'true');
+      notificationStore.openChangelogModal();
+    } else {
+      // First visit or fresh install: record silently so regular reloads don't pop up
+      localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
+      localStorage.setItem(CHANGELOG_SEEN_KEY, 'true');
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+onMounted(() => {
+  setTimeout(() => {
+    checkAutoOpenOnUpdate();
+  }, 100);
+});
+
+// If auth state resolves after mount and requiresOtp clears, check once
+watch(
+  () => [authStore.isReady, authStore.requiresOtp] as const,
+  ([ready, needOtp]) => {
+    if (ready && !needOtp && !hasEvaluatedAutoOpen) {
+      checkAutoOpenOnUpdate();
+    }
+  }
 );
 </script>
 

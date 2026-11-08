@@ -255,6 +255,8 @@ export async function performFullAppReload(forcePurgeCaches = false): Promise<vo
     const nextCount = prevCount + 1;
     sessionStorage.setItem(RELOAD_COUNT_KEY, String(nextCount));
     reloadAttemptCount.value = nextCount;
+    sessionStorage.setItem('sisa_uang_app_just_updated', 'true');
+    localStorage.setItem('sisa_uang_app_just_updated', 'true');
     sessionStorage.setItem(
       RELOAD_ATTEMPT_KEY,
       JSON.stringify({
