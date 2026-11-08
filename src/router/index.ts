@@ -258,26 +258,11 @@ router.beforeEach((to, _from, next) => {
     to.query.mode !== 'add-account' &&
     !(authStore.user?.email.toLowerCase() === 'vuedevo@gmail.com' && !authStore.otpVerified && authStore.requiresOtp)
   ) {
-    const target = (to.query.redirect as string) || (authStore.isSuperAdmin ? '/control-panel' : '/dashboard');
+    const target = (to.query.redirect as string) || '/dashboard';
     const query: Record<string, string> = {};
     if (to.query.action) query.action = String(to.query.action);
     if (to.query.plan) query.plan = String(to.query.plan);
     next({ path: target, query });
-    return;
-  }
-
-  // Super Admin only manages users, logs/alerts, and settings — block finance transaction routes for Super Admin
-  const financePaths = [
-    '/dashboard',
-    '/transactions',
-    '/wallets',
-    '/ownership',
-    '/categories',
-    '/budgets',
-    '/analytics',
-  ];
-  if (authStore.isAuthenticated && authStore.isSuperAdmin && financePaths.includes(to.path)) {
-    next({ path: '/control-panel' });
     return;
   }
 
@@ -286,7 +271,7 @@ router.beforeEach((to, _from, next) => {
 
 router.afterEach((to) => {
   const authStore = useAuthStore();
-  if (authStore.isAuthenticated && !authStore.isSuperAdmin && authStore.user?.uid) {
+  if (authStore.isAuthenticated && authStore.user?.uid) {
     const financeStore = useFinanceStore();
     void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid, false);
 

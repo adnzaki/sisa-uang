@@ -162,14 +162,15 @@ try {
         const hasVerifiedOtp = localStorage.getItem('sisa_uang_otp_verified') === 'true';
 
         // Strict: If any cached session claims to be Super Admin but lacks strict 2FA OTP verification and token,
-        // revoke and purge immediately so no unauthorized browser enters super admin!
+        // demote to normal 'user' role so they can still view their personal finances without control panel access.
         if (isSuperAdminEmail && (!hasValidToken || !hasVerifiedOtp)) {
-          localStorage.removeItem('sisa_uang_active_user');
+          parsed.role = 'user';
+          localStorage.setItem('sisa_uang_active_user', JSON.stringify(parsed));
           localStorage.removeItem('sisa_uang_admin_token');
           localStorage.removeItem('sisa_uang_otp_verified');
           localStorage.removeItem('sisa_uang_actor_email');
           localStorage.removeItem('sisa_uang_admin_synced_session');
-          activeUid = '';
+          activeUid = parsed.uid || '';
         }
       } catch {
         // ignore
@@ -1330,22 +1331,8 @@ export const useAuthStore = defineStore('auth', () => {
         const fbEmail = (fbUser.email || '').toLowerCase();
         const isFbSuperAdmin = fbEmail === SUPER_ADMIN_EMAIL || fbEmail === WORKSPACE_ADMIN_EMAIL;
 
-        // Security Barrier: Never automatically restore Super Admin session from ambient Firebase Auth state!
-        if (isFbSuperAdmin) {
-          const storedToken = localStorage.getItem('sisa_uang_admin_token');
-          const storedOtp = localStorage.getItem(OTP_VERIFIED_KEY) === 'true';
-
-          if (!storedToken || !storedOtp) {
-            try {
-              await firebaseSignOut(auth);
-            } catch {
-              // Ignore
-            }
-            user.value = null;
-            isReady.value = true;
-            return;
-          }
-        }
+        // Ambient Firebase Auth session for Super Admin email: If token or OTP is missing,
+        // it will be demoted to role 'user' below so no unauthorized access to control panel is possible.
 
         try {
           const profile = await ensureFirestoreUserDocument(fbUser);

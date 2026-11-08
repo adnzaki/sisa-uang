@@ -2466,7 +2466,6 @@ export const useFinanceStore = defineStore('finance', () => {
     const authStore = useAuthStore();
     const uid = sanitizeId(uidInput || authStore.user?.uid || activeOwnerUid.value || '');
     if (!uid || uid === 'guest') return;
-    if (authStore.isSuperAdmin) return;
 
     const cleanPath = (routePath || '').split('?')[0].toLowerCase();
     const now = Date.now();

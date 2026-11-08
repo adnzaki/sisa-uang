@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { Wallet, Plus, Trash2, Check, Users, ChevronRight, Crown } from 'lucide-vue-next';
@@ -19,6 +19,13 @@ const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
+
+onMounted(async () => {
+  const uid = authStore.user?.uid;
+  if (uid && uid !== 'guest' && !financeStore.isSyncedWithFirestore) {
+    await financeStore.initFinanceData(uid);
+  }
+});
 
 // 1. Modal: Add New Wallet
 const showAddForm = ref(false);

@@ -45,7 +45,11 @@ async function syncDashboardPeriodTransactions(targetPeriod?: string) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  const uid = authStore.user?.uid;
+  if (uid && uid !== 'guest' && !financeStore.isSyncedWithFirestore) {
+    await financeStore.initFinanceData(uid);
+  }
   void syncDashboardPeriodTransactions();
 });
 
@@ -59,8 +63,11 @@ watch(
 
 watch(
   () => authStore.user?.uid,
-  (newUid) => {
-    if (newUid) {
+  async (newUid) => {
+    if (newUid && newUid !== 'guest') {
+      if (!financeStore.isSyncedWithFirestore) {
+        await financeStore.initFinanceData(newUid);
+      }
       void syncDashboardPeriodTransactions();
     }
   }

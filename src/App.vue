@@ -569,18 +569,15 @@ watch(
   (uid, oldUid) => {
     if (uid && authStore.isAuthenticated) {
       themeStore.loadReportSignatureConfig(uid);
-      if (isCurrentSuperAdmin()) {
-        financeStore.cleanupListeners();
-        if (authStore.canAccessControlPanel) {
-          adminStore.startRealtimeMonitoring();
-        }
+      if (authStore.isSuperAdmin && authStore.canAccessControlPanel) {
+        adminStore.startRealtimeMonitoring();
       } else {
         adminStore.stopRealtimeMonitoring();
-        if (oldUid && oldUid !== uid) {
-          void financeStore.refreshData(true);
-        } else {
-          financeStore.initFinanceData(uid);
-        }
+      }
+      if (oldUid && oldUid !== uid) {
+        void financeStore.refreshData(true);
+      } else {
+        financeStore.initFinanceData(uid);
       }
       void automationStore.loadAutomations(uid).then(() => {
         if (typeof document !== 'undefined' && document.visibilityState === 'visible') {

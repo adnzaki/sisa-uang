@@ -18,11 +18,14 @@ import { useAuthStore } from '../stores/auth';
 import AppModal from './AppModal.vue';
 
 const LAST_SEEN_VERSION_KEY = 'sisa_uang_last_seen_app_version';
+const LAST_SEEN_BUILD_KEY = 'sisa_uang_last_seen_build_number';
 const JUST_UPDATED_FLAG_KEY = 'sisa_uang_app_just_updated';
-const CHANGELOG_SEEN_KEY = 'sisa_uang_changelog_seen_v1_0_2';
 const RELEASE_VERSION = '1.0.2';
 const RELEASE_DATE = 'November 2026';
 const BUILD_NUMBER = '10219';
+const CHANGELOG_SEEN_KEY = computed(
+  () => `sisa_uang_changelog_seen_v${RELEASE_VERSION.replace(/\./g, '_')}_b${BUILD_NUMBER}`
+);
 
 const notificationStore = useNotificationStore();
 const authStore = useAuthStore();
@@ -137,7 +140,8 @@ const filteredChangelog = computed(() => {
 function markChangelogSeenAndClose() {
   try {
     localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
-    localStorage.setItem(CHANGELOG_SEEN_KEY, 'true');
+    localStorage.setItem(LAST_SEEN_BUILD_KEY, BUILD_NUMBER);
+    localStorage.setItem(CHANGELOG_SEEN_KEY.value, 'true');
     localStorage.removeItem(JUST_UPDATED_FLAG_KEY);
     sessionStorage.removeItem(JUST_UPDATED_FLAG_KEY);
   } catch {
@@ -153,7 +157,8 @@ watch(
     if (!isOpen) {
       try {
         localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
-        localStorage.setItem(CHANGELOG_SEEN_KEY, 'true');
+        localStorage.setItem(LAST_SEEN_BUILD_KEY, BUILD_NUMBER);
+        localStorage.setItem(CHANGELOG_SEEN_KEY.value, 'true');
         localStorage.removeItem(JUST_UPDATED_FLAG_KEY);
         sessionStorage.removeItem(JUST_UPDATED_FLAG_KEY);
       } catch {
@@ -163,7 +168,7 @@ watch(
   }
 );
 
-// One-time evaluation: Only show automatically when the application was JUST updated
+// One-time evaluation: Only show automatically when the application was JUST updated (new version or new build number)
 let hasEvaluatedAutoOpen = false;
 
 function checkAutoOpenOnUpdate() {
@@ -176,37 +181,45 @@ function checkAutoOpenOnUpdate() {
 
   try {
     const prevVersion = localStorage.getItem(LAST_SEEN_VERSION_KEY);
+    const prevBuild = localStorage.getItem(LAST_SEEN_BUILD_KEY);
     const sessionJustUpdated = sessionStorage.getItem(JUST_UPDATED_FLAG_KEY) === 'true';
     const localJustUpdated = localStorage.getItem(JUST_UPDATED_FLAG_KEY) === 'true';
-    const legacyAlreadySeen = localStorage.getItem(CHANGELOG_SEEN_KEY) === 'true';
+    const currentSeenKey = CHANGELOG_SEEN_KEY.value;
+    const releaseAlreadySeen = localStorage.getItem(currentSeenKey) === 'true';
 
     // Clear one-time reload flags
     if (sessionJustUpdated) sessionStorage.removeItem(JUST_UPDATED_FLAG_KEY);
     if (localJustUpdated) localStorage.removeItem(JUST_UPDATED_FLAG_KEY);
 
-    // If user has already seen or was already running this version, never pop up on reload or normal open
-    const alreadyOnThisVersion = prevVersion === RELEASE_VERSION;
-    if (alreadyOnThisVersion || legacyAlreadySeen) {
+    // Condition 1: Upgraded from an older stored version (e.g. 1.0.1 -> 1.0.2)
+    const isVersionChanged = Boolean(prevVersion && prevVersion !== RELEASE_VERSION);
+
+    // Condition 2: Build number changed (e.g. 10218 -> 10219)
+    const isBuildChanged = Boolean(prevBuild && prevBuild !== BUILD_NUMBER);
+
+    // Condition 3: Explicit reload update triggered by PWA / update banner
+    const isExplicitUpdateReload = sessionJustUpdated || localJustUpdated;
+
+    // If both version and build number already match and this release was seen, do not pop up again
+    const isSameVersionAndBuild = prevVersion === RELEASE_VERSION && prevBuild === BUILD_NUMBER;
+    if (isSameVersionAndBuild || releaseAlreadySeen) {
       localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
-      localStorage.setItem(CHANGELOG_SEEN_KEY, 'true');
+      localStorage.setItem(LAST_SEEN_BUILD_KEY, BUILD_NUMBER);
+      localStorage.setItem(currentSeenKey, 'true');
       return;
     }
 
-    // Condition 1: Upgraded from an older stored version (e.g. 1.0.1 -> 1.0.2)
-    const isUpgradedFromOlderVersion = Boolean(prevVersion && prevVersion !== RELEASE_VERSION);
-
-    // Condition 2: Explicit reload update triggered by PWA / update banner
-    const isExplicitUpdateReload = sessionJustUpdated || localJustUpdated;
-
-    if (isUpgradedFromOlderVersion || isExplicitUpdateReload) {
-      // Show automatically once because the app was just updated
+    if (isVersionChanged || isBuildChanged || isExplicitUpdateReload) {
+      // Show automatically once because version or build number changed
       localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
-      localStorage.setItem(CHANGELOG_SEEN_KEY, 'true');
+      localStorage.setItem(LAST_SEEN_BUILD_KEY, BUILD_NUMBER);
+      localStorage.setItem(currentSeenKey, 'true');
       notificationStore.openChangelogModal();
     } else {
       // First visit or fresh install: record silently so regular reloads don't pop up
       localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
-      localStorage.setItem(CHANGELOG_SEEN_KEY, 'true');
+      localStorage.setItem(LAST_SEEN_BUILD_KEY, BUILD_NUMBER);
+      localStorage.setItem(currentSeenKey, 'true');
     }
   } catch {
     // Ignore storage errors
