@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { Wallet, Plus, Trash2, Check, Users, ChevronRight, Crown } from 'lucide-vue-next';
+import { Wallet, Plus, Trash2, Check, Users, ChevronRight, Crown, RefreshCw } from 'lucide-vue-next';
 import {
   useFinanceStore,
   WalletItem,
@@ -20,10 +20,32 @@ const themeStore = useThemeStore();
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
 
+const isSyncing = ref(false);
+async function handleSyncWallets() {
+  const uid = authStore.user?.uid;
+  if (!uid || uid === 'guest') return;
+  isSyncing.value = true;
+  try {
+    await financeStore.loadRouteDataFromFirestore('/wallets', uid, true);
+    notificationStore.notifySuccess(
+      'Saldo Berhasil Disinkronkan',
+      'Data dompet dan saldo telah diperbarui langsung dari server.'
+    );
+  } catch (err: any) {
+    notificationStore.notifyError('Gagal Sinkronisasi Saldo', err?.message || err);
+  } finally {
+    isSyncing.value = false;
+  }
+}
+
 onMounted(async () => {
   const uid = authStore.user?.uid;
-  if (uid && uid !== 'guest' && !financeStore.isSyncedWithFirestore) {
-    await financeStore.initFinanceData(uid);
+  if (uid && uid !== 'guest') {
+    if (!financeStore.isSyncedWithFirestore) {
+      await financeStore.initFinanceData(uid);
+    } else {
+      await financeStore.loadRouteDataFromFirestore('/wallets', uid, true);
+    }
   }
 });
 
@@ -289,21 +311,34 @@ async function handleDeleteEditingWallet() {
         </p>
       </div>
 
-      <button
-        type="button"
-        class="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs cursor-pointer"
-        @click="openAddWalletModal"
-      >
-        <Plus class="w-4 h-4 shrink-0" />
-        <span>{{ t('dashboard.addWallet') }}</span>
-        <span
-          v-if="!authStore.isProUser && financeStore.wallets.length >= 5"
-          class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-extrabold uppercase tracking-wider"
+      <div class="flex items-center gap-2 w-full sm:w-auto">
+        <button
+          type="button"
+          :disabled="isSyncing"
+          class="min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs cursor-pointer disabled:opacity-50"
+          title="Sinkronkan saldo dengan server Firestore"
+          @click="handleSyncWallets"
         >
-          <Crown class="w-3 h-3 shrink-0" />
-          <span>PRO</span>
-        </span>
-      </button>
+          <RefreshCw class="w-4 h-4 shrink-0" :class="{ 'animate-spin': isSyncing }" />
+          <span class="hidden sm:inline">Sinkronkan</span>
+        </button>
+
+        <button
+          type="button"
+          class="flex-1 sm:flex-none min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs cursor-pointer"
+          @click="openAddWalletModal"
+        >
+          <Plus class="w-4 h-4 shrink-0" />
+          <span>{{ t('dashboard.addWallet') }}</span>
+          <span
+            v-if="!authStore.isProUser && financeStore.wallets.length >= 5"
+            class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-extrabold uppercase tracking-wider"
+          >
+            <Crown class="w-3 h-3 shrink-0" />
+            <span>PRO</span>
+          </span>
+        </button>
+      </div>
     </div>
 
     <!-- Total Balance Summary + Quick Link to Kepemilikan Dana -->

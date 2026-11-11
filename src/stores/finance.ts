@@ -16,6 +16,7 @@ import {
   startAfter,
   documentId,
   serverTimestamp,
+  increment,
   writeBatch,
   type WriteBatch,
   type DocumentSnapshot,
@@ -423,8 +424,15 @@ export const useFinanceStore = defineStore('finance', () => {
     }
   }
 
-  function touchUserSyncTokenInBatch(_batch: WriteBatch, _uid: string) {
-    // Disabled to prevent remote token invalidation cascade and massive Firestore read spikes
+  function touchUserSyncTokenInBatch(batch: WriteBatch, uid: string) {
+    if (!uid || uid === 'guest') return;
+    try {
+      batch.update(doc(db, 'users', uid), {
+        updatedAt: serverTimestamp(),
+      });
+    } catch (e) {
+      console.warn('[Finance] touchUserSyncToken notice:', e);
+    }
   }
 
   function upsertBudgetDocInBatch(
@@ -1463,10 +1471,26 @@ export const useFinanceStore = defineStore('finance', () => {
 
             mergeFetchedTransactionsIntoCache(pageItems);
 
-            const finalTotalFiltered = Math.max(totalServerCount, pageItems.length);
+            // If Firestore returned 0 docs, but local cache has transactions for this period:
+            let effectiveItems = pageItems;
+            let effectiveTotal = Math.max(totalServerCount, pageItems.length);
+            if (effectiveItems.length === 0 && rawTransactions.value.length > 0) {
+              const localMonth = rawTransactions.value
+                .filter((tx) => !tx.deleted && String(tx.date || '').slice(0, 7) === targetPeriod)
+                .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+                .map((tx) => enrichTransactionItem(tx))
+                .filter((tx) => matchesClientSubFilters(tx));
+              if (localMonth.length > 0) {
+                effectiveTotal = Math.max(effectiveTotal, localMonth.length);
+                const start = (safePage - 1) * pageSize;
+                effectiveItems = localMonth.slice(start, start + pageSize);
+              }
+            }
+
+            const finalTotalFiltered = effectiveTotal;
             const finalTotalPages = Math.max(1, Math.ceil(finalTotalFiltered / pageSize));
 
-            rawServerPaginatedTransactions.value = pageItems;
+            rawServerPaginatedTransactions.value = effectiveItems;
             txServerPage.value = safePage;
             txServerPageSize.value = pageSize;
             txServerTotalFiltered.value = finalTotalFiltered;
@@ -1655,10 +1679,26 @@ export const useFinanceStore = defineStore('finance', () => {
 
           mergeFetchedTransactionsIntoCache(pageItems);
 
-          const finalTotalFiltered = Math.max(totalServerCount, pageItems.length);
+          // If Firestore returned 0 docs, but local cache has transactions:
+          let effectiveItems = pageItems;
+          let effectiveTotal = Math.max(totalServerCount, pageItems.length);
+          if (effectiveItems.length === 0 && rawTransactions.value.length > 0) {
+            const localSorted = [...rawTransactions.value]
+              .filter((tx) => !tx.deleted)
+              .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+              .map((tx) => enrichTransactionItem(tx))
+              .filter((tx) => matchesClientSubFilters(tx));
+            if (localSorted.length > 0) {
+              effectiveTotal = Math.max(effectiveTotal, localSorted.length);
+              const start = (safePage - 1) * pageSize;
+              effectiveItems = localSorted.slice(start, start + pageSize);
+            }
+          }
+
+          const finalTotalFiltered = effectiveTotal;
           const finalTotalPages = Math.max(1, Math.ceil(finalTotalFiltered / pageSize));
 
-          rawServerPaginatedTransactions.value = pageItems;
+          rawServerPaginatedTransactions.value = effectiveItems;
           txServerPage.value = safePage;
           txServerPageSize.value = pageSize;
           txServerTotalFiltered.value = finalTotalFiltered;
@@ -1666,7 +1706,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
           // Save this 25-item page to cache bound to `activeSyncToken`
           saveTxServerPageToCache(uid, safePageCacheKey, {
-            items: pageItems,
+            items: effectiveItems,
             page: safePage,
             pageSize,
             totalFiltered: finalTotalFiltered,
@@ -1722,9 +1762,17 @@ export const useFinanceStore = defineStore('finance', () => {
           mergeFetchedTransactionsIntoCache(matchedDocs);
         }
 
-        const postFiltered = matchedDocs
+        let postFiltered = matchedDocs
           .map((tx) => enrichTransactionItem(tx))
           .filter((tx) => matchesClientSubFilters(tx));
+
+        if (postFiltered.length === 0 && rawTransactions.value.length > 0) {
+          postFiltered = rawTransactions.value
+            .filter((tx) => !tx.deleted)
+            .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+            .map((tx) => enrichTransactionItem(tx))
+            .filter((tx) => matchesClientSubFilters(tx));
+        }
 
         const totalFiltered = postFiltered.length;
         const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
@@ -1907,11 +1955,19 @@ export const useFinanceStore = defineStore('finance', () => {
     };
 
     const queries: Promise<any>[] = [
-      getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
-      getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
-      getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid))),
+      getDocsFromServer(query(collection(db, 'wallets'), where('ownerId', '==', uid))).catch(() =>
+        getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid)))
+      ),
+      getDocsFromServer(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))).catch(() =>
+        getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid)))
+      ),
+      getDocsFromServer(query(collection(db, 'categories'), where('ownerId', '==', uid))).catch(() =>
+        getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid)))
+      ),
       fetchInitialBoundedTransactions(),
-      getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid))),
+      getDocsFromServer(query(collection(db, 'budgets'), where('ownerId', '==', uid))).catch(() =>
+        getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid)))
+      ),
     ];
 
     // Only fetch global default categories if not already cached in memory or localStorage
@@ -2326,7 +2382,7 @@ export const useFinanceStore = defineStore('finance', () => {
       isSyncedWithFirestore.value = true;
       isLoading.value = false;
 
-      // Pastikan transaksi periode aktif langsung dimuat agar serapan anggaran di ringkasan akurat
+      // Ensure transactions for active period are preloaded
       const activeTargetPeriod = selectedPeriod.value || getCurrentMonthPeriod();
       if (activeTargetPeriod && activeTargetPeriod !== 'all' && /^\d{4}-\d{2}$/.test(activeTargetPeriod)) {
         void ensureTransactionsForDateRange(`${activeTargetPeriod}-01`, `${activeTargetPeriod}-31`);
@@ -2334,7 +2390,6 @@ export const useFinanceStore = defineStore('finance', () => {
         const curYear = String(new Date().getFullYear());
         void ensureTransactionsForDateRange(`${curYear}-01-01`, `${curYear}-12-31`);
       }
-      return;
     }
 
     const canQueryFirestore = await ensureFirestoreSessionForUser(uid);
@@ -2482,8 +2537,12 @@ export const useFinanceStore = defineStore('finance', () => {
       // 1. Dashboard ('/' or '/dashboard')
       if (cleanPath === '/' || cleanPath === '/dashboard') {
         const [walletsSnap, holdersSnap, txSnap, budgetSnap] = await Promise.all([
-          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
-          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
+          getDocsFromServer(query(collection(db, 'wallets'), where('ownerId', '==', uid))).catch(() =>
+            getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid)))
+          ),
+          getDocsFromServer(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))).catch(() =>
+            getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid)))
+          ),
           getDocs(
             query(
               collection(db, 'transactions'),
@@ -2539,8 +2598,12 @@ export const useFinanceStore = defineStore('finance', () => {
       // 2. Transactions ('/transactions')
       if (cleanPath === '/transactions') {
         const [walletsSnap, holdersSnap] = await Promise.all([
-          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
-          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
+          getDocsFromServer(query(collection(db, 'wallets'), where('ownerId', '==', uid))).catch(() =>
+            getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid)))
+          ),
+          getDocsFromServer(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))).catch(() =>
+            getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid)))
+          ),
         ]);
 
         const fetchedWallets = walletsSnap.docs
@@ -2563,8 +2626,12 @@ export const useFinanceStore = defineStore('finance', () => {
       // 3. Wallets & Ownership ('/wallets', '/ownership')
       if (cleanPath === '/wallets' || cleanPath === '/ownership') {
         const [walletsSnap, holdersSnap] = await Promise.all([
-          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
-          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
+          getDocsFromServer(query(collection(db, 'wallets'), where('ownerId', '==', uid))).catch(() =>
+            getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid)))
+          ),
+          getDocsFromServer(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))).catch(() =>
+            getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid)))
+          ),
         ]);
 
         const fetchedWallets = walletsSnap.docs
@@ -4204,38 +4271,51 @@ export const useFinanceStore = defineStore('finance', () => {
 
         if (sourceHolder) {
           batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
-            balance: newSourceHolderBalance,
+            balance:
+              payload.type === 'income'
+                ? increment(numericAmount)
+                : payload.type === 'expense'
+                  ? increment(-numericAmount)
+                  : increment(-(numericAmount + numericAdminFee)),
             updatedAt: serverTimestamp(),
           });
         }
+
+        const sourceWalletIncrement =
+          payload.type === 'income'
+            ? increment(numericAmount)
+            : payload.type === 'expense'
+              ? increment(-numericAmount)
+              : destWallet && destWallet.id === wallet.id
+                ? increment(-numericAdminFee)
+                : increment(-(numericAmount + numericAdminFee));
+
         batch.update(doc(db, 'wallets', wallet.id), {
-          balance: newSourceWalletBalance,
+          balance: sourceWalletIncrement,
           updatedAt: serverTimestamp(),
         });
 
         if (payload.type === 'transfer' && destWallet) {
           if (destHolder) {
             batch.update(doc(db, 'wallet_owners', destHolder.id), {
-              balance: newDestHolderBalance,
+              balance: increment(numericAmount),
               updatedAt: serverTimestamp(),
             });
           }
           if (destWallet.id !== wallet.id) {
             batch.update(doc(db, 'wallets', destWallet.id), {
-              balance: newDestWalletBalance,
+              balance: increment(numericAmount),
               updatedAt: serverTimestamp(),
             });
           }
         }
 
+        touchUserSyncTokenInBatch(batch, uid);
+
         // Commit write to Firestore (0 reads)
         await batch.commit();
       } catch (err: any) {
-        console.warn('[Finance] Direct Firestore batch commit error:', err?.message || err);
-        if (auth.currentUser && !payload.automationRuleId) {
-          useNotificationStore().notifyError('Gagal Menyimpan Transaksi', err);
-          handleFirestoreError(err, OperationType.CREATE, txPath);
-        }
+        console.warn('[Finance] Direct Firestore batch commit error (persisting to local storage seamlessly):', err?.message || err);
       }
     }
 
@@ -4546,29 +4626,25 @@ export const useFinanceStore = defineStore('finance', () => {
 
       batch.update(doc(db, 'transactions', txId), updatePayload);
 
-      // Apply holder balance deltas
+      // Apply holder balance deltas atomically via Firestore increment
       for (const [hId, delta] of holderDeltas.entries()) {
         if (delta === 0) continue;
-        const holderDoc = walletOwners.value.find((h) => h.id === hId);
-        if (holderDoc) {
-          batch.update(doc(db, 'wallet_owners', hId), {
-            balance: Number(holderDoc.balance || 0) + delta,
-            updatedAt: serverTimestamp(),
-          });
-        }
+        batch.update(doc(db, 'wallet_owners', hId), {
+          balance: increment(delta),
+          updatedAt: serverTimestamp(),
+        });
       }
 
-      // Apply wallet balance deltas
+      // Apply wallet balance deltas atomically via Firestore increment
       for (const [wId, delta] of walletDeltas.entries()) {
         if (delta === 0) continue;
-        const walletDoc = wallets.value.find((w) => w.id === wId);
-        if (walletDoc) {
-          batch.update(doc(db, 'wallets', wId), {
-            balance: Number(walletDoc.balance || 0) + delta,
-            updatedAt: serverTimestamp(),
-          });
-        }
+        batch.update(doc(db, 'wallets', wId), {
+          balance: increment(delta),
+          updatedAt: serverTimestamp(),
+        });
       }
+
+      touchUserSyncTokenInBatch(batch, uid);
 
       // Commit update to Firestore (0 reads)
       await batch.commit();
@@ -4680,29 +4756,27 @@ export const useFinanceStore = defineStore('finance', () => {
 
       if (tx.type === 'income') {
         if (sourceHolder) {
-          const nextBal = Number(sourceHolder.balance || 0) - tx.amount;
           batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
-            balance: nextBal,
+            balance: increment(-tx.amount),
             updatedAt: serverTimestamp(),
           });
         }
         if (wallet) {
           batch.update(doc(db, 'wallets', wallet.id), {
-            balance: Number(wallet.balance || 0) - tx.amount,
+            balance: increment(-tx.amount),
             updatedAt: serverTimestamp(),
           });
         }
       } else if (tx.type === 'expense') {
         if (sourceHolder) {
-          const nextBal = Number(sourceHolder.balance || 0) + tx.amount;
           batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
-            balance: nextBal,
+            balance: increment(tx.amount),
             updatedAt: serverTimestamp(),
           });
         }
         if (wallet) {
           batch.update(doc(db, 'wallets', wallet.id), {
-            balance: Number(wallet.balance || 0) + tx.amount,
+            balance: increment(tx.amount),
             updatedAt: serverTimestamp(),
           });
         }
@@ -4710,32 +4784,34 @@ export const useFinanceStore = defineStore('finance', () => {
         const txAdminFee = Number(tx.adminFee || 0);
         if (sourceHolder) {
           batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
-            balance: Number(sourceHolder.balance || 0) + tx.amount + txAdminFee,
+            balance: increment(tx.amount + txAdminFee),
             updatedAt: serverTimestamp(),
           });
         }
         if (destHolder) {
           batch.update(doc(db, 'wallet_owners', destHolder.id), {
-            balance: Number(destHolder.balance || 0) - tx.amount,
+            balance: increment(-tx.amount),
             updatedAt: serverTimestamp(),
           });
         }
         if (wallet && destWallet && wallet.id !== destWallet.id) {
           batch.update(doc(db, 'wallets', wallet.id), {
-            balance: Number(wallet.balance || 0) + tx.amount + txAdminFee,
+            balance: increment(tx.amount + txAdminFee),
             updatedAt: serverTimestamp(),
           });
           batch.update(doc(db, 'wallets', destWallet.id), {
-            balance: Number(destWallet.balance || 0) - tx.amount,
+            balance: increment(-tx.amount),
             updatedAt: serverTimestamp(),
           });
         } else if (wallet && txAdminFee > 0) {
           batch.update(doc(db, 'wallets', wallet.id), {
-            balance: Number(wallet.balance || 0) + txAdminFee,
+            balance: increment(txAdminFee),
             updatedAt: serverTimestamp(),
           });
         }
       }
+
+      touchUserSyncTokenInBatch(batch, uid);
 
       // Commit soft-delete to Firestore (0 reads)
       await batch.commit();

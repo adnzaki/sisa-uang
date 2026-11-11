@@ -219,9 +219,21 @@ function handleTxPageChange(newPage: number) {
 // Server-side items returned for the current page (25 items when 'all', or full month when 'YYYY-MM')
 const displayedTransactions = computed<any[]>(() => {
   const items = financeStore.serverPaginatedTransactions;
-  return Array.isArray(items) ? items : [];
+  if (Array.isArray(items) && items.length > 0) return items;
+  // Safety net: if server paginated list is temporarily empty, fallback to local store transactions
+  if (Array.isArray(financeStore.periodTransactions) && financeStore.periodTransactions.length > 0) {
+    return financeStore.periodTransactions;
+  }
+  if (Array.isArray(financeStore.transactions) && financeStore.transactions.length > 0) {
+    return financeStore.transactions;
+  }
+  return [];
 });
-const totalFilteredTransactions = computed(() => financeStore.txServerTotalFiltered || 0);
+const totalFilteredTransactions = computed(() => {
+  const count = financeStore.txServerTotalFiltered || 0;
+  if (count > 0) return count;
+  return displayedTransactions.value.length;
+});
 
 function getDateBadge(dateStr: string) {
   return formatTransactionDateBadge(dateStr, locale.value === 'id' ? 'id-ID' : 'en-US');

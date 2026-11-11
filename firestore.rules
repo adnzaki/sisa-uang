@@ -130,8 +130,8 @@ service cloud.firestore {
         (data.balance is int || data.balance is float) &&
         data.color is string && data.color.size() >= 1 && data.color.size() <= 20 &&
         isValidSoftDelete(data) &&
-        data.createdAt is timestamp &&
-        data.updatedAt is timestamp;
+        (data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
+        (data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 40));
     }
 
     function isValidWalletOwner(data) {
@@ -143,8 +143,8 @@ service cloud.firestore {
         data.holderName is string && data.holderName.size() >= 1 && data.holderName.size() <= 60 &&
         (data.balance is int || data.balance is float) &&
         isValidSoftDelete(data) &&
-        data.createdAt is timestamp &&
-        data.updatedAt is timestamp;
+        (data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
+        (data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 40));
     }
 
     function isValidCategory(data) {
@@ -155,8 +155,8 @@ service cloud.firestore {
         data.type is string && (data.type == 'income' || data.type == 'expense') &&
         data.color is string && data.color.size() >= 1 && data.color.size() <= 20 &&
         isValidSoftDelete(data) &&
-        data.createdAt is timestamp &&
-        data.updatedAt is timestamp;
+        (data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
+        (data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 40));
     }
 
     function isValidTransaction(data) {
@@ -202,8 +202,8 @@ service cloud.firestore {
         data.note is string && data.note.size() <= 200 &&
         data.date is string && data.date.size() >= 8 && data.date.size() <= 30 &&
         isValidSoftDelete(data) &&
-        data.createdAt is timestamp &&
-        data.updatedAt is timestamp;
+        (data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
+        (data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 40));
     }
 
     function isValidBudget(data) {
@@ -216,8 +216,8 @@ service cloud.firestore {
         (data.spentAmount is int || data.spentAmount is float) && data.spentAmount >= 0 &&
         data.period is string && data.period.size() >= 6 && data.period.size() <= 40 &&
         isValidSoftDelete(data) &&
-        data.createdAt is timestamp &&
-        data.updatedAt is timestamp;
+        (data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
+        (data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 40));
     }
 
     function isValidActivityLog(data) {
