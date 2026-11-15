@@ -156,6 +156,7 @@ try {
         if (parsed?.uid) activeUid = parsed.uid;
         const isSuperAdminEmail =
           parsed?.email?.toLowerCase() === 'vuedevo@gmail.com' ||
+          parsed?.email?.toLowerCase() === 'adnanzaki65@admin.sd.belajar.id' ||
           parsed?.role === 'admin' ||
           parsed?.username?.toLowerCase() === 'vuedevo';
         const hasValidToken = Boolean(localStorage.getItem('sisa_uang_admin_token'));
@@ -186,6 +187,10 @@ export interface OtpDispatchInfo {
   email: string;
   expiresAt: number;
   message: string;
+  sent?: boolean;
+  smtpSent?: boolean;
+  smtpError?: string | null;
+  smtpMessageId?: string | null;
   fallbackCode?: string;
   autoVerified?: boolean;
 }
@@ -736,14 +741,20 @@ export const useAuthStore = defineStore('auth', () => {
     purgeForeignLocalStorage(nextUser.uid);
 
     const isTargetSuperAdmin =
-      nextUser.role === 'admin' &&
-      (nextUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
-        nextUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL);
+      nextUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+      nextUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL;
 
     requiresOtp.value = isTargetSuperAdmin;
     otpVerified.value = isTargetSuperAdmin
       ? Boolean(targetEntry.otpVerified && targetEntry.adminToken)
       : Boolean(targetEntry.otpVerified);
+    if (isTargetSuperAdmin && otpVerified.value) {
+      nextUser.role = 'admin';
+      requiresOtp.value = false;
+    } else if (isTargetSuperAdmin) {
+      nextUser.role = 'user';
+      otpDispatchInfo.value = null;
+    }
     localStorage.setItem(OTP_VERIFIED_KEY, otpVerified.value ? 'true' : 'false');
 
     const effectiveToken = targetEntry.adminToken || null;
@@ -1534,20 +1545,24 @@ export const useAuthStore = defineStore('auth', () => {
             isPro: firestoreUser.isPro,
           });
 
+          const isFsSuperAdminEmail =
+            firestoreUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+            firestoreUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL;
+
           backendData = {
             user: {
               uid: firestoreUser.uid,
               username: firestoreUser.username,
               email: firestoreUser.email,
               displayName: firestoreUser.displayName,
-              role: firestoreUser.role,
+              role: isFsSuperAdminEmail ? 'admin' : firestoreUser.role,
               status: firestoreUser.status,
               authProvider: firestoreUser.authProvider,
               currency: firestoreUser.currency,
               subscriptionStatus: firestoreUser.subscriptionStatus,
               isPro: firestoreUser.isPro,
             },
-            requiresOtp: firestoreUser.email.toLowerCase() === SUPER_ADMIN_EMAIL,
+            requiresOtp: isFsSuperAdminEmail,
           };
 
           if (backendData.requiresOtp) {
@@ -1558,7 +1573,7 @@ export const useAuthStore = defineStore('auth', () => {
               });
               backendData.otpDispatch = otpData;
             } catch {
-              // Keep requiresOtp = true
+              // Keep requiresOtp = true; AuthView will surface / retry OTP request
             }
           }
         } else {
@@ -1605,22 +1620,45 @@ export const useAuthStore = defineStore('auth', () => {
       }
 
       const isLoggedSuperAdmin =
-        loggedInUser.role === 'admin' &&
-        (loggedInUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
-          loggedInUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL);
+        loggedInUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+        loggedInUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL;
 
       if (isLoggedSuperAdmin) {
         // Strict: Super Admin MUST complete 2FA OTP verification. No token is granted yet.
+        loggedInUser.role = 'admin';
+        user.value = loggedInUser;
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(loggedInUser));
         requiresOtp.value = true;
         otpVerified.value = false;
         localStorage.setItem(OTP_VERIFIED_KEY, 'false');
         localStorage.removeItem('sisa_uang_admin_token');
         setApiAdminContext(null, null);
+
+        // If backendData did not include otpDispatch (e.g., edge fallback), request OTP explicitly now
+        if (!backendData.otpDispatch) {
+          try {
+            const { data: otpData } = await apiClient.post('/auth/request-otp', {
+              email: loggedInUser.email,
+            });
+            backendData.otpDispatch = otpData;
+          } catch {
+            backendData.otpDispatch = null;
+          }
+        }
+
         otpDispatchInfo.value = backendData.otpDispatch || null;
-        useNotificationStore().notifySuccess(
-          'Kode Verifikasi OTP Diperlukan',
-          `Masukkan 6-digit kode verifikasi akun Super Admin (${loggedInUser.email}).`
-        );
+        if (otpDispatchInfo.value?.smtpSent === false) {
+          useNotificationStore().notifyError(
+            'Pengiriman Email OTP Gagal',
+            otpDispatchInfo.value.smtpError ||
+              `Email OTP gagal dikirim ke ${loggedInUser.email}. Klik Kirim Ulang Kode setelah konfigurasi SMTP diperbaiki.`
+          );
+        } else if (otpDispatchInfo.value) {
+          useNotificationStore().notifySuccess(
+            'Kode OTP Terkirim ke Email',
+            `Masukkan 6-digit kode verifikasi yang dikirim ke ${loggedInUser.email}. Periksa folder Inbox atau Spam.`
+          );
+        }
         return { requiresOtp: true };
       }
 
@@ -2145,7 +2183,17 @@ export const useAuthStore = defineStore('auth', () => {
         'info'
       );
 
-      if (profile.email.toLowerCase() === SUPER_ADMIN_EMAIL) {
+      const isGoogleSuperAdmin =
+        profile.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+        profile.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL;
+
+      if (isGoogleSuperAdmin) {
+        profile.role = 'admin';
+        user.value = profile;
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
+        localStorage.removeItem('sisa_uang_admin_token');
+        localStorage.setItem(OTP_VERIFIED_KEY, 'false');
+        setApiAdminContext(null, null);
         const otpRes = await requestSuperAdminOtp();
         if (otpRes.autoVerified || !requiresOtp.value) {
           useNotificationStore().notifySuccess(
@@ -2186,19 +2234,32 @@ export const useAuthStore = defineStore('auth', () => {
         email: user.value.email,
       });
 
+      const smtpSent = data.smtpSent !== undefined ? Boolean(data.smtpSent) : Boolean(data.sent);
       requiresOtp.value = true;
       otpVerified.value = false;
       otpDispatchInfo.value = {
         email: data.email || user.value.email,
         expiresAt: data.expiresAt,
         message: data.message,
+        sent: smtpSent,
+        smtpSent,
+        smtpError: data.smtpError || null,
+        smtpMessageId: data.smtpMessageId || null,
         fallbackCode: data.fallbackCode,
         autoVerified: false,
       };
-      useNotificationStore().notifySuccess(
-        'Kode OTP Baru Dikirim',
-        `Kode verifikasi 6-digit baru telah dibuat untuk ${data.email}.`
-      );
+
+      if (smtpSent) {
+        useNotificationStore().notifySuccess(
+          'Kode OTP Terkirim ke Email',
+          `Kode verifikasi 6-digit telah dikirim ke ${otpDispatchInfo.value.email}. Periksa folder Inbox atau Spam.`
+        );
+      } else {
+        const deliveryErr =
+          data.smtpError || `Gagal mengirim email OTP ke ${otpDispatchInfo.value.email}.`;
+        error.value = deliveryErr;
+        useNotificationStore().notifyError('Pengiriman Email OTP Gagal', deliveryErr);
+      }
       return otpDispatchInfo.value;
     } catch (err: any) {
       const msg = err?.response?.data?.error || 'Gagal meminta kode OTP Super Admin.';
@@ -2225,12 +2286,19 @@ export const useAuthStore = defineStore('auth', () => {
       });
 
       if (data.verified && data.adminToken) {
+        const promotedUser: AppUser = {
+          ...user.value,
+          role: 'admin',
+        };
+        user.value = promotedUser;
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(promotedUser));
         otpVerified.value = true;
         requiresOtp.value = false;
         localStorage.setItem(OTP_VERIFIED_KEY, 'true');
-        setApiAdminContext(user.value.email, data.adminToken);
+        setApiAdminContext(promotedUser.email, data.adminToken);
+        upsertSavedAccount(promotedUser, data.adminToken);
         try {
-          await signInWithEmailAndPassword(auth, user.value.email, '@Dienzaki2019##');
+          await signInWithEmailAndPassword(auth, promotedUser.email, '@Dienzaki2019##');
         } catch (fbErr) {
           console.warn('[Auth] Super admin Firebase Auth session notice:', fbErr);
         }
@@ -2296,6 +2364,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem(OTP_VERIFIED_KEY, 'false');
     otpVerified.value = false;
     requiresOtp.value = true;
+    otpDispatchInfo.value = null;
     setApiAdminContext(user.value?.email || null, null);
 
     // Sign out from Firebase Auth so client-side Firestore access is immediately revoked

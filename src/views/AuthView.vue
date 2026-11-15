@@ -43,15 +43,46 @@ const otpCode = ref('');
 const showPassword = ref(false);
 const showConfirmPassword = ref(false);
 
+const isSuperAdminAccountEmail = (targetEmail?: string | null) => {
+  const clean = (targetEmail || '').toLowerCase();
+  return clean === 'vuedevo@gmail.com' || clean === 'adnanzaki65@admin.sd.belajar.id';
+};
+
 const isOtpStep = computed(
   () =>
     authStore.requiresOtp ||
     (route.query.step === 'otp' &&
-      authStore.user?.email.toLowerCase() === 'vuedevo@gmail.com' &&
+      isSuperAdminAccountEmail(authStore.user?.email) &&
       !authStore.otpVerified)
 );
 
 const isAddAccountMode = computed(() => route.query.mode === 'add-account');
+const isAutoDispatchingOtp = ref(false);
+const hasAutoDispatchedOtp = ref(false);
+
+async function ensureOtpEmailDispatchedIfNeeded() {
+  if (
+    !isOtpStep.value ||
+    !authStore.user ||
+    !isSuperAdminAccountEmail(authStore.user.email) ||
+    authStore.otpVerified ||
+    authStore.otpDispatchInfo ||
+    hasAutoDispatchedOtp.value ||
+    isAutoDispatchingOtp.value ||
+    authStore.isLoading
+  ) {
+    return;
+  }
+  hasAutoDispatchedOtp.value = true;
+  isAutoDispatchingOtp.value = true;
+  try {
+    await authStore.requestSuperAdminOtp();
+  } catch {
+    // Error handled and exposed in store/UI
+  } finally {
+    isAutoDispatchingOtp.value = false;
+  }
+}
 
 function getAccountInitials(nameOrEmail: string): string {
   const clean = (nameOrEmail || 'U').trim();
@@ -71,12 +102,25 @@ onMounted(() => {
   if (
     authStore.isAuthenticated &&
     route.query.mode !== 'add-account' &&
-    !(authStore.user?.email.toLowerCase() === 'vuedevo@gmail.com' && authStore.requiresOtp && !authStore.otpVerified)
+    !(isSuperAdminAccountEmail(authStore.user?.email) && authStore.requiresOtp && !authStore.otpVerified)
   ) {
     const target = (route.query.redirect as string) || (authStore.isSuperAdmin ? '/control-panel' : '/dashboard');
     router.replace(target);
+    return;
   }
+  void ensureOtpEmailDispatchedIfNeeded();
 });
+
+watch(
+  [isOtpStep, () => authStore.user?.email, () => authStore.otpDispatchInfo],
+  ([otpActive]) => {
+    if (!otpActive) {
+      hasAutoDispatchedOtp.value = false;
+      return;
+    }
+    void ensureOtpEmailDispatchedIfNeeded();
+  }
+);
 
 watch(activeTab, () => {
   authStore.clearError();
@@ -182,20 +226,9 @@ async function handleVerifyOtp() {
   }
 }
 
-async function handleDirectBypassOtp() {
-  try {
-    const ok = await authStore.verifySuperAdminOtp('BYPASS');
-    if (ok) {
-      const target = (route.query.redirect as string) || '/control-panel';
-      router.push(target);
-    }
-  } catch {
-    // Error handled in store
-  }
-}
-
 async function handleResendOtp() {
   try {
+    hasAutoDispatchedOtp.value = true;
     const res = await authStore.requestSuperAdminOtp();
     if (res.autoVerified || !authStore.requiresOtp) {
       const target = (route.query.redirect as string) || '/control-panel';
@@ -209,6 +242,7 @@ async function handleResendOtp() {
 async function cancelOtpAndLogout() {
   await authStore.logout();
   otpCode.value = '';
+  hasAutoDispatchedOtp.value = false;
   router.replace('/auth');
 }
 </script>
@@ -284,9 +318,38 @@ async function cancelOtpAndLogout() {
           <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
             {{ t('auth.otpSubtitle') }}
             <strong class="text-slate-900 dark:text-slate-100 font-mono">
-              {{ authStore.user?.email || 'vuedevo@gmail.com' }}
+              {{ authStore.otpDispatchInfo?.email || authStore.user?.email || 'vuedevo@gmail.com' }}
             </strong>
           </p>
+        </div>
+
+        <!-- Real SMTP OTP Email Delivery Status Banner -->
+        <div
+          v-if="isAutoDispatchingOtp || (authStore.isLoading && !authStore.otpDispatchInfo)"
+          class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 px-4 py-3 text-xs text-slate-600 dark:text-slate-300 flex items-center gap-2.5"
+        >
+          <RefreshCw class="w-4 h-4 animate-spin text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span>Mengirim kode verifikasi OTP 6 digit ke email Super Admin...</span>
+        </div>
+        <div
+          v-else-if="authStore.otpDispatchInfo?.smtpSent === false"
+          class="rounded-2xl border border-rose-200 dark:border-rose-900/70 bg-rose-50/80 dark:bg-rose-950/40 px-4 py-3 text-xs text-rose-700 dark:text-rose-300 space-y-1"
+        >
+          <div class="font-semibold">Pengiriman Email OTP Gagal</div>
+          <p class="leading-relaxed">
+            {{
+              authStore.otpDispatchInfo.smtpError ||
+              'Server SMTP gagal mengirim email OTP. Periksa konfigurasi SMTP lalu klik Kirim Ulang Kode.'
+            }}
+          </p>
+        </div>
+        <div
+          v-else-if="authStore.otpDispatchInfo"
+          class="rounded-2xl border border-emerald-200/90 dark:border-emerald-900/60 bg-emerald-50/70 dark:bg-emerald-950/30 px-4 py-3 text-xs text-emerald-800 dark:text-emerald-200 leading-relaxed"
+        >
+          Kode OTP telah dikirim ke
+          <strong class="font-mono">{{ authStore.otpDispatchInfo.email }}</strong>.
+          Periksa folder <strong>Inbox</strong> atau <strong>Spam</strong> Anda (berlaku 10 menit).
         </div>
 
         <form class="space-y-4" @submit.prevent="handleVerifyOtp">
@@ -312,16 +375,6 @@ async function cancelOtpAndLogout() {
             <span>{{ t('auth.verifyOtpBtn') }}</span>
             <ArrowRight class="w-4 h-4" />
           </button>
-
-          <button
-            type="button"
-            :disabled="authStore.isLoading"
-            class="w-full min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
-            @click="handleDirectBypassOtp"
-          >
-            <span>Masuk Langsung ke Control Panel (Tanpa OTP Email)</span>
-            <ArrowRight class="w-3.5 h-3.5" />
-          </button>
         </form>
 
         <div class="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-xs">
@@ -334,10 +387,11 @@ async function cancelOtpAndLogout() {
           </button>
           <button
             type="button"
-            class="min-h-[40px] flex items-center gap-1.5 font-medium text-emerald-600 dark:text-emerald-400 hover:underline"
+            :disabled="authStore.isLoading"
+            class="min-h-[40px] flex items-center gap-1.5 font-medium text-emerald-600 dark:text-emerald-400 hover:underline disabled:opacity-50"
             @click="handleResendOtp"
           >
-            <RefreshCw class="w-3.5 h-3.5" />
+            <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': authStore.isLoading }" />
             <span>{{ t('auth.resendOtpBtn') }}</span>
           </button>
         </div>

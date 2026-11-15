@@ -229,10 +229,15 @@ router.afterEach((to) => {
 router.beforeEach((to, _from, next) => {
   const authStore = useAuthStore();
 
+  const isSuperAdminEmailAddress = (email?: string | null) => {
+    const clean = (email || '').toLowerCase();
+    return clean === 'vuedevo@gmail.com' || clean === 'adnanzaki65@admin.sd.belajar.id';
+  };
+
   // If Super Admin is mid-OTP verification, keep them on /auth?step=otp
   if (
     authStore.user &&
-    authStore.user.email.toLowerCase() === 'vuedevo@gmail.com' &&
+    isSuperAdminEmailAddress(authStore.user.email) &&
     authStore.requiresOtp &&
     !authStore.otpVerified &&
     to.path !== '/auth'
@@ -256,7 +261,7 @@ router.beforeEach((to, _from, next) => {
     to.meta.guestOnly &&
     authStore.isAuthenticated &&
     to.query.mode !== 'add-account' &&
-    !(authStore.user?.email.toLowerCase() === 'vuedevo@gmail.com' && !authStore.otpVerified && authStore.requiresOtp)
+    !(isSuperAdminEmailAddress(authStore.user?.email) && !authStore.otpVerified && authStore.requiresOtp)
   ) {
     const target = (to.query.redirect as string) || '/dashboard';
     const query: Record<string, string> = {};

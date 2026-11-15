@@ -1,6 +1,0 @@
-{
-  "summary":  "Laporan analisis mendalam mengenai fitur dan operasi yang menyebabkan Firestore API melampaui limit gratis 50.000 reads/hari, disertai rancangan solusi teknis komprehensif untuk memangkas read hingga >95% tanpa mengurangi persistensi cloud dan pengalaman pengguna.",
-  "updatedAt":  "2026-10-26T08:44:24.026374210Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}
