@@ -11,6 +11,7 @@ import {
   Wallet,
   Clock,
   Check,
+  Bell,
   BellRing,
   BellOff,
   RefreshCw,
@@ -692,63 +693,71 @@ async function handleSaveProgress() {
 <template>
   <div class="space-y-6 pb-20">
     <!-- Header Section -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-      <div>
+    <div class="grid grid-cols-[1fr_auto] sm:flex sm:items-center sm:justify-between gap-x-3 gap-y-3 sm:gap-4">
+      <div class="col-span-1 min-w-0 sm:flex-1">
         <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
           Tabungan &amp; Perencanaan
         </h1>
-        <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+        <p class="hidden sm:block text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
           Rencanakan target tabungan dari berbagai dompet tanpa mengubah saldo keseluruhan Anda.
         </p>
       </div>
 
-      <div class="flex flex-wrap items-center gap-2">
-        <button
-          v-if="savingsStore.notificationPermission !== 'unsupported'"
-          type="button"
-          class="min-h-[42px] px-3 py-2 text-xs font-semibold rounded-xl border transition-all flex items-center gap-1.5 cursor-pointer"
-          :class="
-            savingsStore.notificationPermission === 'granted'
-              ? 'border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
-              : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
-          "
-          title="Pengaturan izin Notifikasi Push untuk pengingat menabung"
-          @click="savingsStore.requestNotificationPermission()"
-        >
-          <BellRing
-            v-if="savingsStore.notificationPermission === 'granted'"
-            class="w-3.5 h-3.5 shrink-0"
-          />
-          <BellOff v-else class="w-3.5 h-3.5 shrink-0 text-amber-500" />
-          <span>
-            {{
+      <div class="contents sm:flex sm:items-center sm:gap-2 sm:shrink-0 sm:flex-nowrap">
+        <div class="flex items-center justify-end gap-2 shrink-0 justify-self-end self-start sm:self-center">
+          <button
+            v-if="savingsStore.notificationPermission !== 'unsupported'"
+            type="button"
+            class="w-11 h-11 min-w-[44px] min-h-[44px] rounded-xl border transition-all flex items-center justify-center shrink-0 cursor-pointer active:scale-95"
+            :class="
               savingsStore.notificationPermission === 'granted'
-                ? 'Push Notifikasi Aktif'
-                : 'Aktifkan Push Notifikasi'
-            }}
-          </span>
-        </button>
+                ? 'border-teal-400/60 dark:border-teal-400/40 bg-gradient-to-br from-teal-500 to-cyan-600 hover:from-teal-600 hover:to-cyan-700 text-white shadow-sm shadow-teal-600/20'
+                : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 shadow-2xs'
+            "
+            :title="
+              savingsStore.notificationPermission === 'granted'
+                ? 'Push Notifikasi Pengingat Menabung Aktif'
+                : 'Aktifkan Push Notifikasi Pengingat Menabung'
+            "
+            :aria-label="
+              savingsStore.notificationPermission === 'granted'
+                ? 'Push Notifikasi Pengingat Menabung Aktif'
+                : 'Aktifkan Push Notifikasi Pengingat Menabung'
+            "
+            @click="savingsStore.requestNotificationPermission()"
+          >
+            <Bell
+              v-if="savingsStore.notificationPermission === 'granted'"
+              class="w-4.5 h-4.5 shrink-0"
+            />
+            <BellOff v-else class="w-4.5 h-4.5 shrink-0 text-amber-500 dark:text-amber-400" />
+          </button>
+
+          <button
+            type="button"
+            :disabled="isRefreshing"
+            class="w-11 h-11 min-w-[44px] min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-all shadow-2xs flex items-center justify-center shrink-0 cursor-pointer disabled:opacity-50 active:scale-95"
+            title="Segarkan Data Tabungan"
+            aria-label="Segarkan Data Tabungan"
+            @click="handleManualRefresh"
+          >
+            <RefreshCw
+              class="w-4.5 h-4.5 text-emerald-600 dark:text-emerald-400"
+              :class="{ 'animate-spin': isRefreshing }"
+            />
+          </button>
+        </div>
+
+        <p class="col-span-2 sm:hidden text-xs text-slate-500 dark:text-slate-400 -mt-1">
+          Rencanakan target tabungan dari berbagai dompet tanpa mengubah saldo keseluruhan Anda.
+        </p>
 
         <button
           type="button"
-          :disabled="isRefreshing"
-          class="min-h-[42px] px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-all shadow-2xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
-          title="Segarkan Data Tabungan"
-          @click="handleManualRefresh"
-        >
-          <RefreshCw
-            class="w-4 h-4 text-emerald-600 dark:text-emerald-400"
-            :class="{ 'animate-spin': isRefreshing }"
-          />
-          <span class="hidden sm:inline">Segarkan</span>
-        </button>
-
-        <button
-          type="button"
-          class="min-h-[42px] px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-sm hover:shadow active:scale-95 flex items-center gap-2 cursor-pointer"
+          class="col-span-2 sm:col-span-1 w-full sm:w-auto h-11 min-h-[44px] px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-sm hover:shadow active:scale-[0.98] flex items-center justify-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
           @click="openCreateGoalModal"
         >
-          <Plus class="w-4 h-4" />
+          <Plus class="w-4 h-4 shrink-0" />
           <span>Tambah Tabungan</span>
         </button>
       </div>
