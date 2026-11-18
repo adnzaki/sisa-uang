@@ -13,6 +13,7 @@ import {
 import { useThemeStore } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
+import { useSavingsStore } from '../stores/savings';
 import AppModal from '../components/AppModal.vue';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 
@@ -21,11 +22,17 @@ const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
+const savingsStore = useSavingsStore();
 
 onMounted(async () => {
   const uid = authStore.user?.uid;
-  if (uid && uid !== 'guest' && !financeStore.isSyncedWithFirestore) {
-    await financeStore.initFinanceData(uid);
+  if (uid && uid !== 'guest') {
+    if (!financeStore.isSyncedWithFirestore) {
+      await financeStore.initFinanceData(uid);
+    }
+    if (savingsStore.goals.length === 0) {
+      void savingsStore.loadSavings(uid);
+    }
   }
 });
 
@@ -476,6 +483,17 @@ async function handleDeleteGlobalOwner() {
                 </div>
                 <div class="text-sm sm:text-base font-money font-bold tabular-nums text-slate-700 dark:text-slate-300 mt-0.5 truncate">
                   {{ themeStore.formatMoney(holder.balance) }}
+                </div>
+                <div
+                  v-if="savingsStore.getHolderSavingsBalance(w.id, holder.id) > 0"
+                  class="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] font-money"
+                >
+                  <span class="text-emerald-600 dark:text-emerald-400">
+                    Bergerak: {{ themeStore.formatMoney(savingsStore.getHolderOperationalBalance(w.id, holder.id)) }}
+                  </span>
+                  <span class="text-indigo-600 dark:text-indigo-400">
+                    Tabungan: {{ themeStore.formatMoney(savingsStore.getHolderSavingsBalance(w.id, holder.id)) }}
+                  </span>
                 </div>
               </div>
             </div>

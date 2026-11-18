@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { Wallet, Plus, Trash2, Check, Users, ChevronRight, Crown, RefreshCw } from 'lucide-vue-next';
+import { Wallet, Plus, Trash2, Check, Users, ChevronRight, Crown, RefreshCw, PiggyBank } from 'lucide-vue-next';
 import {
   useFinanceStore,
   WalletItem,
@@ -11,6 +11,7 @@ import {
 import { useThemeStore } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
+import { useSavingsStore } from '../stores/savings';
 import AppModal from '../components/AppModal.vue';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 
@@ -19,6 +20,7 @@ const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
+const savingsStore = useSavingsStore();
 
 const isSyncing = ref(false);
 async function handleSyncWallets() {
@@ -45,6 +47,9 @@ onMounted(async () => {
       await financeStore.initFinanceData(uid);
     } else {
       await financeStore.loadRouteDataFromFirestore('/wallets', uid, true);
+    }
+    if (savingsStore.goals.length === 0) {
+      void savingsStore.loadSavings(uid);
     }
   }
 });
@@ -361,6 +366,29 @@ async function handleDeleteEditingWallet() {
             Paket Free (Maks. 5)
           </span>
         </div>
+
+        <div
+          v-if="savingsStore.totalSavingsBalance > 0"
+          class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"
+        >
+          <span class="text-slate-600 dark:text-slate-300">
+            Saldo Bergerak:
+            <strong class="font-money text-emerald-600 dark:text-emerald-400">
+              {{ themeStore.formatMoney(savingsStore.totalOperationalBalance) }}
+            </strong>
+          </span>
+          <span class="text-slate-300 dark:text-slate-700" aria-hidden="true">|</span>
+          <RouterLink
+            to="/utilities/savings"
+            class="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 hover:underline font-medium"
+          >
+            <PiggyBank class="w-3.5 h-3.5 shrink-0" />
+            <span>
+              Di Tabungan:
+              <strong class="font-money">{{ themeStore.formatMoney(savingsStore.totalSavingsBalance) }}</strong>
+            </span>
+          </RouterLink>
+        </div>
       </div>
 
       <RouterLink
@@ -438,6 +466,17 @@ async function handleDeleteEditingWallet() {
           </div>
           <div class="text-xl sm:text-2xl font-money font-bold tabular-nums text-emerald-600 dark:text-emerald-400 mt-0.5 truncate">
             {{ themeStore.formatMoney(w.balance) }}
+          </div>
+          <div
+            v-if="savingsStore.getWalletSavingsBalance(w.id) > 0"
+            class="mt-1.5 pt-1.5 border-t border-emerald-200/50 dark:border-emerald-900/40 flex flex-wrap items-center justify-between gap-1 text-[11px] font-money"
+          >
+            <span class="text-slate-600 dark:text-slate-300">
+              Bergerak: <strong class="text-emerald-700 dark:text-emerald-300">{{ themeStore.formatMoney(savingsStore.getWalletOperationalBalance(w.id)) }}</strong>
+            </span>
+            <span class="text-indigo-600 dark:text-indigo-400">
+              Tabungan: <strong>{{ themeStore.formatMoney(savingsStore.getWalletSavingsBalance(w.id)) }}</strong>
+            </span>
           </div>
         </div>
 

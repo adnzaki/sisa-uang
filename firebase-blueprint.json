@@ -804,6 +804,223 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "SavingsGoal": {
+      "title": "SavingsGoal",
+      "description": "Target tabungan dan perencanaan dana pengguna (tidak memengaruhi saldo keseluruhan, berfungsi sebagai ring-fence/alokasi terencana).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "User account UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Nama tujuan tabungan (misal: Beli Laptop, Dana Darurat)",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "category": {
+          "type": "string",
+          "description": "Kategori tabungan",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "targetAmount": {
+          "type": "number",
+          "description": "Target dana terkumpul"
+        },
+        "deadline": {
+          "type": "string",
+          "description": "Opsional deadline menabung (YYYY-MM-DD)",
+          "maxLength": 30
+        },
+        "note": {
+          "type": "string",
+          "description": "Catatan atau deskripsi tambahan",
+          "maxLength": 200
+        },
+        "color": {
+          "type": "string",
+          "description": "Tema warna kartu tabungan",
+          "maxLength": 20
+        },
+        "reminderEnabled": {
+          "type": "boolean",
+          "description": "Status aktif pengingat menabung berkala"
+        },
+        "reminderDays": {
+          "type": "array",
+          "description": "Daftar tanggal pengingat setiap bulan (1-31)",
+          "items": { "type": "integer" }
+        },
+        "reminderTime": {
+          "type": "string",
+          "description": "Jam pengingat menabung (HH:mm WIB)",
+          "maxLength": 10
+        },
+        "reminderAmount": {
+          "type": "number",
+          "description": "Nominal setoran rutin yang disarankan saat pengingat (opsional)"
+        },
+        "lastRemindedDate": {
+          "type": "string",
+          "description": "Tanggal terakhir pengingat berhasil ditindaklanjuti (YYYY-MM-DD)",
+          "maxLength": 40
+        },
+        "lastSkippedDate": {
+          "type": "string",
+          "description": "Tanggal terakhir pengingat dilewati hari ini (YYYY-MM-DD)",
+          "maxLength": 40
+        },
+        "lastPushNotifiedDate": {
+          "type": "string",
+          "description": "Tanggal terakhir push notification dikirim (YYYY-MM-DD)",
+          "maxLength": 40
+        },
+        "snoozedUntil": {
+          "type": "string",
+          "description": "Timestamp ISO penundaan pengingat",
+          "maxLength": 60
+        },
+        "deleted": {
+          "type": "boolean",
+          "description": "Soft-delete flag"
+        },
+        "deletedAt": {
+          "type": "string",
+          "description": "Soft-delete timestamp or null",
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "name",
+        "category",
+        "targetAmount",
+        "reminderEnabled",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SavingsEntry": {
+      "title": "SavingsEntry",
+      "description": "Riwayat pencatatan progress tambah dana atau tarik dana pada suatu target tabungan.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "User account UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "savingsId": {
+          "type": "string",
+          "description": "Parent SavingsGoal ID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "savingsName": {
+          "type": "string",
+          "description": "Snapshot nama tabungan",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "type": {
+          "type": "string",
+          "description": "Jenis mutasi tabungan: deposit atau withdraw",
+          "enum": ["deposit", "withdraw"]
+        },
+        "walletId": {
+          "type": "string",
+          "description": "Sumber dana (wallet) asal/tujuan alokasi",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "walletName": {
+          "type": "string",
+          "description": "Snapshot nama dompet",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "fundOwnerId": {
+          "type": "string",
+          "description": "ID kepemilikan dana",
+          "maxLength": 128
+        },
+        "fundOwnerName": {
+          "type": "string",
+          "description": "Nama pemilik dana (misal Pribadi, Istri)",
+          "maxLength": 60
+        },
+        "amount": {
+          "type": "number",
+          "description": "Nominal setoran atau penarikan"
+        },
+        "date": {
+          "type": "string",
+          "description": "Tanggal pencatatan progress (YYYY-MM-DD)",
+          "minLength": 8,
+          "maxLength": 30
+        },
+        "note": {
+          "type": "string",
+          "description": "Deskripsi atau keterangan progress tabungan",
+          "maxLength": 200
+        },
+        "relatedTransactionId": {
+          "type": "string",
+          "description": "ID transaksi pengeluaran jika ditarik otomatis karena saldo bergerak kurang",
+          "maxLength": 128
+        },
+        "deleted": {
+          "type": "boolean",
+          "description": "Soft-delete flag"
+        },
+        "deletedAt": {
+          "type": "string",
+          "description": "Soft-delete timestamp or null",
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "savingsId",
+        "type",
+        "walletId",
+        "walletName",
+        "amount",
+        "date",
+        "note",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -850,6 +1067,14 @@
     "/automations/{automationId}": {
       "schema": { "$ref": "#/entities/Automation" },
       "description": "Jadwal pencatatan otomatis transaksi keuangan."
+    },
+    "/savings_goals/{savingsId}": {
+      "schema": { "$ref": "#/entities/SavingsGoal" },
+      "description": "Daftar target tabungan dan perencanaan dana pengguna."
+    },
+    "/savings_entries/{entryId}": {
+      "schema": { "$ref": "#/entities/SavingsEntry" },
+      "description": "Riwayat setoran dan penarikan progress dana tabungan."
     }
   }
 }

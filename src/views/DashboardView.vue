@@ -14,6 +14,7 @@ import {
   Calendar,
   Users,
   RotateCcw,
+  PiggyBank,
 } from 'lucide-vue-next';
 import {
   useFinanceStore,
@@ -23,12 +24,14 @@ import {
 } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
 import { useAuthStore } from '../stores/auth';
+import { useSavingsStore } from '../stores/savings';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
 
 const { t, locale } = useI18n();
 const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
 const authStore = useAuthStore();
+const savingsStore = useSavingsStore();
 
 const isRefreshing = ref(false);
 
@@ -47,8 +50,13 @@ async function syncDashboardPeriodTransactions(targetPeriod?: string) {
 
 onMounted(async () => {
   const uid = authStore.user?.uid;
-  if (uid && uid !== 'guest' && !financeStore.isSyncedWithFirestore) {
-    await financeStore.initFinanceData(uid);
+  if (uid && uid !== 'guest') {
+    if (!financeStore.isSyncedWithFirestore) {
+      await financeStore.initFinanceData(uid);
+    }
+    if (savingsStore.goals.length === 0) {
+      void savingsStore.loadSavings(uid);
+    }
   }
   void syncDashboardPeriodTransactions();
 });
@@ -68,6 +76,9 @@ watch(
       if (!financeStore.isSyncedWithFirestore) {
         await financeStore.initFinanceData(newUid);
       }
+      if (savingsStore.goals.length === 0) {
+        void savingsStore.loadSavings(newUid);
+      }
       void syncDashboardPeriodTransactions();
     }
   }
@@ -78,6 +89,10 @@ async function handleManualRefresh() {
   isRefreshing.value = true;
   try {
     await financeStore.refreshData();
+    const uid = authStore.user?.uid;
+    if (uid && uid !== 'guest') {
+      await savingsStore.loadSavings(uid, true);
+    }
     await syncDashboardPeriodTransactions();
   } finally {
     isRefreshing.value = false;
@@ -303,6 +318,30 @@ function getDateBadge(dateStr: string) {
             </span>
           </div>
 
+          <div
+            v-if="savingsStore.totalSavingsBalance > 0"
+            class="rounded-xl border border-slate-100 dark:border-slate-800/90 bg-slate-50/70 dark:bg-slate-950/50 px-3 py-2 space-y-1 text-[11px]"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-slate-500 dark:text-slate-400">Saldo Bergerak (Non-Tabungan)</span>
+              <span class="font-money font-bold text-emerald-600 dark:text-emerald-400">
+                {{ themeStore.formatMoney(savingsStore.totalOperationalBalance) }}
+              </span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+              <RouterLink
+                to="/utilities/savings"
+                class="text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 font-medium"
+              >
+                <PiggyBank class="w-3 h-3 shrink-0" />
+                <span>Dialokasikan ke Tabungan</span>
+              </RouterLink>
+              <span class="font-money font-semibold text-indigo-600 dark:text-indigo-400">
+                {{ themeStore.formatMoney(savingsStore.totalSavingsBalance) }}
+              </span>
+            </div>
+          </div>
+
           <div class="flex items-center justify-between gap-2">
             <span class="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5 truncate">
               <ArrowDownLeft class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
@@ -428,6 +467,12 @@ function getDateBadge(dateStr: string) {
           </div>
           <div class="text-base sm:text-lg font-money font-bold text-emerald-600 dark:text-emerald-400 truncate">
             {{ themeStore.formatMoney(wallet.balance) }}
+          </div>
+          <div
+            v-if="savingsStore.getWalletSavingsBalance(wallet.id) > 0"
+            class="text-[11px] font-money text-slate-500 dark:text-slate-400 truncate"
+          >
+            Bergerak: {{ themeStore.formatMoney(savingsStore.getWalletOperationalBalance(wallet.id)) }} · Tabungan: {{ themeStore.formatMoney(savingsStore.getWalletSavingsBalance(wallet.id)) }}
           </div>
           <div class="text-xs text-slate-500 dark:text-slate-400 truncate">
             Pemilik:

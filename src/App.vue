@@ -42,6 +42,7 @@ import {
   FileSpreadsheet,
   SlidersHorizontal,
   Wrench,
+  PiggyBank,
 } from 'lucide-vue-next';
 import { useAuthStore } from './stores/auth';
 import { useThemeStore, ThemeMode } from './stores/theme';
@@ -50,6 +51,7 @@ import { useAdminStore } from './stores/admin';
 import { auth } from './firebase';
 import { useNotificationStore } from './stores/notification';
 import { useAutomationStore } from './stores/automation';
+import { useSavingsStore } from './stores/savings';
 import QuickTransactionModal from './components/QuickTransactionModal.vue';
 import AppModal from './components/AppModal.vue';
 import PWAInstallButton from './components/PWAInstallButton.vue';
@@ -57,6 +59,7 @@ import OfflineIndicator from './components/OfflineIndicator.vue';
 import AppUpdateBanner from './components/AppUpdateBanner.vue';
 import ReleaseNotesModal from './components/ReleaseNotesModal.vue';
 import AutomationConfirmBanner from './components/AutomationConfirmBanner.vue';
+import SavingsReminderBanner from './components/SavingsReminderBanner.vue';
 import InSiteCheckoutModal from './components/InSiteCheckoutModal.vue';
 import { scrollToPageTop, scrollToPageTopMultiFrame } from './utils/scroll';
 import { usePWA } from './composables/usePWA';
@@ -70,6 +73,7 @@ const financeStore = useFinanceStore();
 const adminStore = useAdminStore();
 const notificationStore = useNotificationStore();
 const automationStore = useAutomationStore();
+const savingsStore = useSavingsStore();
 const { clientAppVersion, needRefresh, hasNewVersion } = usePWA();
 
 const mobileDrawerOpen = ref(false);
@@ -493,6 +497,7 @@ function startAutomationPoller() {
 
   // Trigger one immediate evaluation when app is active in foreground
   void automationStore.checkAndTriggerOnActivity();
+  void savingsStore.checkAndTriggerReminders();
 
   // Interval ticks every 30 seconds ONLY while active in foreground
   automationTickerInterval = setInterval(() => {
@@ -503,6 +508,7 @@ function startAutomationPoller() {
     }
     if (authStore.isAuthenticated && authStore.user?.uid && !authStore.isSuperAdmin) {
       void automationStore.checkAndTriggerOnActivity();
+      void savingsStore.checkAndTriggerReminders();
     } else {
       stopAutomationPoller();
     }
@@ -579,7 +585,10 @@ watch(
       } else {
         financeStore.initFinanceData(uid);
       }
-      void automationStore.loadAutomations(uid).then(() => {
+      void Promise.all([
+        automationStore.loadAutomations(uid),
+        savingsStore.loadSavings(uid),
+      ]).then(() => {
         if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
           startAutomationPoller();
         }
@@ -588,6 +597,10 @@ watch(
       financeStore.cleanupListeners();
       adminStore.stopRealtimeMonitoring();
       stopAutomationPoller();
+      savingsStore.goals = [];
+      savingsStore.entries = [];
+      savingsStore.pendingReminder = null;
+      savingsStore.pendingQueue = [];
     }
   },
   { immediate: true }
@@ -955,6 +968,9 @@ async function handleSubmitProPayment() {
     <!-- Global Automatic Transaction Recording Confirmation Banner -->
     <AutomationConfirmBanner />
 
+    <!-- Global Scheduled Savings Reminder Banner -->
+    <SavingsReminderBanner />
+
     <!-- ===================================================================== -->
     <!-- GLOBAL FLOATING POPUP BANNER STACK (Success & Error Notifications)   -->
     <!-- ===================================================================== -->
@@ -1246,7 +1262,7 @@ async function handleSubmitProPayment() {
                 </div>
               </button>
 
-              <!-- Utilitas Submenu: Otomatisasi -->
+              <!-- Utilitas Submenu: Otomatisasi & Tabungan -->
               <div
                 v-show="utilitiesAccordionOpen"
                 class="mt-1 pl-3 py-1 space-y-1 border-l-2 border-emerald-200/80 dark:border-emerald-900/60 ml-4 transition-all"
@@ -1263,6 +1279,21 @@ async function handleSubmitProPayment() {
                   <div class="flex items-center gap-2.5 truncate min-w-0">
                     <Clock class="w-3.5 h-3.5 shrink-0" />
                     <span class="truncate">{{ t('nav.automation') }}</span>
+                  </div>
+                </RouterLink>
+
+                <RouterLink
+                  to="/utilities/savings"
+                  class="min-h-[38px] flex items-center justify-between px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors"
+                  :class="
+                    route.path === '/utilities/savings'
+                      ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                  "
+                >
+                  <div class="flex items-center gap-2.5 truncate min-w-0">
+                    <PiggyBank class="w-3.5 h-3.5 shrink-0" />
+                    <span class="truncate">{{ t('nav.savings') }}</span>
                   </div>
                 </RouterLink>
               </div>
@@ -2201,7 +2232,7 @@ async function handleSubmitProPayment() {
                   </div>
                 </button>
 
-                <!-- Accordion Submenu: Otomatisasi -->
+                <!-- Accordion Submenu: Otomatisasi & Tabungan -->
                 <div
                   v-show="utilitiesAccordionOpen"
                   class="mt-1 pl-3 py-1 space-y-1 border-l-2 border-emerald-200/80 dark:border-emerald-900/60 ml-4 transition-all"
@@ -2219,6 +2250,22 @@ async function handleSubmitProPayment() {
                     <div class="flex items-center gap-2.5 truncate min-w-0">
                       <Clock class="w-4 h-4 shrink-0" />
                       <span class="truncate">{{ t('nav.automation') }}</span>
+                    </div>
+                  </a>
+
+                  <a
+                    href="/utilities/savings"
+                    class="min-h-[40px] flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                    :class="
+                      route.path === '/utilities/savings'
+                        ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    "
+                    @click.prevent="navigateFromMobileDrawer('/utilities/savings')"
+                  >
+                    <div class="flex items-center gap-2.5 truncate min-w-0">
+                      <PiggyBank class="w-4 h-4 shrink-0" />
+                      <span class="truncate">{{ t('nav.savings') }}</span>
                     </div>
                   </a>
                 </div>

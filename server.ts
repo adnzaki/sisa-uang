@@ -608,6 +608,153 @@ async function syncAutomationToPeer(ownerId: string, record: ServerAutomationRec
   }
 }
 
+export interface ServerSavingsGoalRecord {
+  id: string;
+  ownerId: string;
+  name: string;
+  category: string;
+  targetAmount: number;
+  deadline?: string | null;
+  note?: string;
+  color?: string;
+  reminderEnabled: boolean;
+  reminderDays?: number[];
+  reminderTime?: string;
+  reminderAmount?: number | null;
+  lastRemindedDate?: string | null;
+  lastSkippedDate?: string | null;
+  lastPushNotifiedDate?: string | null;
+  snoozedUntil?: string | null;
+  deleted?: boolean;
+  deletedAt?: string | null;
+  createdAt?: string;
+  updatedAt: string;
+}
+
+export interface ServerSavingsEntryRecord {
+  id: string;
+  ownerId: string;
+  savingsId: string;
+  savingsName?: string;
+  type: 'deposit' | 'withdraw';
+  walletId: string;
+  walletName: string;
+  fundOwnerId?: string;
+  fundOwnerName?: string;
+  amount: number;
+  date: string;
+  note: string;
+  relatedTransactionId?: string | null;
+  deleted?: boolean;
+  deletedAt?: string | null;
+  createdAt?: string;
+  updatedAt: string;
+}
+
+const SAVINGS_GOALS_CACHE_FILE = path.join(__dirname, '.sisa_uang_savings_goals_cache.json');
+const SAVINGS_GOALS_DELETED_FILE = path.join(__dirname, '.sisa_uang_savings_goals_deleted.json');
+const SAVINGS_ENTRIES_CACHE_FILE = path.join(__dirname, '.sisa_uang_savings_entries_cache.json');
+const SAVINGS_ENTRIES_DELETED_FILE = path.join(__dirname, '.sisa_uang_savings_entries_deleted.json');
+
+const savingsGoalsStore = new Map<string, ServerSavingsGoalRecord>();
+const deletedSavingsGoalsStore = new Set<string>();
+const savingsEntriesStore = new Map<string, ServerSavingsEntryRecord>();
+const deletedSavingsEntriesStore = new Set<string>();
+
+function loadPersistedSavingsCache() {
+  try {
+    if (fs.existsSync(SAVINGS_GOALS_DELETED_FILE)) {
+      const delGoals = JSON.parse(fs.readFileSync(SAVINGS_GOALS_DELETED_FILE, 'utf8')) as string[];
+      if (Array.isArray(delGoals)) {
+        for (const id of delGoals) if (id) deletedSavingsGoalsStore.add(String(id));
+      }
+    }
+    if (fs.existsSync(SAVINGS_ENTRIES_DELETED_FILE)) {
+      const delEntries = JSON.parse(fs.readFileSync(SAVINGS_ENTRIES_DELETED_FILE, 'utf8')) as string[];
+      if (Array.isArray(delEntries)) {
+        for (const id of delEntries) if (id) deletedSavingsEntriesStore.add(String(id));
+      }
+    }
+  } catch {
+    // Ignore deleted list read error
+  }
+
+  try {
+    if (fs.existsSync(SAVINGS_GOALS_CACHE_FILE)) {
+      const goalsList = JSON.parse(fs.readFileSync(SAVINGS_GOALS_CACHE_FILE, 'utf8')) as ServerSavingsGoalRecord[];
+      if (Array.isArray(goalsList)) {
+        savingsGoalsStore.clear();
+        for (const g of goalsList) {
+          if (g && g.id && !g.deleted && !deletedSavingsGoalsStore.has(g.id)) {
+            savingsGoalsStore.set(g.id, g);
+          }
+        }
+      }
+    }
+    if (fs.existsSync(SAVINGS_ENTRIES_CACHE_FILE)) {
+      const entriesList = JSON.parse(fs.readFileSync(SAVINGS_ENTRIES_CACHE_FILE, 'utf8')) as ServerSavingsEntryRecord[];
+      if (Array.isArray(entriesList)) {
+        savingsEntriesStore.clear();
+        for (const e of entriesList) {
+          if (e && e.id && !e.deleted && !deletedSavingsEntriesStore.has(e.id)) {
+            savingsEntriesStore.set(e.id, e);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore cache read error
+  }
+}
+
+function savePersistedSavingsCache() {
+  try {
+    const goalsList = Array.from(savingsGoalsStore.values()).filter(
+      (g) => !g.deleted && !deletedSavingsGoalsStore.has(g.id)
+    );
+    const entriesList = Array.from(savingsEntriesStore.values()).filter(
+      (e) => !e.deleted && !deletedSavingsEntriesStore.has(e.id)
+    );
+    fs.writeFileSync(SAVINGS_GOALS_CACHE_FILE, JSON.stringify(goalsList, null, 2), 'utf8');
+    fs.writeFileSync(SAVINGS_GOALS_DELETED_FILE, JSON.stringify(Array.from(deletedSavingsGoalsStore), null, 2), 'utf8');
+    fs.writeFileSync(SAVINGS_ENTRIES_CACHE_FILE, JSON.stringify(entriesList, null, 2), 'utf8');
+    fs.writeFileSync(SAVINGS_ENTRIES_DELETED_FILE, JSON.stringify(Array.from(deletedSavingsEntriesStore), null, 2), 'utf8');
+  } catch {
+    // Ignore cache write error
+  }
+}
+
+loadPersistedSavingsCache();
+
+async function syncSavingsToPeer(
+  ownerId: string,
+  kind: 'goals' | 'entries',
+  recordId: string,
+  payload: any,
+  isDelete = false
+) {
+  try {
+    const peerUrls = [DEV_APP_URL, PRE_APP_URL];
+    for (const pUrl of peerUrls) {
+      if (isDelete) {
+        void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/savings/${kind}/${encodeURIComponent(recordId)}?peer=1`, {
+          method: 'DELETE',
+          signal: AbortSignal.timeout(3000),
+        }).catch(() => {});
+      } else {
+        void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/savings/${kind}?peer=1`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(3000),
+        }).catch(() => {});
+      }
+    }
+  } catch {
+    // Ignore peer sync network error
+  }
+}
+
 const otpChallenges = new Map<string, OtpChallenge>();
 const verifiedAdminTokens = new Map<string, { email: string; verifiedAt: number }>();
 const failedLoginTracker = new Map<string, number>();
@@ -2496,6 +2643,268 @@ async function startServer() {
       success: true,
       syncedCount: count,
     });
+  });
+
+  // =========================================================================
+  // Tabungan / Savings Goals & Progress Endpoints (/api/users/:uid/savings)
+  // =========================================================================
+
+  app.get('/api/users/:uid/savings', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_');
+
+    const matchesUid = (ownerId: string) =>
+      ownerId === uid ||
+      ownerId === rawUid ||
+      ((uid.includes('vuedevo') || uid === 'admin_vuedevo_01' || rawUid === 'KlSX6JgegtUIsQinZRKp535OJ6E3') &&
+        (ownerId.includes('vuedevo') || ownerId === 'admin_vuedevo_01' || ownerId === 'KlSX6JgegtUIsQinZRKp535OJ6E3'));
+
+    const goals = Array.from(savingsGoalsStore.values())
+      .filter((g) => matchesUid(g.ownerId) && !g.deleted && !deletedSavingsGoalsStore.has(g.id))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    const entries = Array.from(savingsEntriesStore.values())
+      .filter((e) => matchesUid(e.ownerId) && !e.deleted && !deletedSavingsEntriesStore.has(e.id))
+      .sort((a, b) => {
+        const dateCmp = String(b.date || '').localeCompare(String(a.date || ''));
+        if (dateCmp !== 0) return dateCmp;
+        return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+      });
+
+    res.json({
+      success: true,
+      goals,
+      entries,
+    });
+  });
+
+  app.post('/api/users/:uid/savings/goals', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const body = req.body || {};
+
+    const id = String(body.id || `sav_${Date.now()}`).trim();
+    deletedSavingsGoalsStore.delete(id);
+    const existing = savingsGoalsStore.get(id);
+
+    const record: ServerSavingsGoalRecord = {
+      id,
+      ownerId: uid,
+      name: String(body.name || existing?.name || 'Tabungan Baru').slice(0, 100),
+      category: String(body.category || existing?.category || 'Lainnya').slice(0, 50),
+      targetAmount: Math.max(1, Math.abs(Number(body.targetAmount ?? existing?.targetAmount) || 0)),
+      deadline: body.deadline !== undefined ? (body.deadline ? String(body.deadline).slice(0, 30) : null) : (existing?.deadline || null),
+      note: String(body.note !== undefined ? body.note : (existing?.note || '')).slice(0, 200),
+      color: String(body.color || existing?.color || 'emerald').slice(0, 20),
+      reminderEnabled: body.reminderEnabled !== undefined ? Boolean(body.reminderEnabled) : Boolean(existing?.reminderEnabled),
+      reminderDays: Array.isArray(body.reminderDays)
+        ? body.reminderDays.map((d: any) => Math.floor(Number(d))).filter((d: number) => d >= 1 && d <= 31)
+        : (existing?.reminderDays || [1]),
+      reminderTime: String(body.reminderTime || existing?.reminderTime || '09:00').slice(0, 10),
+      reminderAmount: body.reminderAmount !== undefined
+        ? (body.reminderAmount ? Math.max(0, Number(body.reminderAmount)) : null)
+        : (existing?.reminderAmount || null),
+      lastRemindedDate: body.lastRemindedDate !== undefined ? body.lastRemindedDate : (existing?.lastRemindedDate || null),
+      lastSkippedDate: body.lastSkippedDate !== undefined ? body.lastSkippedDate : (existing?.lastSkippedDate || null),
+      lastPushNotifiedDate: body.lastPushNotifiedDate !== undefined ? body.lastPushNotifiedDate : (existing?.lastPushNotifiedDate || null),
+      snoozedUntil: body.snoozedUntil !== undefined ? body.snoozedUntil : (existing?.snoozedUntil || null),
+      deleted: false,
+      createdAt: body.createdAt || existing?.createdAt || nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    savingsGoalsStore.set(id, record);
+    savePersistedSavingsCache();
+
+    if (req.query.peer !== '1') {
+      void syncSavingsToPeer(uid, 'goals', id, record, false);
+    }
+
+    res.json({ success: true, goal: record });
+  });
+
+  app.patch('/api/users/:uid/savings/goals/:id', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const id = String(req.params.id || '').trim();
+    const body = req.body || {};
+
+    const existing = savingsGoalsStore.get(id);
+    if (!existing) {
+      res.status(404).json({ error: 'Savings goal not found' });
+      return;
+    }
+
+    if (body.lastRemindedDate !== undefined) existing.lastRemindedDate = body.lastRemindedDate;
+    if (body.lastSkippedDate !== undefined) existing.lastSkippedDate = body.lastSkippedDate;
+    if (body.lastPushNotifiedDate !== undefined) existing.lastPushNotifiedDate = body.lastPushNotifiedDate;
+    if (body.snoozedUntil !== undefined) existing.snoozedUntil = body.snoozedUntil;
+    if (body.reminderEnabled !== undefined) existing.reminderEnabled = Boolean(body.reminderEnabled);
+    if (body.deleted !== undefined) existing.deleted = Boolean(body.deleted);
+    existing.updatedAt = nowIso();
+
+    savingsGoalsStore.set(id, existing);
+    savePersistedSavingsCache();
+
+    if (req.query.peer !== '1') {
+      void syncSavingsToPeer(uid, 'goals', id, existing, false);
+    }
+
+    res.json({ success: true, goal: existing });
+  });
+
+  app.delete('/api/users/:uid/savings/goals/:id', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const id = String(req.params.id || '').trim();
+
+    deletedSavingsGoalsStore.add(id);
+    const existing = savingsGoalsStore.get(id);
+    savingsGoalsStore.delete(id);
+
+    // Also remove entries tied to this deleted goal
+    for (const [entryId, entry] of savingsEntriesStore.entries()) {
+      if (entry.savingsId === id) {
+        deletedSavingsEntriesStore.add(entryId);
+        savingsEntriesStore.delete(entryId);
+      }
+    }
+    savePersistedSavingsCache();
+
+    if (req.query.peer !== '1' && existing) {
+      void syncSavingsToPeer(uid, 'goals', id, { ...existing, deleted: true }, true);
+    }
+
+    res.json({ success: true, deletedId: id });
+  });
+
+  app.post('/api/users/:uid/savings/entries', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const body = req.body || {};
+
+    const id = String(body.id || `sav_ent_${Date.now()}`).trim();
+    deletedSavingsEntriesStore.delete(id);
+
+    const record: ServerSavingsEntryRecord = {
+      id,
+      ownerId: uid,
+      savingsId: String(body.savingsId || '').slice(0, 128),
+      savingsName: body.savingsName ? String(body.savingsName).slice(0, 100) : undefined,
+      type: body.type === 'withdraw' ? 'withdraw' : 'deposit',
+      walletId: String(body.walletId || '').slice(0, 128),
+      walletName: String(body.walletName || 'Dompet').slice(0, 60),
+      fundOwnerId: body.fundOwnerId ? String(body.fundOwnerId).slice(0, 128) : undefined,
+      fundOwnerName: body.fundOwnerName ? String(body.fundOwnerName).slice(0, 60) : undefined,
+      amount: Math.max(1, Math.abs(Number(body.amount) || 0)),
+      date: String(body.date || nowIso().slice(0, 10)).slice(0, 30),
+      note: String(body.note || '').slice(0, 200),
+      relatedTransactionId: body.relatedTransactionId ? String(body.relatedTransactionId).slice(0, 128) : null,
+      deleted: false,
+      createdAt: body.createdAt || nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    savingsEntriesStore.set(id, record);
+    savePersistedSavingsCache();
+
+    if (req.query.peer !== '1') {
+      void syncSavingsToPeer(uid, 'entries', id, record, false);
+    }
+
+    res.json({ success: true, entry: record });
+  });
+
+  app.delete('/api/users/:uid/savings/entries/:id', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const id = String(req.params.id || '').trim();
+
+    deletedSavingsEntriesStore.add(id);
+    const existing = savingsEntriesStore.get(id);
+    savingsEntriesStore.delete(id);
+    savePersistedSavingsCache();
+
+    if (req.query.peer !== '1' && existing) {
+      void syncSavingsToPeer(uid, 'entries', id, { ...existing, deleted: true }, true);
+    }
+
+    res.json({ success: true, deletedId: id });
+  });
+
+  app.post('/api/users/:uid/savings/batch', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const goals = Array.isArray(req.body?.goals) ? req.body.goals : [];
+    const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+
+    let syncedCount = 0;
+    for (const g of goals) {
+      if (g && g.id) {
+        const id = String(g.id);
+        if (deletedSavingsGoalsStore.has(id) || g.deleted) {
+          savingsGoalsStore.delete(id);
+          continue;
+        }
+        savingsGoalsStore.set(id, {
+          id,
+          ownerId: uid,
+          name: String(g.name || 'Tabungan').slice(0, 100),
+          category: String(g.category || 'Lainnya').slice(0, 50),
+          targetAmount: Math.max(1, Math.abs(Number(g.targetAmount) || 0)),
+          deadline: g.deadline || null,
+          note: String(g.note || '').slice(0, 200),
+          color: String(g.color || 'emerald').slice(0, 20),
+          reminderEnabled: Boolean(g.reminderEnabled),
+          reminderDays: Array.isArray(g.reminderDays) ? g.reminderDays : [1],
+          reminderTime: String(g.reminderTime || '09:00').slice(0, 10),
+          reminderAmount: g.reminderAmount ?? null,
+          lastRemindedDate: g.lastRemindedDate || null,
+          lastSkippedDate: g.lastSkippedDate || null,
+          lastPushNotifiedDate: g.lastPushNotifiedDate || null,
+          snoozedUntil: g.snoozedUntil || null,
+          deleted: false,
+          createdAt: g.createdAt || nowIso(),
+          updatedAt: nowIso(),
+        });
+        syncedCount++;
+      }
+    }
+
+    for (const e of entries) {
+      if (e && e.id) {
+        const id = String(e.id);
+        if (deletedSavingsEntriesStore.has(id) || e.deleted) {
+          savingsEntriesStore.delete(id);
+          continue;
+        }
+        savingsEntriesStore.set(id, {
+          id,
+          ownerId: uid,
+          savingsId: String(e.savingsId || '').slice(0, 128),
+          savingsName: e.savingsName ? String(e.savingsName).slice(0, 100) : undefined,
+          type: e.type === 'withdraw' ? 'withdraw' : 'deposit',
+          walletId: String(e.walletId || '').slice(0, 128),
+          walletName: String(e.walletName || 'Dompet').slice(0, 60),
+          fundOwnerId: e.fundOwnerId ? String(e.fundOwnerId).slice(0, 128) : undefined,
+          fundOwnerName: e.fundOwnerName ? String(e.fundOwnerName).slice(0, 60) : undefined,
+          amount: Math.max(1, Math.abs(Number(e.amount) || 0)),
+          date: String(e.date || nowIso().slice(0, 10)).slice(0, 30),
+          note: String(e.note || '').slice(0, 200),
+          relatedTransactionId: e.relatedTransactionId || null,
+          deleted: false,
+          createdAt: e.createdAt || nowIso(),
+          updatedAt: nowIso(),
+        });
+        syncedCount++;
+      }
+    }
+
+    if (syncedCount > 0) {
+      savePersistedSavingsCache();
+    }
+
+    res.json({ success: true, syncedCount });
   });
 
   // =========================================================================

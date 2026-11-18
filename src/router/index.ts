@@ -4,6 +4,7 @@ import { auth } from '../firebase';
 import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
 import { useAutomationStore } from '../stores/automation';
+import { useSavingsStore } from '../stores/savings';
 import { useFinanceStore } from '../stores/finance';
 import { apiClient } from '../services/api';
 import DashboardView from '../views/DashboardView.vue';
@@ -184,6 +185,16 @@ export const router = createRouter({
       redirect: '/utilities/automation',
     },
     {
+      path: '/utilities/savings',
+      name: 'savings',
+      component: () => import('../views/SavingsView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/savings',
+      redirect: '/utilities/savings',
+    },
+    {
       path: '/database',
       name: 'database',
       component: DatabaseManagementView,
@@ -282,6 +293,9 @@ router.afterEach((to) => {
 
     const automationStore = useAutomationStore();
     void automationStore.checkAndTriggerOnActivity();
+
+    const savingsStore = useSavingsStore();
+    void savingsStore.checkAndTriggerReminders();
   }
 });
 
