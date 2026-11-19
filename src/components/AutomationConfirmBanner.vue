@@ -169,7 +169,7 @@ async function handleCancelToday() {
               >
                 <div
                   v-if="snoozeDropdownOpen"
-                  class="absolute right-0 bottom-full lg:bottom-auto lg:top-full mb-2 lg:mb-0 lg:mt-2 w-56 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-3 z-50 text-slate-800 dark:text-slate-100 space-y-2.5"
+                  class="absolute right-0 top-full mt-2 w-56 max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-3 z-50 text-slate-800 dark:text-slate-100 space-y-2.5"
                 >
                   <div class="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                     Pilih Durasi Tunda

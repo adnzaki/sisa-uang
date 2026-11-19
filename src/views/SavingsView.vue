@@ -180,6 +180,18 @@ function applyFormattedNominalInput(event: Event, targetRef: { value: number | '
   }
 }
 
+function handleGoalTargetInput(event: Event) {
+  applyFormattedNominalInput(event, goalTarget);
+}
+
+function handleGoalReminderAmountInput(event: Event) {
+  applyFormattedNominalInput(event, goalReminderAmount);
+}
+
+function handleProgressAmountInput(event: Event) {
+  applyFormattedNominalInput(event, progressAmount);
+}
+
 function formatDateId(dateIso?: string | null): string {
   if (!dateIso) return '-';
   try {
@@ -402,9 +414,6 @@ async function handleSaveGoal() {
     });
     if (saved) {
       goalModalOpen.value = false;
-      if (detailGoalId.value === saved.id) {
-        // Detail view updates reactively via computed
-      }
     }
   } catch (err: any) {
     goalErrorMsg.value = err?.message || 'Gagal menyimpan target tabungan.';
@@ -418,42 +427,15 @@ async function handleDeleteFromEditModal() {
   const ok = await savingsStore.deleteGoal(editingGoalId.value);
   if (ok) {
     goalModalOpen.value = false;
-    if (detailGoalId.value === editingGoalId.value) {
-      detailModalOpen.value = false;
-    }
   }
 }
 
 // =========================================================================
-// Modal 2: Detail Tabungan (Breakdown per Sumber Dana + Progress History)
+// Navigation to Dedicated Detail Page
 // =========================================================================
 
-const detailModalOpen = ref(false);
-const detailGoalId = ref<string | null>(null);
-
-const activeDetailGoal = computed(() =>
-  detailGoalId.value
-    ? savingsStore.activeGoals.find((g) => g.id === detailGoalId.value) || null
-    : null
-);
-
-const detailCollected = computed(() =>
-  activeDetailGoal.value ? savingsStore.getGoalCollectedAmount(activeDetailGoal.value.id) : 0
-);
-
-const detailBreakdown = computed(() =>
-  activeDetailGoal.value
-    ? savingsStore.getGoalSourceBreakdown(activeDetailGoal.value.id)
-    : { byHolder: [], byWallet: [] }
-);
-
-const detailEntries = computed(() =>
-  activeDetailGoal.value ? savingsStore.getGoalEntries(activeDetailGoal.value.id) : []
-);
-
-function openDetailModal(goal: SavingsGoalItem) {
-  detailGoalId.value = goal.id;
-  detailModalOpen.value = true;
+function openDetailPage(goal: SavingsGoalItem) {
+  void router.push(`/utilities/savings/${encodeURIComponent(goal.id)}`);
 }
 
 // =========================================================================
@@ -920,8 +902,8 @@ async function handleSaveProgress() {
         role="button"
         tabindex="0"
         class="rounded-3xl border border-slate-200/90 dark:border-slate-800/90 bg-white dark:bg-slate-900 p-5 shadow-sm hover:shadow-md hover:border-emerald-500/40 transition-all flex flex-col justify-between gap-4 cursor-pointer text-left"
-        @click="openDetailModal(goal)"
-        @keydown.enter="openDetailModal(goal)"
+        @click="openDetailPage(goal)"
+        @keydown.enter="openDetailPage(goal)"
       >
         <div class="space-y-3.5">
           <!-- Card Header: Icon, Title, Category & Completion Status -->
@@ -1087,213 +1069,6 @@ async function handleSaveProgress() {
     </div>
 
     <!-- =================================================================== -->
-    <!-- MODAL 1: Detail Tabungan (Breakdown Sumber Dana & Progress History)  -->
-    <!-- =================================================================== -->
-    <AppModal
-      :open="detailModalOpen && Boolean(activeDetailGoal)"
-      :title="activeDetailGoal ? activeDetailGoal.name : 'Detail Tabungan'"
-      max-width="xl"
-      @close="detailModalOpen = false"
-    >
-      <div v-if="activeDetailGoal" class="space-y-5">
-        <!-- Summary Card -->
-        <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-4 space-y-3">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div class="text-xs text-slate-500 dark:text-slate-400">
-              Kategori: <strong class="text-slate-800 dark:text-slate-200">{{ activeDetailGoal.category }}</strong>
-            </div>
-            <div class="text-xs font-bold text-emerald-600 dark:text-emerald-400">
-              {{ getGoalProgressPercent(activeDetailGoal) }}% Tercapai
-            </div>
-          </div>
-
-          <div class="flex flex-wrap items-baseline justify-between gap-2">
-            <div class="text-2xl font-money font-bold text-slate-900 dark:text-slate-100">
-              {{ themeStore.formatMoney(detailCollected) }}
-            </div>
-            <div class="text-xs font-money text-slate-500 dark:text-slate-400">
-              Target: {{ themeStore.formatMoney(activeDetailGoal.targetAmount) }}
-            </div>
-          </div>
-
-          <div class="h-2.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-            <div
-              class="h-full rounded-full transition-all duration-300"
-              :class="getAccentBarClass(activeDetailGoal.color)"
-              :style="{ width: `${getGoalProgressPercent(activeDetailGoal)}%` }"
-            ></div>
-          </div>
-
-          <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-            <span v-if="activeDetailGoal.deadline">
-              Deadline: <strong>{{ getDeadlineInfo(activeDetailGoal.deadline)?.label }}</strong>
-            </span>
-            <span v-else>Tanpa deadline</span>
-            <span v-if="activeDetailGoal.reminderEnabled" class="text-emerald-600 dark:text-emerald-400 font-medium">
-              Pengingat: {{ formatDaysDisplay(activeDetailGoal.reminderDays) }} · {{ activeDetailGoal.reminderTime || '09:00' }} WIB
-            </span>
-          </div>
-
-          <p v-if="activeDetailGoal.note" class="text-xs text-slate-600 dark:text-slate-300 italic pt-1 border-t border-slate-200/70 dark:border-slate-800">
-            "{{ activeDetailGoal.note }}"
-          </p>
-        </div>
-
-        <!-- Asal Sumber Dana Section -->
-        <div class="space-y-2.5">
-          <div class="flex items-center justify-between">
-            <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-              <Wallet class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-              <span>Rincian Asal Sumber Dana Tabungan</span>
-            </h4>
-            <span class="text-[11px] text-slate-500 font-money">
-              {{ detailBreakdown.byWallet.length }} dompet
-            </span>
-          </div>
-
-          <div
-            v-if="detailBreakdown.byHolder.length === 0"
-            class="rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 p-4 text-center text-xs text-slate-500"
-          >
-            Belum ada dana yang ditambahkan ke tabungan ini.
-          </div>
-
-          <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            <div
-              v-for="src in detailBreakdown.byHolder"
-              :key="`${src.walletId}_${src.fundOwnerId}`"
-              class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5 py-2.5 flex items-center justify-between gap-2"
-            >
-              <div class="min-w-0">
-                <div class="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
-                  {{ src.walletName }}
-                </div>
-                <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                  Pemilik: {{ src.fundOwnerName }}
-                </div>
-              </div>
-              <div class="text-xs sm:text-sm font-money font-bold text-teal-600 dark:text-teal-400 shrink-0">
-                {{ themeStore.formatMoney(src.amount) }}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Complete Progress History Section -->
-        <div class="space-y-2.5">
-          <div class="flex items-center justify-between">
-            <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-              <Clock class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-              <span>Riwayat Progress Dana ({{ detailEntries.length }})</span>
-            </h4>
-          </div>
-
-          <div
-            v-if="detailEntries.length === 0"
-            class="rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 p-6 text-center text-xs text-slate-500"
-          >
-            Belum ada riwayat tambah progress atau penarikan dana.
-          </div>
-
-          <div v-else class="space-y-2 max-h-[300px] overflow-y-auto pr-1">
-            <div
-              v-for="entry in detailEntries"
-              :key="entry.id"
-              class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 flex items-center justify-between gap-3"
-            >
-              <div class="flex items-start gap-2.5 min-w-0 flex-1">
-                <div
-                  class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5"
-                  :class="
-                    entry.type === 'deposit'
-                      ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
-                      : 'bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400'
-                  "
-                >
-                  <ArrowDownLeft v-if="entry.type === 'deposit'" class="w-4 h-4" />
-                  <ArrowUpRight v-else class="w-4 h-4" />
-                </div>
-
-                <div class="min-w-0 flex-1 space-y-0.5">
-                  <div class="flex flex-wrap items-center gap-1.5">
-                    <span class="text-xs font-bold text-slate-900 dark:text-slate-100">
-                      {{ entry.type === 'deposit' ? 'Tambah Progress' : 'Tarik Dana' }}
-                    </span>
-                    <span class="text-[11px] text-slate-400">·</span>
-                    <span class="text-[11px] text-slate-600 dark:text-slate-300 font-medium">
-                      {{ entry.walletName }} ({{ formatHolderName(entry.fundOwnerName) }})
-                    </span>
-                  </div>
-                  <div class="text-xs text-slate-600 dark:text-slate-400 line-clamp-1">
-                    {{ entry.note }}
-                  </div>
-                  <div class="text-[11px] text-slate-400">
-                    {{ formatDateId(entry.date) }}
-                  </div>
-                </div>
-              </div>
-
-              <div class="flex items-center gap-2 shrink-0">
-                <span
-                  class="text-xs sm:text-sm font-money font-bold"
-                  :class="
-                    entry.type === 'deposit'
-                      ? 'text-emerald-600 dark:text-emerald-400'
-                      : 'text-rose-600 dark:text-rose-400'
-                  "
-                >
-                  {{ entry.type === 'deposit' ? '+' : '-' }}{{ themeStore.formatMoney(entry.amount) }}
-                </span>
-
-                <button
-                  type="button"
-                  class="w-7 h-7 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center justify-center transition-colors cursor-pointer"
-                  title="Hapus catatan riwayat ini"
-                  @click="savingsStore.deleteEntry(entry.id)"
-                >
-                  <Trash2 class="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <template #footer>
-        <div v-if="activeDetailGoal" class="flex flex-wrap items-center justify-between gap-2">
-          <div class="flex items-center gap-2">
-            <button
-              type="button"
-              class="min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
-              @click="openEditGoalModal(activeDetailGoal)"
-            >
-              <Pencil class="w-3.5 h-3.5" />
-              <span>Edit</span>
-            </button>
-            <button
-              type="button"
-              :disabled="detailCollected <= 0"
-              class="min-h-[42px] px-3.5 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-center gap-1.5 hover:bg-rose-100 dark:hover:bg-rose-900/40 cursor-pointer disabled:opacity-40"
-              @click="openProgressModal(activeDetailGoal, 'withdraw')"
-            >
-              <Minus class="w-3.5 h-3.5" />
-              <span>Tarik Dana</span>
-            </button>
-          </div>
-
-          <button
-            type="button"
-            class="flex-1 sm:flex-none min-h-[42px] px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-            @click="openProgressModal(activeDetailGoal, 'deposit', activeDetailGoal.reminderAmount || undefined)"
-          >
-            <Plus class="w-4 h-4" />
-            <span>Tambah Progress</span>
-          </button>
-        </div>
-      </template>
-    </AppModal>
-
-    <!-- =================================================================== -->
     <!-- MODAL 2: Tambah / Edit Rencana Tabungan                             -->
     <!-- =================================================================== -->
     <AppModal
@@ -1322,7 +1097,7 @@ async function handleSaveProgress() {
           placeholder="Target Dana Terkumpul (Rp)"
           required
           class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
-          @input="applyFormattedNominalInput($event, goalTarget)"
+          @input="handleGoalTargetInput"
         />
 
         <!-- Kategori Tabungan -->
@@ -1348,13 +1123,17 @@ async function handleSaveProgress() {
             </label>
           </div>
 
-          <div v-if="hasDeadline" class="flex items-center gap-2">
-            <div class="flex-1">
-              <MaterialDatePicker v-model="goalDeadline" label="Tanggal Target Deadline" />
+          <div v-if="hasDeadline" class="flex items-center gap-2 min-w-0">
+            <div class="flex-1 min-w-0">
+              <MaterialDatePicker
+                v-model="goalDeadline"
+                label="Tanggal Target Deadline"
+                hide-iso-date
+              />
             </div>
             <button
               type="button"
-              class="min-h-[46px] px-3 rounded-xl border border-slate-200 dark:border-slate-800 text-xs text-slate-500 hover:text-rose-600 cursor-pointer"
+              class="w-11 h-[54px] sm:h-[50px] shrink-0 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-500 hover:text-rose-600 hover:border-rose-300 dark:hover:border-rose-800 flex items-center justify-center transition-colors cursor-pointer"
               title="Hapus deadline"
               @click="hasDeadline = false"
             >
@@ -1490,7 +1269,7 @@ async function handleSaveProgress() {
                 autocomplete="off"
                 placeholder="Saran Setoran (Rp · Opsional)"
                 class="w-full min-h-[46px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-money font-semibold text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-slate-500 focus:outline-none focus:border-emerald-600"
-                @input="applyFormattedNominalInput($event, goalReminderAmount)"
+                @input="handleGoalReminderAmountInput"
               />
             </div>
 
@@ -1646,7 +1425,7 @@ async function handleSaveProgress() {
           placeholder="Nominal (Rp)"
           required
           class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
-          @input="applyFormattedNominalInput($event, progressAmount)"
+          @input="handleProgressAmountInput"
         />
 
         <p v-if="progressErrorMsg" class="text-xs text-rose-600 dark:text-rose-400 font-medium px-1">

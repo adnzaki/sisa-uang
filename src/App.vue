@@ -1286,7 +1286,7 @@ async function handleSubmitProPayment() {
                   to="/utilities/savings"
                   class="min-h-[38px] flex items-center justify-between px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors"
                   :class="
-                    route.path === '/utilities/savings'
+                    route.path.startsWith('/utilities/savings')
                       ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
                   "
@@ -2257,7 +2257,7 @@ async function handleSubmitProPayment() {
                     href="/utilities/savings"
                     class="min-h-[40px] flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer"
                     :class="
-                      route.path === '/utilities/savings'
+                      route.path.startsWith('/utilities/savings')
                         ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
                         : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                     "

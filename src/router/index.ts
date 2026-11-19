@@ -191,6 +191,12 @@ export const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/utilities/savings/:id',
+      name: 'savings-detail',
+      component: () => import('../views/SavingsDetailView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/savings',
       redirect: '/utilities/savings',
     },
@@ -209,7 +215,10 @@ export const router = createRouter({
       beforeEnter: superAdminMiddleware,
     },
   ],
-  scrollBehavior(to, _from, savedPosition) {
+  scrollBehavior(to, from, savedPosition) {
+    if (from.matched.length > 0 && to.fullPath === from.fullPath) {
+      return;
+    }
     if (to.hash) {
       return { el: to.hash, top: 70, behavior: 'smooth' };
     }
@@ -223,7 +232,10 @@ export const router = createRouter({
   },
 });
 
-router.afterEach((to) => {
+router.afterEach((to, from) => {
+  if (from.matched.length > 0 && to.fullPath === from.fullPath) {
+    return;
+  }
   if (to.hash) {
     requestAnimationFrame(() => scrollToElement(to.hash, 'smooth', 70));
     setTimeout(() => scrollToElement(to.hash, 'smooth', 70), 100);

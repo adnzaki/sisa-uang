@@ -7,10 +7,12 @@ const props = withDefaults(
     modelValue: string; // YYYY-MM-DD
     label?: string;
     disabled?: boolean;
+    hideIsoDate?: boolean;
   }>(),
   {
     label: 'Pilih Tanggal',
     disabled: false,
+    hideIsoDate: false,
   }
 );
 
@@ -71,7 +73,7 @@ const formattedTriggerDate = computed(() => {
   const dt = parseIsoDate(props.modelValue);
   return dt.toLocaleDateString('id-ID', {
     weekday: 'short',
-    day: '2-digit',
+    day: 'numeric',
     month: 'long',
     year: 'numeric',
   });
@@ -224,21 +226,21 @@ function confirmSelection() {
 </script>
 
 <template>
-  <div class="w-full">
+  <div class="w-full min-w-0">
     <!-- Material-Styled Input Trigger Button -->
     <button
       type="button"
       :disabled="disabled"
-      class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 hover:border-emerald-500/60 text-left flex items-center justify-between gap-2.5 transition-colors focus:outline-none focus:border-emerald-600 disabled:opacity-50"
+      class="w-full min-w-0 min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 hover:border-emerald-500/60 text-left flex items-center justify-between gap-2.5 transition-colors focus:outline-none focus:border-emerald-600 disabled:opacity-50"
       @click="openPicker"
     >
-      <div class="flex items-center gap-3 min-w-0">
+      <div class="flex items-center gap-3 min-w-0 flex-1">
         <Calendar class="w-4.5 h-4.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
         <span class="text-sm sm:text-base font-medium text-slate-900 dark:text-slate-100 truncate">
           {{ formattedTriggerDate }}
         </span>
       </div>
-      <span class="text-xs font-money text-slate-400 shrink-0">
+      <span v-if="!hideIsoDate" class="text-xs font-money text-slate-400 shrink-0">
         {{ modelValue }}
       </span>
     </button>
