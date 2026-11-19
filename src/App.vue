@@ -42,7 +42,7 @@ import {
   FileSpreadsheet,
   SlidersHorizontal,
   Wrench,
-  PiggyBank,
+  Target,
 } from 'lucide-vue-next';
 import { useAuthStore } from './stores/auth';
 import { useThemeStore, ThemeMode } from './stores/theme';
@@ -1292,7 +1292,7 @@ async function handleSubmitProPayment() {
                   "
                 >
                   <div class="flex items-center gap-2.5 truncate min-w-0">
-                    <PiggyBank class="w-3.5 h-3.5 shrink-0" />
+                    <Target class="w-3.5 h-3.5 shrink-0" />
                     <span class="truncate">{{ t('nav.savings') }}</span>
                   </div>
                 </RouterLink>
@@ -2264,7 +2264,7 @@ async function handleSubmitProPayment() {
                     @click.prevent="navigateFromMobileDrawer('/utilities/savings')"
                   >
                     <div class="flex items-center gap-2.5 truncate min-w-0">
-                      <PiggyBank class="w-4 h-4 shrink-0" />
+                      <Target class="w-4 h-4 shrink-0" />
                       <span class="truncate">{{ t('nav.savings') }}</span>
                     </div>
                   </a>

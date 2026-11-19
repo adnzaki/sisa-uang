@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { Wallet, Plus, Trash2, Check, Users, ChevronRight, Crown, RefreshCw, PiggyBank } from 'lucide-vue-next';
+import { Wallet, Plus, Trash2, Check, Users, ChevronRight, Crown, RefreshCw, Target } from 'lucide-vue-next';
 import {
   useFinanceStore,
   WalletItem,
@@ -382,7 +382,7 @@ async function handleDeleteEditingWallet() {
             to="/utilities/savings"
             class="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 hover:underline font-medium"
           >
-            <PiggyBank class="w-3.5 h-3.5 shrink-0" />
+            <Target class="w-3.5 h-3.5 shrink-0" />
             <span>
               Di Tabungan:
               <strong class="font-money">{{ themeStore.formatMoney(savingsStore.totalSavingsBalance) }}</strong>

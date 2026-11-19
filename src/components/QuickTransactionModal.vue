@@ -9,7 +9,7 @@ import {
   Trash2,
   ShieldAlert,
   AlertTriangle,
-  PiggyBank,
+  Target,
   ArrowLeft,
 } from 'lucide-vue-next';
 import {
@@ -784,7 +784,7 @@ async function handleSubmit() {
         class="rounded-2xl border border-teal-200/80 dark:border-teal-900/50 bg-teal-50/70 dark:bg-teal-950/30 px-3.5 py-2.5 text-[11px] flex flex-wrap items-center justify-between gap-2"
       >
         <div class="flex items-center gap-1.5 text-teal-800 dark:text-teal-200 font-medium">
-          <PiggyBank class="w-3.5 h-3.5 text-teal-600 dark:text-teal-400 shrink-0" />
+          <Target class="w-3.5 h-3.5 text-teal-600 dark:text-teal-400 shrink-0" />
           <span>
             Saldo Bergerak:
             <strong class="font-money font-bold">{{ themeStore.formatMoney(selectedSourceBalanceSummary.operational) }}</strong>
@@ -1040,7 +1040,7 @@ async function handleSubmit() {
         >
           <div class="min-w-0 flex-1 space-y-1">
             <div class="flex items-center gap-2">
-              <PiggyBank class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <Target class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span class="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
                 {{ item.goalName }}
               </span>

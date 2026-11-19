@@ -2,7 +2,6 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-  PiggyBank,
   Clock,
   CheckCircle2,
   XCircle,
@@ -76,7 +75,7 @@ async function handleSkipToday() {
           <!-- Left: Savings Reminder Info -->
           <div class="flex items-start gap-3 min-w-0">
             <div class="w-10 h-10 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center shrink-0 mt-0.5 shadow-inner">
-              <PiggyBank class="w-5 h-5 text-white" />
+              <Target class="w-5 h-5 text-white" />
             </div>
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-2">
@@ -95,8 +94,7 @@ async function handleSkipToday() {
                 </span>
                 <span class="text-teal-200">·</span>
                 <span class="inline-flex items-center gap-1 text-amber-200 font-bold font-money text-sm sm:text-base">
-                  <Target class="w-3.5 h-3.5 shrink-0" />
-                  {{ themeStore.formatMoney(savingsStore.getGoalCollectedAmount(savingsStore.pendingReminder.id)) }}
+                  Terkumpul {{ themeStore.formatMoney(savingsStore.getGoalCollectedAmount(savingsStore.pendingReminder.id)) }}
                   / {{ themeStore.formatMoney(savingsStore.pendingReminder.targetAmount) }}
                 </span>
                 <template v-if="savingsStore.pendingReminder.reminderAmount">

@@ -2,7 +2,6 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
-  PiggyBank,
   Plus,
   Minus,
   Pencil,
@@ -891,7 +890,7 @@ async function handleSaveProgress() {
       class="rounded-3xl border border-dashed border-slate-300 dark:border-slate-800 p-12 text-center space-y-4 bg-white/50 dark:bg-slate-900/40"
     >
       <div class="w-14 h-14 mx-auto rounded-3xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400">
-        <PiggyBank class="w-7 h-7" />
+        <Target class="w-7 h-7" />
       </div>
       <div class="max-w-md mx-auto space-y-1">
         <h3 class="text-base font-bold text-slate-800 dark:text-slate-200">
@@ -932,7 +931,7 @@ async function handleSaveProgress() {
                 class="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0"
                 :class="getAccentIconClass(goal.color)"
               >
-                <PiggyBank class="w-5 h-5" />
+                <Target class="w-5 h-5" />
               </div>
               <div class="min-w-0 flex-1">
                 <h3

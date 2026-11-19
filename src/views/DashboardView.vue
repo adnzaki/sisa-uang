@@ -14,7 +14,7 @@ import {
   Calendar,
   Users,
   RotateCcw,
-  PiggyBank,
+  Target,
 } from 'lucide-vue-next';
 import {
   useFinanceStore,
@@ -333,7 +333,7 @@ function getDateBadge(dateStr: string) {
                 to="/utilities/savings"
                 class="text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 font-medium"
               >
-                <PiggyBank class="w-3 h-3 shrink-0" />
+                <Target class="w-3 h-3 shrink-0" />
                 <span>Dialokasikan ke Tabungan</span>
               </RouterLink>
               <span class="font-money font-semibold text-indigo-600 dark:text-indigo-400">
