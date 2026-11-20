@@ -2716,6 +2716,14 @@ async function handleSubmitProPayment() {
                 <strong>Lebih dari 2 Kepemilikan Dana:</strong> Pisahkan alokasi kepemilikan dana keluarga atau bisnis di setiap dompet tanpa batas.
               </span>
             </li>
+            <li class="flex items-start gap-2.5">
+              <div class="w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                <Check class="w-2.5 h-2.5 stroke-[3]" />
+              </div>
+              <span>
+                <strong>Rencana Tabungan Tanpa Batas:</strong> Buat dan kelola target tabungan berencana beserta jadwal pengingatnya tanpa batas (Free maks. 1 tabungan).
+              </span>
+            </li>
           </ul>
         </div>
 

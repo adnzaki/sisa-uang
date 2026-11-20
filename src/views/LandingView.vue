@@ -381,6 +381,10 @@ const faqs = [
                   </li>
                   <li class="flex items-center gap-2">
                     <Check class="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>1 Rencana Tabungan (Target)</span>
+                  </li>
+                  <li class="flex items-center gap-2">
+                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
                     <span>Anggaran Bulan Berjalan</span>
                   </li>
                   <li class="flex items-center gap-2">
@@ -427,6 +431,10 @@ const faqs = [
                   <li class="flex items-start gap-2">
                     <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                     <span><strong>Lebih dari 2 Kepemilikan Dana:</strong> Pisahkan alokasi kepemilikan dana keluarga atau bisnis di setiap dompet tanpa batas.</span>
+                  </li>
+                  <li class="flex items-start gap-2">
+                    <Check class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span><strong>Rencana Tabungan Tanpa Batas:</strong> Buat target tabungan berencana beserta jadwal pengingatnya sebanyak yang Anda butuhkan (unlimited).</span>
                   </li>
                 </ul>
               </div>

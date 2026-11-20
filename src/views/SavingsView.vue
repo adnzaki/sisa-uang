@@ -20,10 +20,11 @@ import {
   Sparkles,
   CheckCircle2,
   X,
+  Crown,
 } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useFinanceStore, formatHolderName } from '../stores/finance';
-import { useSavingsStore } from '../stores/savings';
+import { useSavingsStore, MAX_FREE_SAVINGS_GOALS } from '../stores/savings';
 import { useThemeStore } from '../stores/theme';
 import { useNotificationStore } from '../stores/notification';
 import { getTodayIsoDate } from '../stores/automation';
@@ -333,6 +334,14 @@ function toggleGoalDaySelection(day: number) {
 }
 
 function openCreateGoalModal() {
+  if (!authStore.isProUser && savingsStore.activeGoals.length >= MAX_FREE_SAVINGS_GOALS) {
+    notificationStore.openProModal({
+      featureTitle: `Batas Maksimal ${MAX_FREE_SAVINGS_GOALS} Rencana Tabungan`,
+      featureDescription: `Pengguna paket Free hanya dapat menambahkan maksimal ${MAX_FREE_SAVINGS_GOALS} rencana tabungan aktif. Berlangganan SisaUang Pro untuk menambahkan rencana tabungan tanpa batas.`,
+      limitSummary: `${savingsStore.activeGoals.length} / ${MAX_FREE_SAVINGS_GOALS} Tabungan Aktif`,
+    });
+    return;
+  }
   editingGoalId.value = null;
   goalErrorMsg.value = null;
   goalName.value = '';
@@ -740,6 +749,13 @@ async function handleSaveProgress() {
         >
           <Plus class="w-4 h-4 shrink-0" />
           <span>Tambah Tabungan</span>
+          <span
+            v-if="!authStore.isProUser && savingsStore.activeGoals.length >= MAX_FREE_SAVINGS_GOALS"
+            class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-extrabold uppercase tracking-wider"
+          >
+            <Crown class="w-3 h-3 shrink-0" />
+            <span>PRO</span>
+          </span>
         </button>
       </div>
     </div>
@@ -788,11 +804,19 @@ async function handleSaveProgress() {
           <div class="text-2xl sm:text-3xl font-money font-bold tracking-tight text-teal-600 dark:text-teal-400 truncate">
             {{ themeStore.formatMoney(savingsStore.totalSavingsBalance) }}
           </div>
-          <p class="text-[11px] text-slate-500 dark:text-slate-400">
-            Tersimpan di {{ savingsStore.activeGoals.length }} rencana tabungan
-            <template v-if="savingsStore.totalTargetAmount > 0">
-              · Target total {{ themeStore.formatMoney(savingsStore.totalTargetAmount) }}
-            </template>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-1.5">
+            <span>
+              Tersimpan di {{ savingsStore.activeGoals.length }}{{ !authStore.isProUser ? ` / ${MAX_FREE_SAVINGS_GOALS}` : '' }} rencana tabungan
+              <template v-if="savingsStore.totalTargetAmount > 0">
+                · Target total {{ themeStore.formatMoney(savingsStore.totalTargetAmount) }}
+              </template>
+            </span>
+            <span
+              v-if="!authStore.isProUser"
+              class="px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[10px] font-sans font-semibold text-slate-600 dark:text-slate-400"
+            >
+              Paket Free (Maks. {{ MAX_FREE_SAVINGS_GOALS }})
+            </span>
           </p>
         </div>
       </div>
@@ -890,6 +914,13 @@ async function handleSaveProgress() {
         >
           <Plus class="w-4 h-4" />
           <span>Buat Tabungan Pertama</span>
+          <span
+            v-if="!authStore.isProUser && savingsStore.activeGoals.length >= MAX_FREE_SAVINGS_GOALS"
+            class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-extrabold uppercase tracking-wider"
+          >
+            <Crown class="w-3 h-3 shrink-0" />
+            <span>PRO</span>
+          </span>
         </button>
       </div>
     </div>

@@ -34,6 +34,7 @@ import type {
 const CACHE_KEY_PREFIX = 'su_savings_cache_';
 const DELETED_KEY_PREFIX = 'su_deleted_savings_';
 const CACHE_TTL_MS = 5 * 60 * 1000;
+export const MAX_FREE_SAVINGS_GOALS = 1;
 
 export const useSavingsStore = defineStore('savings', () => {
   const goals = ref<SavingsGoalItem[]>([]);
@@ -532,9 +533,18 @@ export const useSavingsStore = defineStore('savings', () => {
       )
     ).sort((a, b) => a - b);
 
-    const isEdit = Boolean(payload.id);
     const id = payload.id ? sanitizeId(payload.id) : sanitizeId(`sav_${Date.now()}`);
-    const existing = isEdit ? goals.value.find((g) => g.id === id) : undefined;
+    const existing = payload.id ? goals.value.find((g) => g.id === id) : undefined;
+    const isEdit = Boolean(payload.id && existing);
+
+    if (!isEdit && !authStore.isProUser && activeGoals.value.length >= MAX_FREE_SAVINGS_GOALS) {
+      notify.openProModal({
+        featureTitle: `Batas Maksimal ${MAX_FREE_SAVINGS_GOALS} Rencana Tabungan`,
+        featureDescription: `Pengguna paket Free hanya dapat menambahkan maksimal ${MAX_FREE_SAVINGS_GOALS} rencana tabungan aktif. Berlangganan SisaUang Pro untuk menambahkan rencana tabungan tanpa batas.`,
+        limitSummary: `${activeGoals.value.length} / ${MAX_FREE_SAVINGS_GOALS} Tabungan Aktif`,
+      });
+      return null;
+    }
 
     const goalItem: SavingsGoalItem = {
       id,
