@@ -18,6 +18,9 @@ import {
   collection as serverFsCollection,
   getDocs as serverFsGetDocs,
   setDoc as serverFsSetDoc,
+  getCountFromServer as serverFsGetCountFromServer,
+  query as serverFsQuery,
+  limit as serverFsLimit,
 } from 'firebase/firestore';
 import {
   getAuth as getServerAuth,
@@ -225,6 +228,7 @@ interface OtpChallenge {
   code: string;
   expiresAt: number;
   attempts: number;
+  lastSentAt?: number;
 }
 
 const nowIso = () => new Date().toISOString();
@@ -290,13 +294,22 @@ function savePersistedUsersCache() {
 
 loadPersistedUsersCache();
 
-async function syncUsersFromFirestore(_force = false): Promise<number> {
+let hasInitialUsersSyncCompleted = usersStore.size > 1;
+let lastUsersSyncAt = 0;
+
+async function syncUsersFromFirestore(force = false): Promise<number> {
   if (!serverDb || !serverAuth) return usersStore.size;
+  const now = Date.now();
+  if (!force && lastUsersSyncAt > 0 && now - lastUsersSyncAt < 60_000) {
+    return usersStore.size;
+  }
+  lastUsersSyncAt = now;
   try {
     if (!serverAuth.currentUser) {
       await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
     }
     const snap = await serverFsGetDocs(serverFsCollection(serverDb, 'users'));
+    hasInitialUsersSyncCompleted = true;
     if (!snap || snap.empty) return usersStore.size;
 
     const tsToIso = (val: any): string => {
@@ -361,8 +374,10 @@ async function syncUsersFromFirestore(_force = false): Promise<number> {
   }
 }
 
-// Initial sync on server start (background)
-void syncUsersFromFirestore();
+// Initial sync on server start ONLY if local persisted cache does not already have users
+if (!hasInitialUsersSyncCompleted) {
+  void syncUsersFromFirestore();
+}
 
 const LOGS_CACHE_FILE = path.join(__dirname, '.sisa_uang_logs_cache.json');
 const activityLogs: ServerActivityLog[] = [];
@@ -755,9 +770,111 @@ async function syncSavingsToPeer(
   }
 }
 
+const ADMIN_TOKENS_CACHE_FILE = path.join(__dirname, '.sisa_uang_admin_tokens.json');
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000; // Minimum 60s between SMTP OTP dispatches per email
+const OTP_RATE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes rate-limit window
+const OTP_MAX_SENDS_PER_WINDOW = 6;
+
 const otpChallenges = new Map<string, OtpChallenge>();
+const otpSendRateTracker = new Map<string, { count: number; windowStart: number }>();
 const verifiedAdminTokens = new Map<string, { email: string; verifiedAt: number }>();
 const failedLoginTracker = new Map<string, number>();
+
+function loadPersistedAdminTokens() {
+  try {
+    if (!fs.existsSync(ADMIN_TOKENS_CACHE_FILE)) return;
+    const raw = fs.readFileSync(ADMIN_TOKENS_CACHE_FILE, 'utf8');
+    const entries = JSON.parse(raw);
+    const MAX_TOKEN_AGE_MS = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    if (Array.isArray(entries)) {
+      for (const item of entries) {
+        if (
+          item &&
+          typeof item.token === 'string' &&
+          typeof item.email === 'string' &&
+          typeof item.verifiedAt === 'number' &&
+          now - item.verifiedAt <= MAX_TOKEN_AGE_MS
+        ) {
+          verifiedAdminTokens.set(item.token, {
+            email: item.email.toLowerCase(),
+            verifiedAt: item.verifiedAt,
+          });
+        }
+      }
+    }
+  } catch {
+    // Ignore token cache read error
+  }
+}
+
+function savePersistedAdminTokens() {
+  try {
+    const MAX_TOKEN_AGE_MS = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const list: { token: string; email: string; verifiedAt: number }[] = [];
+    for (const [token, val] of verifiedAdminTokens.entries()) {
+      if (now - val.verifiedAt <= MAX_TOKEN_AGE_MS) {
+        list.push({ token, email: val.email, verifiedAt: val.verifiedAt });
+      } else {
+        verifiedAdminTokens.delete(token);
+      }
+    }
+    fs.writeFileSync(ADMIN_TOKENS_CACHE_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch {
+    // Ignore token cache write error
+  }
+}
+
+loadPersistedAdminTokens();
+
+function checkOtpDispatchEligibility(emailRaw: string): {
+  allowed: boolean;
+  reusedChallenge?: OtpChallenge;
+  cooldownRemainingSec: number;
+  rateLimited?: boolean;
+} {
+  const now = Date.now();
+  const existing = otpChallenges.get(emailRaw);
+  if (existing && now < existing.expiresAt && existing.lastSentAt) {
+    const elapsed = now - existing.lastSentAt;
+    if (elapsed < OTP_RESEND_COOLDOWN_MS) {
+      return {
+        allowed: false,
+        reusedChallenge: existing,
+        cooldownRemainingSec: Math.max(1, Math.ceil((OTP_RESEND_COOLDOWN_MS - elapsed) / 1000)),
+      };
+    }
+  }
+
+  const rate = otpSendRateTracker.get(emailRaw);
+  if (rate) {
+    if (now - rate.windowStart > OTP_RATE_WINDOW_MS) {
+      otpSendRateTracker.set(emailRaw, { count: 0, windowStart: now });
+    } else if (rate.count >= OTP_MAX_SENDS_PER_WINDOW) {
+      const waitSec = Math.max(1, Math.ceil((OTP_RATE_WINDOW_MS - (now - rate.windowStart)) / 1000));
+      return {
+        allowed: false,
+        cooldownRemainingSec: waitSec,
+        rateLimited: true,
+      };
+    }
+  } else {
+    otpSendRateTracker.set(emailRaw, { count: 0, windowStart: now });
+  }
+
+  return { allowed: true, cooldownRemainingSec: 0 };
+}
+
+function recordOtpSentRate(emailRaw: string) {
+  const now = Date.now();
+  const rate = otpSendRateTracker.get(emailRaw);
+  if (!rate || now - rate.windowStart > OTP_RATE_WINDOW_MS) {
+    otpSendRateTracker.set(emailRaw, { count: 1, windowStart: now });
+  } else {
+    rate.count += 1;
+  }
+}
 
 function issueSuperAdminToken(email: string): string {
   const adminToken = crypto.randomBytes(24).toString('hex');
@@ -765,6 +882,7 @@ function issueSuperAdminToken(email: string): string {
     email: email.toLowerCase(),
     verifiedAt: Date.now(),
   });
+  savePersistedAdminTokens();
   return adminToken;
 }
 
@@ -1131,6 +1249,7 @@ async function startServer() {
     const MAX_TOKEN_AGE_MS = 24 * 60 * 60 * 1000;
     if (Date.now() - session.verifiedAt > MAX_TOKEN_AGE_MS) {
       verifiedAdminTokens.delete(adminToken);
+      savePersistedAdminTokens();
       appendLog(
         'admin_vuedevo_01',
         session.email,
@@ -1148,6 +1267,7 @@ async function startServer() {
     const sessionEmail = session.email.toLowerCase();
     if (sessionEmail !== SUPER_ADMIN_EMAIL && sessionEmail !== WORKSPACE_ADMIN_EMAIL) {
       verifiedAdminTokens.delete(adminToken);
+      savePersistedAdminTokens();
       res.status(403).json({
         error: 'Akses ditolak: Identitas akun tidak memiliki hak akses Super Admin.',
       });
@@ -1168,6 +1288,7 @@ async function startServer() {
       firestoreProject: 'sisa-uang',
       exchangeRateUsdToIdr: 15850,
       timestamp: nowIso(),
+      serverTimeMs: Date.now(),
     });
   });
 
@@ -1268,16 +1389,48 @@ async function startServer() {
       }
       savePersistedUsersCache();
 
-      // Generate 6-digit email verification code exclusively for Super Admin
+      // Generate 6-digit email verification code exclusively for Super Admin (protected by cooldown & rate limit)
+      const recipientEmail = (adminUser.email || targetEmailForOtp).trim().toLowerCase();
+      const eligibility = checkOtpDispatchEligibility(recipientEmail);
+
+      if (!eligibility.allowed && eligibility.reusedChallenge) {
+        res.json({
+          user: sanitizeUser(adminUser),
+          requiresOtp: true,
+          otpVerified: false,
+          otpDispatch: {
+            email: recipientEmail,
+            expiresAt: eligibility.reusedChallenge.expiresAt,
+            sent: true,
+            smtpSent: true,
+            reusedExisting: true,
+            cooldownRemainingSec: eligibility.cooldownRemainingSec,
+            smtpError: null,
+            smtpMessageId: null,
+            fallbackCode: eligibility.reusedChallenge.code,
+            message: `Kode OTP sebelumnya masih berlaku dan telah dikirim ke ${recipientEmail}. Tunggu ${eligibility.cooldownRemainingSec} detik untuk mengirim ulang.`,
+          },
+        });
+        return;
+      }
+
+      if (!eligibility.allowed && eligibility.rateLimited) {
+        res.status(429).json({
+          error: `Terlalu banyak permintaan kode OTP. Silakan tunggu sekitar ${Math.ceil(eligibility.cooldownRemainingSec / 60)} menit sebelum mencoba lagi.`,
+        });
+        return;
+      }
+
       const otpCode = String(crypto.randomInt(100000, 999999));
       const expiresAt = Date.now() + 10 * 60 * 1000;
-      const recipientEmail = (adminUser.email || targetEmailForOtp).trim().toLowerCase();
       otpChallenges.set(recipientEmail, {
         email: recipientEmail,
         code: otpCode,
         expiresAt,
         attempts: 0,
+        lastSentAt: Date.now(),
       });
+      recordOtpSentRate(recipientEmail);
 
       // Strict Security: DO NOT issue or return adminToken during initial login.
       // Admin token is ONLY minted in /api/auth/verify-otp after valid OTP code confirmation.
@@ -1332,6 +1485,7 @@ async function startServer() {
           expiresAt,
           sent: smtpSent,
           smtpSent,
+          cooldownRemainingSec: 60,
           smtpError,
           smtpMessageId,
           fallbackCode: otpCode,
@@ -1568,12 +1722,36 @@ async function startServer() {
     });
   });
 
-  // Request or Resend OTP specifically for Super Admin (vuedevo@gmail.com)
+  // Request or Resend OTP specifically for Super Admin (vuedevo@gmail.com) with strict cooldown & rate limiting
   app.post('/api/auth/request-otp', async (req: Request, res: Response) => {
     const emailRaw = String(req.body?.email || '').trim().toLowerCase();
     if (emailRaw !== SUPER_ADMIN_EMAIL && emailRaw !== WORKSPACE_ADMIN_EMAIL) {
       res.status(403).json({
         error: 'Verifikasi OTP email khusus hanya diberlakukan untuk akun Super Admin.',
+      });
+      return;
+    }
+
+    const eligibility = checkOtpDispatchEligibility(emailRaw);
+    if (!eligibility.allowed && eligibility.reusedChallenge) {
+      res.json({
+        sent: true,
+        smtpSent: true,
+        reusedExisting: true,
+        cooldownRemainingSec: eligibility.cooldownRemainingSec,
+        smtpError: null,
+        smtpMessageId: null,
+        email: emailRaw,
+        expiresAt: eligibility.reusedChallenge.expiresAt,
+        fallbackCode: eligibility.reusedChallenge.code,
+        message: `Kode verifikasi sebelumnya masih aktif. Silakan periksa Inbox/Spam atau tunggu ${eligibility.cooldownRemainingSec} detik untuk mengirim ulang.`,
+      });
+      return;
+    }
+
+    if (!eligibility.allowed && eligibility.rateLimited) {
+      res.status(429).json({
+        error: `Terlalu banyak permintaan kode OTP dalam 15 menit terakhir. Tunggu sekitar ${Math.ceil(eligibility.cooldownRemainingSec / 60)} menit sebelum mencoba lagi.`,
       });
       return;
     }
@@ -1585,7 +1763,9 @@ async function startServer() {
       code: otpCode,
       expiresAt,
       attempts: 0,
+      lastSentAt: Date.now(),
     });
+    recordOtpSentRate(emailRaw);
 
     let smtpSent = false;
     let smtpError: string | null = null;
@@ -1632,6 +1812,7 @@ async function startServer() {
     res.json({
       sent: smtpSent,
       smtpSent,
+      cooldownRemainingSec: 60,
       smtpError,
       smtpMessageId,
       email: emailRaw,
@@ -4459,6 +4640,7 @@ async function startServer() {
   app.post('/api/admin/revoke-all-sessions', requireAdminMiddleware, (_req: Request, res: Response) => {
     const revokedCount = verifiedAdminTokens.size;
     verifiedAdminTokens.clear();
+    savePersistedAdminTokens();
     otpChallenges.clear();
     appendLog(
       'admin_vuedevo_01',
@@ -4486,8 +4668,8 @@ async function startServer() {
   });
 
   app.get('/api/admin/overview', requireAdminMiddleware, async (req: Request, res: Response) => {
-    if (usersStore.size <= 2 || req.query.sync === 'true' || req.query.force === 'true') {
-      await syncUsersFromFirestore(true);
+    if ((!hasInitialUsersSyncCompleted && usersStore.size <= 2) || req.query.sync === 'true' || req.query.force === 'true') {
+      await syncUsersFromFirestore(req.query.force === 'true' || req.query.sync === 'true');
     }
     const allUsers = Array.from(usersStore.values()).map(sanitizeUser);
     const totalUsers = allUsers.length;
@@ -4576,8 +4758,8 @@ async function startServer() {
 
   // Server-side Paginated Users Endpoint (/api/admin/users?page=1&limit=25&status=all&plan=all&search=...)
   app.get('/api/admin/users', requireAdminMiddleware, async (req: Request, res: Response) => {
-    if (usersStore.size <= 2 || req.query.sync === 'true' || req.query.force === 'true') {
-      await syncUsersFromFirestore(true);
+    if ((!hasInitialUsersSyncCompleted && usersStore.size <= 2) || req.query.sync === 'true' || req.query.force === 'true') {
+      await syncUsersFromFirestore(req.query.force === 'true' || req.query.sync === 'true');
     }
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
@@ -4992,7 +5174,22 @@ async function startServer() {
   // =========================================================================
   // Super Admin Database Explorer & Backup API (Server Proxy to Cloud Firestore)
   // =========================================================================
-  app.get('/api/admin/database/stats', requireAdminMiddleware, async (_req: Request, res: Response) => {
+  let cachedServerDbStats: {
+    data: { collectionName: string; label: string; description: string; docCount: number }[];
+    fetchedAt: number;
+  } | null = null;
+
+  app.get('/api/admin/database/stats', requireAdminMiddleware, async (req: Request, res: Response) => {
+    const force = req.query.force === 'true';
+    if (!force && cachedServerDbStats && Date.now() - cachedServerDbStats.fetchedAt < 60_000) {
+      res.json({
+        success: true,
+        stats: cachedServerDbStats.data,
+        cached: true,
+      });
+      return;
+    }
+
     const collectionDefs = [
       {
         collectionName: 'users',
@@ -5049,14 +5246,23 @@ async function startServer() {
         if (!serverAuth.currentUser) {
           await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
         }
-        for (const def of collectionDefs) {
-          try {
-            const snap = await serverFsGetDocs(serverFsCollection(serverDb, def.collectionName));
-            def.docCount = snap.size;
-          } catch {
-            // keep fallback count
-          }
-        }
+        await Promise.all(
+          collectionDefs.map(async (def) => {
+            try {
+              // Use aggregation count query (1 read per 1,000 docs instead of reading every document)
+              const countSnap = await serverFsGetCountFromServer(
+                serverFsCollection(serverDb, def.collectionName)
+              );
+              def.docCount = countSnap.data().count;
+            } catch {
+              // keep fallback count
+            }
+          })
+        );
+        cachedServerDbStats = {
+          data: collectionDefs,
+          fetchedAt: Date.now(),
+        };
       } catch (err: any) {
         console.warn('[Admin Database Stats Server Notice]', err?.message || err);
       }
@@ -5150,7 +5356,7 @@ async function startServer() {
 
   app.get('/api/admin/database/raw-docs', requireAdminMiddleware, async (req: Request, res: Response) => {
     const colName = String(req.query.collection || '').trim();
-    const limitCount = Math.min(500, Math.max(1, Number(req.query.limit) || 50));
+    const limitCount = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
     if (!colName) {
       res.status(400).json({ error: 'Parameter collection wajib disertakan.' });
       return;
@@ -5166,7 +5372,10 @@ async function startServer() {
         await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
       }
 
-      const snap = await serverFsGetDocs(serverFsCollection(serverDb, colName));
+      const [snap, countSnap] = await Promise.all([
+        serverFsGetDocs(serverFsQuery(serverFsCollection(serverDb, colName), serverFsLimit(limitCount))),
+        serverFsGetCountFromServer(serverFsCollection(serverDb, colName)).catch(() => null),
+      ]);
       const tsToIso = (val: any): any => {
         if (val === null || val === undefined) return val;
         if (typeof val === 'object') {
@@ -5184,7 +5393,7 @@ async function startServer() {
         return val;
       };
 
-      const docs = snap.docs.slice(0, limitCount).map((d) => {
+      const docs = snap.docs.map((d) => {
         const raw = d.data();
         return {
           __docId: d.id,
@@ -5196,7 +5405,7 @@ async function startServer() {
       res.json({
         success: true,
         collection: colName,
-        totalInCollection: snap.size,
+        totalInCollection: countSnap ? countSnap.data().count : docs.length,
         docs,
       });
     } catch (err: any) {
@@ -5256,7 +5465,10 @@ async function startServer() {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.json(computeCurrentBuildFingerprint());
+    res.json({
+      ...computeCurrentBuildFingerprint(),
+      serverTimeMs: Date.now(),
+    });
   });
 
   // =========================================================================

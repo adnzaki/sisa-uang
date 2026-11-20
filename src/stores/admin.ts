@@ -1799,6 +1799,9 @@ export const useAdminStore = defineStore('admin', () => {
    * using aggregation queries (`getCountFromServer`, 1 read per 1,000 docs instead of reading every document)
    * and caching the result in memory unless `forceRefresh` is true.
    */
+  let cachedCollectionStatsFetchedAt = 0;
+  const COLLECTION_STATS_TTL_MS = 60_000;
+
   async function fetchFirestoreCollectionStats(
     forceRefresh = false
   ): Promise<{ collectionName: string; label: string; description: string; docCount: number }[]> {
@@ -1808,7 +1811,11 @@ export const useAdminStore = defineStore('admin', () => {
       return [];
     }
 
-    if (!forceRefresh && cachedCollectionStats) {
+    if (
+      !forceRefresh &&
+      cachedCollectionStats &&
+      Date.now() - cachedCollectionStatsFetchedAt < COLLECTION_STATS_TTL_MS
+    ) {
       return cachedCollectionStats;
     }
 
@@ -1891,14 +1898,16 @@ export const useAdminStore = defineStore('admin', () => {
       useNotificationStore().notifyQuotaExceeded();
     } else {
       cachedCollectionStats = results;
+      cachedCollectionStatsFetchedAt = Date.now();
     }
 
     const allZero = results.every((r) => r.docCount === 0);
-    if (allZero) {
+    if (allZero && !quotaHit) {
       try {
         const { data } = await apiClient.get('/admin/database/stats');
         if (Array.isArray(data?.stats) && data.stats.length > 0) {
           cachedCollectionStats = data.stats;
+          cachedCollectionStatsFetchedAt = Date.now();
           return data.stats;
         }
       } catch {

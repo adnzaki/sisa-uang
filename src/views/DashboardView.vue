@@ -38,7 +38,7 @@ const isRefreshing = ref(false);
 async function syncDashboardPeriodTransactions(targetPeriod?: string) {
   const period = targetPeriod || financeStore.selectedPeriod;
   const uid = authStore.user?.uid;
-  if (!uid || uid === 'guest') return;
+  if (!uid || uid === 'guest' || !authStore.isAuthenticated) return;
 
   if (!period || period === 'all') {
     const curYear = String(new Date().getFullYear());
@@ -50,7 +50,7 @@ async function syncDashboardPeriodTransactions(targetPeriod?: string) {
 
 onMounted(async () => {
   const uid = authStore.user?.uid;
-  if (uid && uid !== 'guest') {
+  if (uid && uid !== 'guest' && authStore.isAuthenticated) {
     if (!financeStore.isSyncedWithFirestore) {
       await financeStore.initFinanceData(uid);
     }
@@ -70,9 +70,9 @@ watch(
 );
 
 watch(
-  () => authStore.user?.uid,
-  async (newUid) => {
-    if (newUid && newUid !== 'guest') {
+  () => [authStore.user?.uid, authStore.isAuthenticated] as const,
+  async ([newUid, isAuth]) => {
+    if (newUid && newUid !== 'guest' && isAuth) {
       if (!financeStore.isSyncedWithFirestore) {
         await financeStore.initFinanceData(newUid);
       }

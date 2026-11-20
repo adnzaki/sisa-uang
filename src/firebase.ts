@@ -59,7 +59,13 @@ googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 async function testFirestoreConnection() {
   try {
+    if (typeof sessionStorage !== 'undefined') {
+      if (sessionStorage.getItem('sisa_uang_fs_conn_ok') === '1') return;
+    }
     await getDocFromServer(doc(db, 'test', 'connection'));
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem('sisa_uang_fs_conn_ok', '1');
+    }
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.warn('Silakan periksa koneksi internet atau konfigurasi Firestore.');

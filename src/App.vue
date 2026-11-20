@@ -518,6 +518,9 @@ function startAutomationPoller() {
 const handleVisibilityChange = () => {
   if (document.visibilityState === 'visible') {
     startAutomationPoller();
+    if (authStore.isAuthenticated && authStore.user?.uid) {
+      void financeStore.checkAndSyncIfRemoteChanged(authStore.user.uid, false);
+    }
   } else {
     // Tab switched, browser minimized, or PWA sent to background -> STOP IMMEDIATELY
     stopAutomationPoller();
@@ -571,9 +574,10 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  () => authStore.user?.uid,
-  (uid, oldUid) => {
-    if (uid && authStore.isAuthenticated) {
+  () => [authStore.user?.uid, authStore.isAuthenticated] as const,
+  ([uid, isAuth], oldVal) => {
+    const [oldUid, oldAuth] = oldVal || [undefined, false];
+    if (uid && isAuth) {
       themeStore.loadReportSignatureConfig(uid);
       if (authStore.isSuperAdmin && authStore.canAccessControlPanel) {
         adminStore.startRealtimeMonitoring();
@@ -582,7 +586,7 @@ watch(
       }
       if (oldUid && oldUid !== uid) {
         void financeStore.refreshData(true);
-      } else {
+      } else if (!oldAuth || oldUid !== uid || !financeStore.isSyncedWithFirestore) {
         financeStore.initFinanceData(uid);
       }
       void Promise.all([

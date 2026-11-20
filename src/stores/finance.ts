@@ -8,6 +8,7 @@ import {
   getDocs,
   getDocsFromServer,
   setDoc,
+  updateDoc,
   getCountFromServer,
   query,
   where,
@@ -424,15 +425,93 @@ export const useFinanceStore = defineStore('finance', () => {
     }
   }
 
+  const SERVER_CLOCK_OFFSET_SESSION_KEY = 'sisa_uang_server_clock_offset_ms';
+  let serverClockOffsetMs = (() => {
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        const saved = sessionStorage.getItem(SERVER_CLOCK_OFFSET_SESSION_KEY);
+        if (saved !== null) return Number(saved) || 0;
+      }
+    } catch {
+      // Ignore storage errors
+    }
+    return 0;
+  })();
+  let serverClockCalibratedInSession = (() => {
+    try {
+      return typeof sessionStorage !== 'undefined' && sessionStorage.getItem(SERVER_CLOCK_OFFSET_SESSION_KEY) !== null;
+    } catch {
+      return false;
+    }
+  })();
+  let clockCalibrationPromise: Promise<void> | null = null;
+
+  async function calibrateServerClockOffset(): Promise<void> {
+    if (serverClockCalibratedInSession) return;
+    if (clockCalibrationPromise) return clockCalibrationPromise;
+    clockCalibrationPromise = (async () => {
+      try {
+        const reqStartedAt = Date.now();
+        const res = await fetch('/api/app-version', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const reqEndedAt = Date.now();
+        const serverMs = Number(data?.serverTimeMs);
+        if (Number.isFinite(serverMs) && serverMs > 0) {
+          const rttHalf = Math.floor((reqEndedAt - reqStartedAt) / 2);
+          serverClockOffsetMs = serverMs - (reqEndedAt - rttHalf);
+          serverClockCalibratedInSession = true;
+          try {
+            if (typeof sessionStorage !== 'undefined') {
+              sessionStorage.setItem(SERVER_CLOCK_OFFSET_SESSION_KEY, String(serverClockOffsetMs));
+            }
+          } catch {
+            // Ignore
+          }
+        }
+      } catch {
+        // Ignore offline/network error
+      } finally {
+        clockCalibrationPromise = null;
+      }
+    })();
+    return clockCalibrationPromise;
+  }
+
+  function getEstimatedServerNowMs(): number {
+    return Date.now() + serverClockOffsetMs;
+  }
+
   function touchUserSyncTokenInBatch(batch: WriteBatch, uid: string) {
     if (!uid || uid === 'guest') return;
     try {
-      batch.update(doc(db, 'users', uid), {
-        updatedAt: serverTimestamp(),
-      });
+      if (confirmedUserDocsInFirestore.has(uid)) {
+        batch.update(doc(db, 'users', uid), {
+          updatedAt: serverTimestamp(),
+        });
+      }
     } catch (e) {
       console.warn('[Finance] touchUserSyncToken notice:', e);
     }
+  }
+
+  async function bumpRemoteAndLocalSyncToken(uidInput?: string) {
+    const authStore = useAuthStore();
+    const uid = sanitizeId(uidInput || authStore.user?.uid || activeOwnerUid.value || '');
+    if (!uid || uid === 'guest') return;
+    try {
+      await ensureFirestoreSessionForUser(uid);
+      if (!confirmedUserDocsInFirestore.has(uid)) {
+        await ensureUserDocExistsForSyncToken(uid);
+      }
+      await updateDoc(doc(db, 'users', uid), {
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      // Non-fatal fallback
+    }
+    const tokenMs = getEstimatedServerNowMs();
+    saveUserSyncToken(uid, tokenMs);
   }
 
   function upsertBudgetDocInBatch(
@@ -533,7 +612,10 @@ export const useFinanceStore = defineStore('finance', () => {
         JSON.stringify(rawTransactions.value.slice(0, 250))
       );
       if (markSyncedNow) {
-        const tokenMs = remoteSyncTokenMs && remoteSyncTokenMs > 0 ? remoteSyncTokenMs : Date.now();
+        const tokenMs =
+          remoteSyncTokenMs && remoteSyncTokenMs > 0
+            ? remoteSyncTokenMs
+            : getEstimatedServerNowMs();
         localStorage.setItem(storageKey('sync_token_v4', uid), String(tokenMs));
         localStorage.setItem(storageKey('sync_token', uid), String(tokenMs));
         localStorage.setItem(storageKey('last_sync_at', uid), String(Date.now()));
@@ -848,6 +930,7 @@ export const useFinanceStore = defineStore('finance', () => {
   const txServerTotalPages = ref(1);
   const isTxServerPageLoading = ref(false);
   const loadedTransactionPeriods = new Set<string>();
+  const inFlightDateRangeQueries = new Map<string, Promise<void>>();
   const txCursorByFilterKey = new Map<string, Map<number, DocumentSnapshot>>();
   const txServerPageMemoryCache = new Map<string, CachedTxServerPageEntry>();
   const txFilteredPoolMemoryCache = new Map<
@@ -867,6 +950,46 @@ export const useFinanceStore = defineStore('finance', () => {
     search: '',
   };
 
+  const SYNC_TOKEN_TOLERANCE_MS = 3000;
+
+  function persistLoadedTransactionPeriods(uid: string, syncToken: number) {
+    if (!uid || syncToken <= 0) return;
+    try {
+      const ranges = Array.from(loadedTransactionPeriods).filter((k) =>
+        k.startsWith(`${uid}:`)
+      );
+      localStorage.setItem(
+        storageKey('loaded_periods_v1', uid),
+        JSON.stringify({ syncToken, ranges })
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  }
+
+  function restoreLoadedTransactionPeriods(uid: string, expectedSyncToken: number) {
+    if (!uid || expectedSyncToken <= 0) return;
+    try {
+      const raw = localStorage.getItem(storageKey('loaded_periods_v1', uid));
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { syncToken?: number; ranges?: string[] };
+      if (
+        parsed &&
+        typeof parsed.syncToken === 'number' &&
+        Math.abs(parsed.syncToken - expectedSyncToken) <= SYNC_TOKEN_TOLERANCE_MS &&
+        Array.isArray(parsed.ranges)
+      ) {
+        for (const r of parsed.ranges) {
+          if (typeof r === 'string' && r.startsWith(`${uid}:`)) {
+            loadedTransactionPeriods.add(r);
+          }
+        }
+      }
+    } catch {
+      // Ignore corrupt cache
+    }
+  }
+
   function getSavedUserSyncToken(uid: string): number {
     if (!uid) return 0;
     if (localStorage.getItem(storageKey('cache_version', uid)) !== CACHE_SCHEMA_VERSION) {
@@ -880,6 +1003,9 @@ export const useFinanceStore = defineStore('finance', () => {
     if (!uid || token <= 0) return;
     localStorage.setItem(storageKey('cache_version', uid), CACHE_SCHEMA_VERSION);
     localStorage.setItem(storageKey('sync_token_v4', uid), String(token));
+    if (loadedTransactionPeriods.size > 0) {
+      persistLoadedTransactionPeriods(uid, token);
+    }
   }
 
   function buildTxPageCacheKey(uid: string, filter = currentTxServerFilter): string {
@@ -899,7 +1025,7 @@ export const useFinanceStore = defineStore('finance', () => {
       const parsed = JSON.parse(raw) as Record<string, CachedTxServerPageEntry>;
       if (!parsed || typeof parsed !== 'object') return;
       for (const [k, entry] of Object.entries(parsed)) {
-        if (entry && Math.abs((entry.syncToken || 0) - expectedSyncToken) <= 2000) {
+        if (entry && Math.abs((entry.syncToken || 0) - expectedSyncToken) <= SYNC_TOKEN_TOLERANCE_MS) {
           txServerPageMemoryCache.set(k, entry);
         }
       }
@@ -954,9 +1080,11 @@ export const useFinanceStore = defineStore('finance', () => {
     txFilteredPoolMemoryCache.clear();
     txCountCacheByFilterKey.clear();
     loadedTransactionPeriods.clear();
+    inFlightDateRangeQueries.clear();
     if (uid) {
       try {
         localStorage.removeItem(storageKey('tx_page_cache_v1', uid));
+        localStorage.removeItem(storageKey('loaded_periods_v1', uid));
       } catch {
         // Ignore
       }
@@ -1027,14 +1155,18 @@ export const useFinanceStore = defineStore('finance', () => {
    */
   async function ensureTransactionsForDateRange(startIso: string, endIso: string) {
     const authStore = useAuthStore();
+    if (!authStore.isAuthenticated) return;
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || '');
     if (!uid || uid === 'guest') return;
 
     const rangeKey = `${uid}:${startIso}:${endIso}`;
     if (loadedTransactionPeriods.has(rangeKey)) return;
+    if (inFlightDateRangeQueries.has(rangeKey)) {
+      return inFlightDateRangeQueries.get(rangeKey);
+    }
 
     // If this date range is already fully covered by a previously loaded broader range,
-    // only skip if we actually have transaction records for this range or if the range was verified empty
+    // skip re-querying Firestore
     const isAlreadyCovered = Array.from(loadedTransactionPeriods).some((key) => {
       const parts = key.split(':');
       if (parts.length >= 3 && parts[0] === uid) {
@@ -1052,48 +1184,67 @@ export const useFinanceStore = defineStore('finance', () => {
       return;
     }
 
-    const canQuery = await ensureFirestoreSessionForUser(uid);
-    if (!canQuery) return;
+    const promise = (async () => {
+      const canQuery = await ensureFirestoreSessionForUser(uid);
+      if (!canQuery) return;
 
-    try {
-      const q = query(
-        collection(db, 'transactions'),
-        where('ownerId', '==', uid),
-        where('date', '>=', startIso),
-        where('date', '<=', `${endIso}\uf8ff`),
-        orderBy('date', 'desc')
-      );
-      const snap = await getDocs(q);
-      const fetched: TransactionItem[] = snap.docs
-        .map((d: any) => parseTransactionDoc(d.id, d.data()))
-        .filter((t: TransactionItem) => !t.deleted);
-
-      loadedTransactionPeriods.add(rangeKey);
-      mergeFetchedTransactionsIntoCache(fetched);
-      saveLocalSnapshot(uid, false);
-    } catch {
-      // Fallback if composite index is building
       try {
-        const fallbackQ = query(
+        const q = query(
           collection(db, 'transactions'),
-          where('ownerId', '==', uid)
+          where('ownerId', '==', uid),
+          where('date', '>=', startIso),
+          where('date', '<=', `${endIso}\uf8ff`),
+          orderBy('date', 'desc'),
+          limit(300)
         );
-        const snap = await getDocs(fallbackQ);
+        const snap = await getDocs(q);
         const fetched: TransactionItem[] = snap.docs
           .map((d: any) => parseTransactionDoc(d.id, d.data()))
-          .filter(
-            (t: TransactionItem) =>
-              !t.deleted &&
-              String(t.date || '') >= startIso &&
-              String(t.date || '') <= `${endIso}\uf8ff`
-          );
+          .filter((t: TransactionItem) => !t.deleted);
 
         loadedTransactionPeriods.add(rangeKey);
         mergeFetchedTransactionsIntoCache(fetched);
         saveLocalSnapshot(uid, false);
+        const activeToken = getSavedUserSyncToken(uid);
+        if (activeToken > 0) {
+          persistLoadedTransactionPeriods(uid, activeToken);
+        }
       } catch {
-        // Ignore fallback error
+        // Bounded fallback (max 150 docs) if composite index is building - NEVER scan full history!
+        try {
+          const fallbackQ = query(
+            collection(db, 'transactions'),
+            where('ownerId', '==', uid),
+            limit(150)
+          );
+          const snap = await getDocs(fallbackQ);
+          const fetched: TransactionItem[] = snap.docs
+            .map((d: any) => parseTransactionDoc(d.id, d.data()))
+            .filter(
+              (t: TransactionItem) =>
+                !t.deleted &&
+                String(t.date || '') >= startIso &&
+                String(t.date || '') <= `${endIso}\uf8ff`
+            );
+
+          loadedTransactionPeriods.add(rangeKey);
+          mergeFetchedTransactionsIntoCache(fetched);
+          saveLocalSnapshot(uid, false);
+          const activeToken = getSavedUserSyncToken(uid);
+          if (activeToken > 0) {
+            persistLoadedTransactionPeriods(uid, activeToken);
+          }
+        } catch {
+          // Ignore fallback error
+        }
       }
+    })();
+
+    inFlightDateRangeQueries.set(rangeKey, promise);
+    try {
+      await promise;
+    } finally {
+      inFlightDateRangeQueries.delete(rangeKey);
     }
   }
 
@@ -1230,18 +1381,24 @@ export const useFinanceStore = defineStore('finance', () => {
           }
 
           let searchSnap;
+          const searchFetcher = forceServerReload ? getDocsFromServer : getDocs;
           try {
-            searchSnap = await getDocsFromServer(
-              query(collection(db, 'transactions'), ...searchConstraints, orderBy('date', 'desc'))
+            searchSnap = await searchFetcher(
+              query(
+                collection(db, 'transactions'),
+                ...searchConstraints,
+                orderBy('date', 'desc'),
+                limit(100)
+              )
             );
           } catch {
             try {
-              searchSnap = await getDocsFromServer(
-                query(collection(db, 'transactions'), ...searchConstraints)
+              searchSnap = await searchFetcher(
+                query(collection(db, 'transactions'), ...searchConstraints, limit(100))
               );
             } catch {
               searchSnap = await getDocs(
-                query(collection(db, 'transactions'), ...searchConstraints)
+                query(collection(db, 'transactions'), ...searchConstraints, limit(100))
               );
             }
           }
@@ -1922,14 +2079,13 @@ export const useFinanceStore = defineStore('finance', () => {
     let initialPage1Items: TransactionItem[] = [];
     const fetchInitialBoundedTransactions = async () => {
       try {
-        const page1Snap = await getDocs(
-          query(
-            collection(db, 'transactions'),
-            where('ownerId', '==', uid),
-            orderBy('date', 'desc'),
-            limit(25)
-          )
+        const qRecent = query(
+          collection(db, 'transactions'),
+          where('ownerId', '==', uid),
+          orderBy('date', 'desc'),
+          limit(25)
         );
+        const page1Snap = await getDocsFromServer(qRecent).catch(() => getDocs(qRecent));
 
         if (page1Snap.docs.length > 0) {
           const filterKey = `${uid}:all`;
@@ -1947,9 +2103,8 @@ export const useFinanceStore = defineStore('finance', () => {
         return page1Snap;
       } catch {
         // Fallback if composite index on (ownerId, date) is not yet available
-        const boundedSnap = await getDocs(
-          query(collection(db, 'transactions'), where('ownerId', '==', uid), limit(25))
-        );
+        const qFallback = query(collection(db, 'transactions'), where('ownerId', '==', uid), limit(25));
+        const boundedSnap = await getDocsFromServer(qFallback).catch(() => getDocs(qFallback));
         return boundedSnap;
       }
     };
@@ -2152,17 +2307,11 @@ export const useFinanceStore = defineStore('finance', () => {
    */
   let isCheckingSyncToken = false;
   let lastTokenCheckAt = 0;
-  const TOKEN_CHECK_COOLDOWN_MS = 5000; // 5s cooldown to prevent redundant token getDoc calls on quick double-clicks
+  const TOKEN_CHECK_COOLDOWN_MS = 15000; // 15s cooldown to protect Firestore reads while staying synchronized across devices
 
   /**
    * Cocokkan read token / timestamp pada perangkat lokal dan server Firestore.
-   * Hanya jika terdapat perbedaan timestamp (server lebih baru) barulah menarik data fresh!
-   * Event yang memicu:
-   * - berpindah antar halaman / menu
-   * - menambah / mengubah / menghapus data
-   * - mengklik tombol reload manual
-   * - membuka detail data
-   *
+   * Menggunakan `getDocFromServer` agar perubahan dari device lain (misal HP -> PC) selalu terdeteksi.
    * Biaya pemeriksaan: TEPAT 1 READ (hanya dokumen `/users/{uid}`).
    * Jika timestamp cocok / sama: 0 READ tambahan (seluruh data disajikan dari cache lokal).
    */
@@ -2171,6 +2320,7 @@ export const useFinanceStore = defineStore('finance', () => {
     force = false
   ): Promise<boolean> {
     const authStore = useAuthStore();
+    if (!authStore.isAuthenticated) return false;
     const uid = sanitizeId(uidInput || authStore.user?.uid || activeOwnerUid.value || '');
     if (!uid || uid === 'guest') return false;
 
@@ -2184,29 +2334,53 @@ export const useFinanceStore = defineStore('finance', () => {
     lastTokenCheckAt = now;
 
     try {
+      void calibrateServerClockOffset();
       const canQuery = await ensureFirestoreSessionForUser(uid);
       if (!canQuery) return false;
 
       const localSyncToken = getSavedUserSyncToken(uid);
-      const userSnap = await getDoc(doc(db, 'users', uid));
+      const userDocRef = doc(db, 'users', uid);
+      const userSnap = await getDocFromServer(userDocRef).catch(() => getDoc(userDocRef));
       if (!userSnap.exists()) return false;
 
+      confirmedUserDocsInFirestore.add(uid);
       const uData = userSnap.data();
       const remoteSyncToken = extractTimestampMillis(uData?.updatedAt || uData?.createdAt);
+
+      const diffMs =
+        remoteSyncToken > 0 && localSyncToken > 0
+          ? Math.abs(remoteSyncToken - localSyncToken)
+          : 0;
 
       // Cocokkan read token / timestamp pada perangkat lokal dan server:
       const hasDifference =
         force ||
         localSyncToken <= 0 ||
-        (remoteSyncToken > 0 && Math.abs(remoteSyncToken - localSyncToken) > 2000);
+        (remoteSyncToken > 0 && diffMs > SYNC_TOKEN_TOLERANCE_MS);
 
       if (hasDifference) {
         // Jika terdapat perbedaan, tarik data timestamp server ke perangkat lalu tarik data fresh
-        saveUserSyncToken(uid, remoteSyncToken > 0 ? remoteSyncToken : Date.now());
+        const effectiveRemoteToken = remoteSyncToken > 0 ? remoteSyncToken : getEstimatedServerNowMs();
+        saveUserSyncToken(uid, effectiveRemoteToken);
         invalidateServerPaginationCaches(uid);
-        await fetchAllCollectionsFromFirestore(uid, remoteSyncToken);
+        await fetchAllCollectionsFromFirestore(uid, effectiveRemoteToken);
         await fetchTransactionsServerPage(undefined, true, true);
+        try {
+          const [{ useSavingsStore }, { useAutomationStore }] = await Promise.all([
+            import('./savings'),
+            import('./automation'),
+          ]);
+          void useSavingsStore().loadSavings(uid, true);
+          void useAutomationStore().loadAutomations(uid, true);
+        } catch {
+          // Ignore optional dynamic store sync failure
+        }
         return true;
+      }
+
+      // Silently align slight sub-3s estimation drift onto exact server timestamp
+      if (remoteSyncToken > 0 && remoteSyncToken !== localSyncToken) {
+        saveUserSyncToken(uid, remoteSyncToken);
       }
 
       // Timestamp sama persis -> 0 read tambahan!
@@ -2374,15 +2548,19 @@ export const useFinanceStore = defineStore('finance', () => {
       // Ignore corrupt cache
     }
 
+    // Kick off non-blocking clock offset calibration for accurate local vs server token matching
+    void calibrateServerClockOffset();
+
     // Zero-read startup: If local cache is valid and refresh is not forced, serve immediately (0 Firestore reads!)
     if (hasRestoredLocalCache && !forceRefresh) {
       if (localSyncToken > 0) {
         restorePersistedTxPageCache(uid, localSyncToken);
+        restoreLoadedTransactionPeriods(uid, localSyncToken);
       }
       isSyncedWithFirestore.value = true;
       isLoading.value = false;
 
-      // Ensure transactions for active period are preloaded
+      // Ensure transactions for active period are preloaded ONLY if not already restored from valid period cache
       const activeTargetPeriod = selectedPeriod.value || getCurrentMonthPeriod();
       if (activeTargetPeriod && activeTargetPeriod !== 'all' && /^\d{4}-\d{2}$/.test(activeTargetPeriod)) {
         void ensureTransactionsForDateRange(`${activeTargetPeriod}-01`, `${activeTargetPeriod}-31`);
@@ -2441,18 +2619,24 @@ export const useFinanceStore = defineStore('finance', () => {
         const tokenMatches =
           remoteSyncToken > 0 &&
           localSyncToken > 0 &&
-          Math.abs(remoteSyncToken - localSyncToken) <= 2000;
+          Math.abs(remoteSyncToken - localSyncToken) <= SYNC_TOKEN_TOLERANCE_MS;
 
         // Jika cache lokal berhasil dimuat dan timestamp cocok, JANGAN TARIK KOLEKSI! (0 read tambahan).
         if (hasRestoredLocalCache && tokenMatches && !forceRefresh) {
+          if (remoteSyncToken !== localSyncToken) {
+            saveUserSyncToken(uid, remoteSyncToken);
+          }
           isSyncedWithFirestore.value = true;
           isLoading.value = false;
           return;
         }
 
-        // Jika cache kosong atau timestamp berbeda: simpan timestamp server lalu tarik data baru
-        saveUserSyncToken(uid, remoteSyncToken > 0 ? remoteSyncToken : Date.now());
-        await fetchAllCollectionsFromFirestore(uid, remoteSyncToken);
+        // Jika cache kosong atau timestamp berbeda: bersihkan periode terload lalu tarik data baru
+        invalidateServerPaginationCaches(uid);
+        const effectiveRemoteToken =
+          remoteSyncToken > 0 ? remoteSyncToken : getEstimatedServerNowMs();
+        saveUserSyncToken(uid, effectiveRemoteToken);
+        await fetchAllCollectionsFromFirestore(uid, effectiveRemoteToken);
         isLoading.value = false;
       } catch (err) {
         isLoading.value = false;
@@ -2492,10 +2676,23 @@ export const useFinanceStore = defineStore('finance', () => {
       localStorage.removeItem(storageKey('sync_token_v4', uid));
       localStorage.removeItem(storageKey('sync_token', uid));
       localStorage.removeItem(storageKey('tx_page_cache_v1', uid));
+      localStorage.removeItem(storageKey('loaded_periods_v1', uid));
 
       invalidateServerPaginationCaches(uid);
       await initFinanceData(uid, true);
       await fetchTransactionsServerPage(undefined, silent, true);
+      try {
+        const [{ useSavingsStore }, { useAutomationStore }] = await Promise.all([
+          import('./savings'),
+          import('./automation'),
+        ]);
+        await Promise.all([
+          useSavingsStore().loadSavings(uid, true),
+          useAutomationStore().loadAutomations(uid, true),
+        ]);
+      } catch {
+        // Ignore
+      }
 
       if (!silent) {
         useNotificationStore().notifySuccess(
@@ -4210,6 +4407,9 @@ export const useFinanceStore = defineStore('finance', () => {
 
     if (canQueryFirestore) {
       try {
+        if (!confirmedUserDocsInFirestore.has(uid)) {
+          await ensureUserDocExistsForSyncToken(uid);
+        }
         const batch = writeBatch(db);
         const firestoreTxData: Record<string, any> = {
           ownerId: uid,
@@ -6139,5 +6339,6 @@ export const useFinanceStore = defineStore('finance', () => {
     refreshData,
     loadRouteDataFromFirestore,
     ensureFirestoreSessionForUser,
+    bumpRemoteAndLocalSyncToken,
   };
 });

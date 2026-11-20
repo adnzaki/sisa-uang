@@ -5,6 +5,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  getDocsFromServer,
   setDoc,
   deleteDoc,
   query,
@@ -393,10 +394,10 @@ export const useAutomationStore = defineStore('automation', () => {
       }
     }
 
-    return await fetchAndSyncAutomations(uid);
+    return await fetchAndSyncAutomations(uid, forceRefresh);
   }
 
-  async function fetchAndSyncAutomations(uid: string): Promise<AutomationItem[]> {
+  async function fetchAndSyncAutomations(uid: string, forceServer = false): Promise<AutomationItem[]> {
     const financeStore = useFinanceStore();
     isLoading.value = true;
     try {
@@ -410,7 +411,9 @@ export const useAutomationStore = defineStore('automation', () => {
       let firestoreFetchSuccess = false;
       try {
         const q = query(collection(db, 'automations'), where('ownerId', '==', uid));
-        const snap = await getDocs(q);
+        const snap = forceServer
+          ? await getDocsFromServer(q).catch(() => getDocs(q))
+          : await getDocs(q);
         firestoreRules = snap.docs
           .map((d) => ({
             id: d.id,
@@ -713,6 +716,7 @@ export const useAutomationStore = defineStore('automation', () => {
       }
 
       await setDoc(doc(db, 'automations', id), docData, { merge: true });
+      await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch (err: any) {
       console.warn('Firestore saveAutomation notice:', err?.message || err);
       if (isFirestoreQuotaError(err)) {
@@ -791,6 +795,7 @@ export const useAutomationStore = defineStore('automation', () => {
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
       await deleteDoc(doc(db, 'automations', id));
+      await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch (err: any) {
       try {
         await setDoc(
@@ -802,6 +807,7 @@ export const useAutomationStore = defineStore('automation', () => {
           },
           { merge: true }
         );
+        await financeStore.bumpRemoteAndLocalSyncToken(uid);
       } catch (err2: any) {
         console.warn('Firestore delete notice:', err2?.message || err2);
       }
@@ -852,6 +858,7 @@ export const useAutomationStore = defineStore('automation', () => {
         },
         { merge: true }
       );
+      await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch (err: any) {
       console.warn('Firestore toggleActive notice:', err?.message || err);
     }

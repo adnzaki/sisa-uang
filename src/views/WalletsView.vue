@@ -29,6 +29,7 @@ async function handleSyncWallets() {
   isSyncing.value = true;
   try {
     await financeStore.loadRouteDataFromFirestore('/wallets', uid, true);
+    void savingsStore.loadSavings(uid, true);
     notificationStore.notifySuccess(
       'Saldo Berhasil Disinkronkan',
       'Data dompet dan saldo telah diperbarui langsung dari server.'
@@ -45,8 +46,6 @@ onMounted(async () => {
   if (uid && uid !== 'guest') {
     if (!financeStore.isSyncedWithFirestore) {
       await financeStore.initFinanceData(uid);
-    } else {
-      await financeStore.loadRouteDataFromFirestore('/wallets', uid, true);
     }
     if (savingsStore.goals.length === 0) {
       void savingsStore.loadSavings(uid);

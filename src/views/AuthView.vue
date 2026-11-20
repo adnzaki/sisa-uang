@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import {
@@ -50,38 +50,25 @@ const isSuperAdminAccountEmail = (targetEmail?: string | null) => {
 
 const isOtpStep = computed(
   () =>
-    authStore.requiresOtp ||
-    (route.query.step === 'otp' &&
-      isSuperAdminAccountEmail(authStore.user?.email) &&
-      !authStore.otpVerified)
+    Boolean(authStore.user) &&
+    isSuperAdminAccountEmail(authStore.user?.email) &&
+    !authStore.otpVerified &&
+    (authStore.requiresOtp || route.query.step === 'otp')
 );
 
 const isAddAccountMode = computed(() => route.query.mode === 'add-account');
-const isAutoDispatchingOtp = ref(false);
-const hasAutoDispatchedOtp = ref(false);
+const otpCooldownSec = ref(0);
+let otpCooldownTimer: ReturnType<typeof setInterval> | null = null;
 
-async function ensureOtpEmailDispatchedIfNeeded() {
-  if (
-    !isOtpStep.value ||
-    !authStore.user ||
-    !isSuperAdminAccountEmail(authStore.user.email) ||
-    authStore.otpVerified ||
-    authStore.otpDispatchInfo ||
-    hasAutoDispatchedOtp.value ||
-    isAutoDispatchingOtp.value ||
-    authStore.isLoading
-  ) {
+function refreshOtpCooldown() {
+  const dispatchedAt = authStore.otpDispatchInfo?.dispatchedAt || 0;
+  if (!dispatchedAt || authStore.otpDispatchInfo?.smtpSent === false) {
+    otpCooldownSec.value = 0;
     return;
   }
-  hasAutoDispatchedOtp.value = true;
-  isAutoDispatchingOtp.value = true;
-  try {
-    await authStore.requestSuperAdminOtp();
-  } catch {
-    // Error handled and exposed in store/UI
-  } finally {
-    isAutoDispatchingOtp.value = false;
-  }
+  const elapsedMs = Date.now() - dispatchedAt;
+  const remaining = Math.max(0, Math.ceil((60_000 - elapsedMs) / 1000));
+  otpCooldownSec.value = remaining;
 }
 
 function getAccountInitials(nameOrEmail: string): string {
@@ -99,6 +86,8 @@ async function handleQuickSwitchFromAuth(targetUid: string) {
 
 onMounted(() => {
   authStore.clearError();
+  refreshOtpCooldown();
+  otpCooldownTimer = setInterval(refreshOtpCooldown, 1000);
   if (
     authStore.isAuthenticated &&
     route.query.mode !== 'add-account' &&
@@ -106,19 +95,20 @@ onMounted(() => {
   ) {
     const target = (route.query.redirect as string) || (authStore.isSuperAdmin ? '/control-panel' : '/dashboard');
     router.replace(target);
-    return;
   }
-  void ensureOtpEmailDispatchedIfNeeded();
+});
+
+onBeforeUnmount(() => {
+  if (otpCooldownTimer) {
+    clearInterval(otpCooldownTimer);
+    otpCooldownTimer = null;
+  }
 });
 
 watch(
-  [isOtpStep, () => authStore.user?.email, () => authStore.otpDispatchInfo],
-  ([otpActive]) => {
-    if (!otpActive) {
-      hasAutoDispatchedOtp.value = false;
-      return;
-    }
-    void ensureOtpEmailDispatchedIfNeeded();
+  () => authStore.otpDispatchInfo,
+  () => {
+    refreshOtpCooldown();
   }
 );
 
@@ -228,8 +218,8 @@ async function handleVerifyOtp() {
 
 async function handleResendOtp() {
   try {
-    hasAutoDispatchedOtp.value = true;
     const res = await authStore.requestSuperAdminOtp();
+    refreshOtpCooldown();
     if (res.autoVerified || !authStore.requiresOtp) {
       const target = (route.query.redirect as string) || '/control-panel';
       router.push(target);
@@ -242,7 +232,7 @@ async function handleResendOtp() {
 async function cancelOtpAndLogout() {
   await authStore.logout();
   otpCode.value = '';
-  hasAutoDispatchedOtp.value = false;
+  otpCooldownSec.value = 0;
   router.replace('/auth');
 }
 </script>
@@ -325,7 +315,7 @@ async function cancelOtpAndLogout() {
 
         <!-- Real SMTP OTP Email Delivery Status Banner -->
         <div
-          v-if="isAutoDispatchingOtp || (authStore.isLoading && !authStore.otpDispatchInfo)"
+          v-if="authStore.isLoading && !authStore.otpDispatchInfo"
           class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 px-4 py-3 text-xs text-slate-600 dark:text-slate-300 flex items-center gap-2.5"
         >
           <RefreshCw class="w-4 h-4 animate-spin text-emerald-600 dark:text-emerald-400 shrink-0" />
@@ -350,6 +340,23 @@ async function cancelOtpAndLogout() {
           Kode OTP telah dikirim ke
           <strong class="font-mono">{{ authStore.otpDispatchInfo.email }}</strong>.
           Periksa folder <strong>Inbox</strong> atau <strong>Spam</strong> Anda (berlaku 10 menit).
+        </div>
+        <div
+          v-else
+          class="rounded-2xl border border-amber-200/90 dark:border-amber-900/60 bg-amber-50/70 dark:bg-amber-950/30 px-4 py-3 text-xs text-amber-800 dark:text-amber-200 space-y-2.5"
+        >
+          <p class="leading-relaxed">
+            Untuk keamanan Super Admin, kode OTP hanya dikirim saat Anda memintanya secara eksplisit. Jika Anda belum memiliki kode OTP aktif, klik tombol di bawah untuk mengirim kode ke email.
+          </p>
+          <button
+            type="button"
+            :disabled="authStore.isLoading"
+            class="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            @click="handleResendOtp"
+          >
+            <Mail class="w-3.5 h-3.5" />
+            <span>Kirim Kode OTP ke Email</span>
+          </button>
         </div>
 
         <form class="space-y-4" @submit.prevent="handleVerifyOtp">
@@ -387,12 +394,14 @@ async function cancelOtpAndLogout() {
           </button>
           <button
             type="button"
-            :disabled="authStore.isLoading"
+            :disabled="authStore.isLoading || otpCooldownSec > 0"
             class="min-h-[40px] flex items-center gap-1.5 font-medium text-emerald-600 dark:text-emerald-400 hover:underline disabled:opacity-50"
             @click="handleResendOtp"
           >
             <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': authStore.isLoading }" />
-            <span>{{ t('auth.resendOtpBtn') }}</span>
+            <span>
+              {{ otpCooldownSec > 0 ? `${t('auth.resendOtpBtn')} (${otpCooldownSec}s)` : t('auth.resendOtpBtn') }}
+            </span>
           </button>
         </div>
       </div>

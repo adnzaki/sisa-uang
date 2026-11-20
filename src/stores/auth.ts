@@ -193,6 +193,43 @@ export interface OtpDispatchInfo {
   smtpMessageId?: string | null;
   fallbackCode?: string;
   autoVerified?: boolean;
+  reusedExisting?: boolean;
+  cooldownRemainingSec?: number;
+  dispatchedAt?: number;
+}
+
+const OTP_DISPATCH_SESSION_KEY = 'sisa_uang_otp_dispatch_info_v1';
+
+function saveOtpDispatchToSessionStorage(info: OtpDispatchInfo | null) {
+  try {
+    if (typeof window === 'undefined' || !window.sessionStorage) return;
+    if (!info) {
+      sessionStorage.removeItem(OTP_DISPATCH_SESSION_KEY);
+      return;
+    }
+    sessionStorage.setItem(OTP_DISPATCH_SESSION_KEY, JSON.stringify(info));
+  } catch {
+    // Ignore sessionStorage error
+  }
+}
+
+function loadOtpDispatchFromSessionStorage(email?: string | null): OtpDispatchInfo | null {
+  try {
+    if (typeof window === 'undefined' || !window.sessionStorage) return null;
+    const raw = sessionStorage.getItem(OTP_DISPATCH_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as OtpDispatchInfo;
+    if (!parsed || !parsed.expiresAt || Date.now() >= parsed.expiresAt) {
+      sessionStorage.removeItem(OTP_DISPATCH_SESSION_KEY);
+      return null;
+    }
+    if (email && parsed.email && parsed.email.toLowerCase() !== email.toLowerCase()) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 export interface DeviceSessionInfo {
@@ -303,7 +340,7 @@ export const useAuthStore = defineStore('auth', () => {
   // Super Admin 2FA Email OTP state (exclusively for vuedevo@gmail.com)
   const requiresOtp = ref(false);
   const otpVerified = ref(localStorage.getItem(OTP_VERIFIED_KEY) === 'true');
-  const otpDispatchInfo = ref<OtpDispatchInfo | null>(null);
+  const otpDispatchInfo = ref<OtpDispatchInfo | null>(loadOtpDispatchFromSessionStorage());
 
   const currentDeviceSession = computed(
     () =>
@@ -365,7 +402,12 @@ export const useAuthStore = defineStore('auth', () => {
     });
   }
 
-  const isAuthenticated = computed(() => !!user.value && user.value.status === 'active');
+  const isAuthenticated = computed(
+    () =>
+      !!user.value &&
+      user.value.status === 'active' &&
+      !(requiresOtp.value && !otpVerified.value)
+  );
   const isSuperAdmin = computed(
     () =>
       !!user.value &&
@@ -753,6 +795,9 @@ export const useAuthStore = defineStore('auth', () => {
       requiresOtp.value = false;
     } else if (isTargetSuperAdmin) {
       nextUser.role = 'user';
+      // Reuse any non-expired dispatch info for this email from sessionStorage; never auto-send without explicit user action
+      otpDispatchInfo.value = loadOtpDispatchFromSessionStorage(nextUser.email);
+    } else {
       otpDispatchInfo.value = null;
     }
     localStorage.setItem(OTP_VERIFIED_KEY, otpVerified.value ? 'true' : 'false');
@@ -1284,14 +1329,14 @@ export const useAuthStore = defineStore('auth', () => {
           const storedOtpVerified = localStorage.getItem(OTP_VERIFIED_KEY) === 'true';
 
           if (isAdminAccount) {
-            // Strict: Super Admin access is ONLY valid if an authentic server token and verified OTP are present
+            // Strict: Super Admin access is ONLY valid if an authentic server token and verified OTP are present.
+            // If missing on app boot, demote silently to regular user session WITHOUT forcing an unsolicited OTP flow.
             if (!storedToken || !storedOtpVerified) {
-              requiresOtp.value = true;
+              requiresOtp.value = false;
               otpVerified.value = false;
               localStorage.setItem(OTP_VERIFIED_KEY, 'false');
               localStorage.removeItem('sisa_uang_admin_token');
               setApiAdminContext(null, null);
-              // Demote role to regular user for this unverified session
               parsed.role = 'user';
               user.value = parsed;
               localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(parsed));
@@ -1331,7 +1376,6 @@ export const useAuthStore = defineStore('auth', () => {
         purgeForeignLocalStorage();
         return;
       }
-      localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
 
       if (fbUser && !fbUser.isAnonymous) {
         if (user.value || isRegisteringInProgress) {
@@ -1341,9 +1385,19 @@ export const useAuthStore = defineStore('auth', () => {
 
         const fbEmail = (fbUser.email || '').toLowerCase();
         const isFbSuperAdmin = fbEmail === SUPER_ADMIN_EMAIL || fbEmail === WORKSPACE_ADMIN_EMAIL;
+        const hasExplicitSavedSession = Boolean(localStorage.getItem(SESSION_STORAGE_KEY));
+        const storedToken = localStorage.getItem('sisa_uang_admin_token');
+        const storedOtp = localStorage.getItem(OTP_VERIFIED_KEY) === 'true';
 
-        // Ambient Firebase Auth session for Super Admin email: If token or OTP is missing,
-        // it will be demoted to role 'user' below so no unauthorized access to control panel is possible.
+        // CRITICAL: finance.ts establishes an ambient Firebase Auth session as Super Admin for Firestore reads.
+        // If there is NO active local session (`sisa_uang_active_user`) and NO verified admin token,
+        // NEVER auto-login into Super Admin or trigger 2FA OTP when visiting `/auth`!
+        if (isFbSuperAdmin && !hasExplicitSavedSession && (!storedToken || !storedOtp)) {
+          isReady.value = true;
+          return;
+        }
+
+        localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
 
         try {
           const profile = await ensureFirestoreUserDocument(fbUser);
@@ -1354,13 +1408,10 @@ export const useAuthStore = defineStore('auth', () => {
               (profile.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
                 profile.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL);
 
-            const storedToken = localStorage.getItem('sisa_uang_admin_token');
-            const storedOtp = localStorage.getItem(OTP_VERIFIED_KEY) === 'true';
-
             if (isProfileAdmin && (!storedToken || !storedOtp)) {
-              // Do not auto-elevate to admin
+              // Demote silently to regular user without triggering automatic OTP dispatch
               profile.role = 'user';
-              requiresOtp.value = true;
+              requiresOtp.value = false;
               otpVerified.value = false;
               localStorage.setItem(OTP_VERIFIED_KEY, 'false');
               localStorage.removeItem('sisa_uang_admin_token');
@@ -1646,7 +1697,13 @@ export const useAuthStore = defineStore('auth', () => {
           }
         }
 
-        otpDispatchInfo.value = backendData.otpDispatch || null;
+        otpDispatchInfo.value = backendData.otpDispatch
+          ? {
+              ...backendData.otpDispatch,
+              dispatchedAt: Date.now(),
+            }
+          : null;
+        saveOtpDispatchToSessionStorage(otpDispatchInfo.value);
         if (otpDispatchInfo.value?.smtpSent === false) {
           useNotificationStore().notifyError(
             'Pengiriman Email OTP Gagal',
@@ -1656,7 +1713,8 @@ export const useAuthStore = defineStore('auth', () => {
         } else if (otpDispatchInfo.value) {
           useNotificationStore().notifySuccess(
             'Kode OTP Terkirim ke Email',
-            `Masukkan 6-digit kode verifikasi yang dikirim ke ${loggedInUser.email}. Periksa folder Inbox atau Spam.`
+            otpDispatchInfo.value.message ||
+              `Masukkan 6-digit kode verifikasi yang dikirim ke ${loggedInUser.email}. Periksa folder Inbox atau Spam.`
           );
         }
         return { requiresOtp: true };
@@ -2226,6 +2284,32 @@ export const useAuthStore = defineStore('auth', () => {
     if (!user.value) {
       throw new Error('Tidak ada sesi pengguna aktif.');
     }
+
+    // Client-side 60s cooldown guard to prevent duplicate requests on rapid clicks/re-renders
+    const existingSessionInfo = otpDispatchInfo.value || loadOtpDispatchFromSessionStorage(user.value.email);
+    if (
+      existingSessionInfo &&
+      existingSessionInfo.dispatchedAt &&
+      Date.now() - existingSessionInfo.dispatchedAt < 60_000 &&
+      Date.now() < existingSessionInfo.expiresAt &&
+      existingSessionInfo.smtpSent !== false
+    ) {
+      const waitSec = Math.max(
+        1,
+        Math.ceil((60_000 - (Date.now() - existingSessionInfo.dispatchedAt)) / 1000)
+      );
+      otpDispatchInfo.value = {
+        ...existingSessionInfo,
+        reusedExisting: true,
+        cooldownRemainingSec: waitSec,
+      };
+      useNotificationStore().notifyInfo(
+        'Kode OTP Sudah Dikirim',
+        `Kode OTP sebelumnya masih aktif. Silakan cek Inbox/Spam atau tunggu ${waitSec} detik untuk mengirim ulang.`
+      );
+      return otpDispatchInfo.value;
+    }
+
     isLoading.value = true;
     error.value = null;
 
@@ -2237,19 +2321,33 @@ export const useAuthStore = defineStore('auth', () => {
       const smtpSent = data.smtpSent !== undefined ? Boolean(data.smtpSent) : Boolean(data.sent);
       requiresOtp.value = true;
       otpVerified.value = false;
+      const dispatchedAt =
+        data.reusedExisting && existingSessionInfo?.dispatchedAt
+          ? existingSessionInfo.dispatchedAt
+          : Date.now();
+
       otpDispatchInfo.value = {
         email: data.email || user.value.email,
         expiresAt: data.expiresAt,
         message: data.message,
         sent: smtpSent,
         smtpSent,
+        reusedExisting: Boolean(data.reusedExisting),
+        cooldownRemainingSec: Number(data.cooldownRemainingSec) || 60,
+        dispatchedAt,
         smtpError: data.smtpError || null,
         smtpMessageId: data.smtpMessageId || null,
         fallbackCode: data.fallbackCode,
         autoVerified: false,
       };
+      saveOtpDispatchToSessionStorage(otpDispatchInfo.value);
 
-      if (smtpSent) {
+      if (data.reusedExisting) {
+        useNotificationStore().notifyInfo(
+          'Kode OTP Masih Aktif',
+          data.message || `Silakan gunakan kode yang sudah dikirim ke ${otpDispatchInfo.value.email}.`
+        );
+      } else if (smtpSent) {
         useNotificationStore().notifySuccess(
           'Kode OTP Terkirim ke Email',
           `Kode verifikasi 6-digit telah dikirim ke ${otpDispatchInfo.value.email}. Periksa folder Inbox atau Spam.`
@@ -2294,6 +2392,8 @@ export const useAuthStore = defineStore('auth', () => {
         localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(promotedUser));
         otpVerified.value = true;
         requiresOtp.value = false;
+        otpDispatchInfo.value = null;
+        saveOtpDispatchToSessionStorage(null);
         localStorage.setItem(OTP_VERIFIED_KEY, 'true');
         setApiAdminContext(promotedUser.email, data.adminToken);
         upsertSavedAccount(promotedUser, data.adminToken);
@@ -2346,6 +2446,7 @@ export const useAuthStore = defineStore('auth', () => {
     requiresOtp.value = false;
     otpVerified.value = false;
     otpDispatchInfo.value = null;
+    saveOtpDispatchToSessionStorage(null);
 
     try {
       await firebaseSignOut(auth);
@@ -2357,28 +2458,53 @@ export const useAuthStore = defineStore('auth', () => {
   /**
    * Immediately revokes Super Admin elevation when the server admin token expires or is invalid.
    * Clears the admin token, sets otpVerified to false, signs out Firebase Auth so Firestore access is cut off,
-   * and triggers navigation away from protected admin routes (/control-panel, /database).
+   * and navigates away from protected admin routes (/control-panel, /database) via SPA router without hard reload.
    */
-  async function handleAdminSessionExpired(reason?: string) {
-    localStorage.removeItem('sisa_uang_admin_token');
-    localStorage.setItem(OTP_VERIFIED_KEY, 'false');
-    otpVerified.value = false;
-    requiresOtp.value = true;
-    otpDispatchInfo.value = null;
-    setApiAdminContext(user.value?.email || null, null);
-
-    // Sign out from Firebase Auth so client-side Firestore access is immediately revoked
+  let isHandlingAdminExpiry = false;
+  async function handleAdminSessionExpired(_reason?: string) {
+    if (isHandlingAdminExpiry) return;
+    isHandlingAdminExpiry = true;
     try {
-      await firebaseSignOut(auth);
-    } catch {
-      // Ignore
-    }
+      localStorage.removeItem('sisa_uang_admin_token');
+      localStorage.setItem(OTP_VERIFIED_KEY, 'false');
+      otpVerified.value = false;
+      setApiAdminContext(user.value?.email || null, null);
 
-    if (typeof window !== 'undefined' && window.location) {
-      const currentPath = window.location.pathname;
-      if (currentPath.includes('/database') || currentPath.includes('/control-panel')) {
-        window.location.href = `/auth?step=otp&redirect=${encodeURIComponent(currentPath)}`;
+      const currentPath =
+        typeof window !== 'undefined' && window.location ? window.location.pathname : '';
+      const isOnProtectedAdminRoute =
+        currentPath.includes('/database') || currentPath.includes('/control-panel');
+
+      if (isOnProtectedAdminRoute) {
+        requiresOtp.value = true;
+        // Preserve any non-expired OTP dispatch info in sessionStorage so AuthView doesn't treat it as a fresh empty state
+        otpDispatchInfo.value = loadOtpDispatchFromSessionStorage(user.value?.email);
+        try {
+          await firebaseSignOut(auth);
+        } catch {
+          // Ignore
+        }
+        try {
+          const { router } = await import('../router');
+          await router.replace({
+            path: '/auth',
+            query: { step: 'otp', redirect: currentPath },
+          });
+        } catch {
+          // Ignore router navigation error
+        }
+      } else {
+        // On non-admin routes (e.g. /auth or /dashboard), demote silently without trapping user in unsolicited OTP redirect
+        if (user.value && user.value.role === 'admin') {
+          user.value = { ...user.value, role: 'user' };
+          localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
+        }
+        requiresOtp.value = false;
       }
+    } finally {
+      setTimeout(() => {
+        isHandlingAdminExpiry = false;
+      }, 1500);
     }
   }
 

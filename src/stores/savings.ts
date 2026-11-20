@@ -4,6 +4,7 @@ import {
   collection,
   doc,
   getDocs,
+  getDocsFromServer,
   setDoc,
   deleteDoc,
   query,
@@ -403,9 +404,12 @@ export const useSavingsStore = defineStore('savings', () => {
       let fsSuccess = false;
 
       try {
+        const goalsQuery = query(collection(db, 'savings_goals'), where('ownerId', '==', uid));
+        const entriesQuery = query(collection(db, 'savings_entries'), where('ownerId', '==', uid));
+        const fetcher = forceRefresh ? getDocsFromServer : getDocs;
         const [goalsSnap, entriesSnap] = await Promise.all([
-          getDocs(query(collection(db, 'savings_goals'), where('ownerId', '==', uid))),
-          getDocs(query(collection(db, 'savings_entries'), where('ownerId', '==', uid))),
+          fetcher(goalsQuery).catch(() => getDocs(goalsQuery)),
+          fetcher(entriesQuery).catch(() => getDocs(entriesQuery)),
         ]);
         fsGoals = goalsSnap.docs
           .map((d) => ({ id: d.id, ...(d.data() as Omit<SavingsGoalItem, 'id'>) }))
@@ -603,6 +607,7 @@ export const useSavingsStore = defineStore('savings', () => {
         docData.snoozedUntil = null;
       }
       await setDoc(doc(db, 'savings_goals', id), docData, { merge: true });
+      await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch (err: any) {
       console.warn('Firestore saveGoal notice:', err?.message || err);
     }
@@ -664,6 +669,7 @@ export const useSavingsStore = defineStore('savings', () => {
       for (const e of relatedEntries) {
         await deleteDoc(doc(db, 'savings_entries', e.id)).catch(() => {});
       }
+      await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch {
       // Ignore
     }
@@ -831,6 +837,7 @@ export const useSavingsStore = defineStore('savings', () => {
           { merge: true }
         );
       }
+      await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch (err: any) {
       console.warn('Firestore recordProgress notice:', err?.message || err);
     }
@@ -885,6 +892,7 @@ export const useSavingsStore = defineStore('savings', () => {
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
       await deleteDoc(doc(db, 'savings_entries', entryId));
+      await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch {
       // Ignore
     }
