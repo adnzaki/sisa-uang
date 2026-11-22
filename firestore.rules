@@ -395,6 +395,98 @@ service cloud.firestore {
         (data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 40));
     }
 
+    function isValidDebt(data) {
+      return data.keys().hasAll(['ownerId', 'type', 'description', 'amount', 'walletId', 'walletName', 'date', 'reminderEnabled', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'type',
+          'description',
+          'amount',
+          'walletId',
+          'walletName',
+          'fundOwnerId',
+          'fundOwnerName',
+          'date',
+          'deadline',
+          'note',
+          'color',
+          'relatedTransactionId',
+          'reminderEnabled',
+          'reminderDays',
+          'reminderTime',
+          'reminderAmount',
+          'lastRemindedDate',
+          'lastSkippedDate',
+          'lastPushNotifiedDate',
+          'snoozedUntil',
+          'deleted',
+          'deletedAt',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.type is string && (data.type == 'debt' || data.type == 'receivable') &&
+        data.description is string && data.description.size() >= 1 && data.description.size() <= 150 &&
+        (data.amount is int || data.amount is float) && data.amount > 0 &&
+        data.walletId is string && data.walletId.size() >= 1 && data.walletId.size() <= 128 && data.walletId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.walletName is string && data.walletName.size() >= 1 && data.walletName.size() <= 60 &&
+        (!('fundOwnerId' in data) || data.fundOwnerId == null || (data.fundOwnerId is string && data.fundOwnerId.size() <= 128)) &&
+        (!('fundOwnerName' in data) || data.fundOwnerName == null || (data.fundOwnerName is string && data.fundOwnerName.size() <= 60)) &&
+        data.date is string && data.date.size() >= 8 && data.date.size() <= 30 &&
+        (!('deadline' in data) || data.deadline == null || (data.deadline is string && data.deadline.size() <= 30)) &&
+        (!('note' in data) || data.note == null || (data.note is string && data.note.size() <= 200)) &&
+        (!('color' in data) || data.color == null || (data.color is string && data.color.size() <= 20)) &&
+        (!('relatedTransactionId' in data) || data.relatedTransactionId == null || (data.relatedTransactionId is string && data.relatedTransactionId.size() <= 128)) &&
+        data.reminderEnabled is bool &&
+        (!('reminderDays' in data) || data.reminderDays == null || (data.reminderDays is list && data.reminderDays.size() <= 31)) &&
+        (!('reminderTime' in data) || data.reminderTime == null || (data.reminderTime is string && data.reminderTime.size() <= 10)) &&
+        (!('reminderAmount' in data) || data.reminderAmount == null || ((data.reminderAmount is int || data.reminderAmount is float) && data.reminderAmount >= 0)) &&
+        (!('lastRemindedDate' in data) || data.lastRemindedDate == null || (data.lastRemindedDate is string && data.lastRemindedDate.size() <= 40)) &&
+        (!('lastSkippedDate' in data) || data.lastSkippedDate == null || (data.lastSkippedDate is string && data.lastSkippedDate.size() <= 40)) &&
+        (!('lastPushNotifiedDate' in data) || data.lastPushNotifiedDate == null || (data.lastPushNotifiedDate is string && data.lastPushNotifiedDate.size() <= 40)) &&
+        (!('snoozedUntil' in data) || data.snoozedUntil == null || (data.snoozedUntil is string && data.snoozedUntil.size() <= 60)) &&
+        isValidSoftDelete(data) &&
+        (data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
+        (data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 40));
+    }
+
+    function isValidDebtEntry(data) {
+      return data.keys().hasAll(['ownerId', 'debtId', 'walletId', 'walletName', 'amount', 'date', 'note', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'debtId',
+          'debtDescription',
+          'debtType',
+          'walletId',
+          'walletName',
+          'fundOwnerId',
+          'fundOwnerName',
+          'amount',
+          'date',
+          'note',
+          'relatedTransactionId',
+          'deleted',
+          'deletedAt',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.debtId is string && data.debtId.size() >= 1 && data.debtId.size() <= 128 && data.debtId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        (!('debtDescription' in data) || data.debtDescription == null || (data.debtDescription is string && data.debtDescription.size() <= 150)) &&
+        (!('debtType' in data) || data.debtType == null || (data.debtType is string && (data.debtType == 'debt' || data.debtType == 'receivable'))) &&
+        data.walletId is string && data.walletId.size() >= 1 && data.walletId.size() <= 128 && data.walletId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.walletName is string && data.walletName.size() >= 1 && data.walletName.size() <= 60 &&
+        (!('fundOwnerId' in data) || data.fundOwnerId == null || (data.fundOwnerId is string && data.fundOwnerId.size() <= 128)) &&
+        (!('fundOwnerName' in data) || data.fundOwnerName == null || (data.fundOwnerName is string && data.fundOwnerName.size() <= 60)) &&
+        (data.amount is int || data.amount is float) && data.amount > 0 &&
+        data.date is string && data.date.size() >= 8 && data.date.size() <= 30 &&
+        data.note is string && data.note.size() <= 200 &&
+        (!('relatedTransactionId' in data) || data.relatedTransactionId == null || (data.relatedTransactionId is string && data.relatedTransactionId.size() <= 128)) &&
+        isValidSoftDelete(data) &&
+        (data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 40)) &&
+        (data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 40));
+    }
+
     // =========================================================================
     // Collection Rules
     // =========================================================================
@@ -954,6 +1046,114 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly([
               'savingsName',
               'type',
+              'walletId',
+              'walletName',
+              'fundOwnerId',
+              'fundOwnerName',
+              'amount',
+              'date',
+              'note',
+              'relatedTransactionId',
+              'deleted',
+              'deletedAt',
+              'updatedAt'
+            ]) &&
+            isNotBlocked()
+          ) ||
+          isAdmin()
+        );
+      allow delete: if isSignedIn() &&
+        isValidId(entryId) &&
+        (
+          (existing().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+    }
+
+    // 14. Debts & Receivables Collection (/debts/{debtId})
+    match /debts/{debtId} {
+      allow get: if isSignedIn() && isValidId(debtId) && (isAdmin() || (resource != null && resource.data.ownerId == request.auth.uid));
+      allow list: if isSignedIn() && (isAdmin() || resource.data.ownerId == request.auth.uid);
+      allow create: if isSignedIn() &&
+        isValidId(debtId) &&
+        isValidDebt(incoming()) &&
+        (incoming().createdAt == request.time || incoming().createdAt is timestamp || incoming().createdAt is string) &&
+        (incoming().updatedAt == request.time || incoming().updatedAt is timestamp || incoming().updatedAt is string) &&
+        (
+          (incoming().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+      allow update: if isSignedIn() &&
+        isValidId(debtId) &&
+        isValidDebt(incoming()) &&
+        (incoming().ownerId == existing().ownerId || isAdmin()) &&
+        (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
+        (incoming().updatedAt == request.time || incoming().updatedAt is timestamp || incoming().updatedAt is string) &&
+        (
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'type',
+              'description',
+              'amount',
+              'walletId',
+              'walletName',
+              'fundOwnerId',
+              'fundOwnerName',
+              'date',
+              'deadline',
+              'note',
+              'color',
+              'relatedTransactionId',
+              'reminderEnabled',
+              'reminderDays',
+              'reminderTime',
+              'reminderAmount',
+              'lastRemindedDate',
+              'lastSkippedDate',
+              'lastPushNotifiedDate',
+              'snoozedUntil',
+              'deleted',
+              'deletedAt',
+              'updatedAt'
+            ]) &&
+            isNotBlocked()
+          ) ||
+          isAdmin()
+        );
+      allow delete: if isSignedIn() &&
+        isValidId(debtId) &&
+        (
+          (existing().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+    }
+
+    // 15. Debt Settlement Entries Collection (/debt_entries/{entryId})
+    match /debt_entries/{entryId} {
+      allow get: if isSignedIn() && isValidId(entryId) && (isAdmin() || (resource != null && resource.data.ownerId == request.auth.uid));
+      allow list: if isSignedIn() && (isAdmin() || resource.data.ownerId == request.auth.uid);
+      allow create: if isSignedIn() &&
+        isValidId(entryId) &&
+        isValidDebtEntry(incoming()) &&
+        (incoming().createdAt == request.time || incoming().createdAt is timestamp || incoming().createdAt is string) &&
+        (incoming().updatedAt == request.time || incoming().updatedAt is timestamp || incoming().updatedAt is string) &&
+        (
+          (incoming().ownerId == request.auth.uid && isNotBlocked()) ||
+          isAdmin()
+        );
+      allow update: if isSignedIn() &&
+        isValidId(entryId) &&
+        isValidDebtEntry(incoming()) &&
+        (incoming().ownerId == existing().ownerId || isAdmin()) &&
+        (incoming().createdAt == existing().createdAt || (isAdmin() && incoming().createdAt == request.time)) &&
+        (incoming().updatedAt == request.time || incoming().updatedAt is timestamp || incoming().updatedAt is string) &&
+        (
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'debtDescription',
+              'debtType',
               'walletId',
               'walletName',
               'fundOwnerId',

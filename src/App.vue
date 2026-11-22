@@ -43,6 +43,7 @@ import {
   SlidersHorizontal,
   Wrench,
   Target,
+  HandCoins,
 } from 'lucide-vue-next';
 import { useAuthStore } from './stores/auth';
 import { useThemeStore, ThemeMode } from './stores/theme';
@@ -52,6 +53,7 @@ import { auth } from './firebase';
 import { useNotificationStore } from './stores/notification';
 import { useAutomationStore } from './stores/automation';
 import { useSavingsStore } from './stores/savings';
+import { useDebtsStore } from './stores/debts';
 import QuickTransactionModal from './components/QuickTransactionModal.vue';
 import AppModal from './components/AppModal.vue';
 import PWAInstallButton from './components/PWAInstallButton.vue';
@@ -60,6 +62,7 @@ import AppUpdateBanner from './components/AppUpdateBanner.vue';
 import ReleaseNotesModal from './components/ReleaseNotesModal.vue';
 import AutomationConfirmBanner from './components/AutomationConfirmBanner.vue';
 import SavingsReminderBanner from './components/SavingsReminderBanner.vue';
+import DebtReminderBanner from './components/DebtReminderBanner.vue';
 import InSiteCheckoutModal from './components/InSiteCheckoutModal.vue';
 import { scrollToPageTop, scrollToPageTopMultiFrame } from './utils/scroll';
 import { usePWA } from './composables/usePWA';
@@ -74,6 +77,7 @@ const adminStore = useAdminStore();
 const notificationStore = useNotificationStore();
 const automationStore = useAutomationStore();
 const savingsStore = useSavingsStore();
+const debtsStore = useDebtsStore();
 const { clientAppVersion, needRefresh, hasNewVersion } = usePWA();
 
 const mobileDrawerOpen = ref(false);
@@ -498,6 +502,7 @@ function startAutomationPoller() {
   // Trigger one immediate evaluation when app is active in foreground
   void automationStore.checkAndTriggerOnActivity();
   void savingsStore.checkAndTriggerReminders();
+  void debtsStore.checkAndTriggerReminders();
 
   // Interval ticks every 30 seconds ONLY while active in foreground
   automationTickerInterval = setInterval(() => {
@@ -509,6 +514,7 @@ function startAutomationPoller() {
     if (authStore.isAuthenticated && authStore.user?.uid && !authStore.isSuperAdmin) {
       void automationStore.checkAndTriggerOnActivity();
       void savingsStore.checkAndTriggerReminders();
+      void debtsStore.checkAndTriggerReminders();
     } else {
       stopAutomationPoller();
     }
@@ -592,6 +598,7 @@ watch(
       void Promise.all([
         automationStore.loadAutomations(uid),
         savingsStore.loadSavings(uid),
+        debtsStore.loadDebts(uid),
       ]).then(() => {
         if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
           startAutomationPoller();
@@ -605,6 +612,7 @@ watch(
       savingsStore.entries = [];
       savingsStore.pendingReminder = null;
       savingsStore.pendingQueue = [];
+      debtsStore.resetState();
     }
   },
   { immediate: true }
@@ -975,6 +983,9 @@ async function handleSubmitProPayment() {
     <!-- Global Scheduled Savings Reminder Banner -->
     <SavingsReminderBanner />
 
+    <!-- Global Scheduled Debt & Receivable Reminder Banner -->
+    <DebtReminderBanner />
+
     <!-- ===================================================================== -->
     <!-- GLOBAL FLOATING POPUP BANNER STACK (Success & Error Notifications)   -->
     <!-- ===================================================================== -->
@@ -1298,6 +1309,21 @@ async function handleSubmitProPayment() {
                   <div class="flex items-center gap-2.5 truncate min-w-0">
                     <Target class="w-3.5 h-3.5 shrink-0" />
                     <span class="truncate">{{ t('nav.savings') }}</span>
+                  </div>
+                </RouterLink>
+
+                <RouterLink
+                  to="/utilities/debts"
+                  class="min-h-[38px] flex items-center justify-between px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-colors"
+                  :class="
+                    route.path.startsWith('/utilities/debts')
+                      ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                  "
+                >
+                  <div class="flex items-center gap-2.5 truncate min-w-0">
+                    <HandCoins class="w-3.5 h-3.5 shrink-0" />
+                    <span class="truncate">{{ t('nav.debts') }}</span>
                   </div>
                 </RouterLink>
               </div>
@@ -2272,6 +2298,22 @@ async function handleSubmitProPayment() {
                       <span class="truncate">{{ t('nav.savings') }}</span>
                     </div>
                   </a>
+
+                  <a
+                    href="/utilities/debts"
+                    class="min-h-[40px] flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                    :class="
+                      route.path.startsWith('/utilities/debts')
+                        ? 'bg-emerald-600 text-white shadow-2xs font-semibold'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    "
+                    @click.prevent="navigateFromMobileDrawer('/utilities/debts')"
+                  >
+                    <div class="flex items-center gap-2.5 truncate min-w-0">
+                      <HandCoins class="w-4 h-4 shrink-0" />
+                      <span class="truncate">{{ t('nav.debts') }}</span>
+                    </div>
+                  </a>
                 </div>
               </div>
               
@@ -2722,6 +2764,14 @@ async function handleSubmitProPayment() {
               </div>
               <span>
                 <strong>Rencana Tabungan Tanpa Batas:</strong> Buat dan kelola target tabungan berencana beserta jadwal pengingatnya tanpa batas (Free maks. 1 tabungan).
+              </span>
+            </li>
+            <li class="flex items-start gap-2.5">
+              <div class="w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                <Check class="w-2.5 h-2.5 stroke-[3]" />
+              </div>
+              <span>
+                <strong>Hutang &amp; Piutang Tanpa Batas:</strong> Catat hutang &amp; piutang terintegrasi transaksi lengkap dengan pengingat cicilan (Free maks. 1 Hutang &amp; 1 Piutang).
               </span>
             </li>
           </ul>

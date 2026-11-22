@@ -5,6 +5,7 @@ import { useAuthStore } from '../stores/auth';
 import { useNotificationStore } from '../stores/notification';
 import { useAutomationStore } from '../stores/automation';
 import { useSavingsStore } from '../stores/savings';
+import { useDebtsStore } from '../stores/debts';
 import { useFinanceStore } from '../stores/finance';
 import { apiClient } from '../services/api';
 import DashboardView from '../views/DashboardView.vue';
@@ -19,6 +20,11 @@ import SettingsView from '../views/SettingsView.vue';
 import DatabaseManagementView from '../views/DatabaseManagementView.vue';
 import ControlPanelView from '../views/ControlPanelView.vue';
 import AuthView from '../views/AuthView.vue';
+import AutomationView from '../views/AutomationView.vue';
+import SavingsView from '../views/SavingsView.vue';
+import SavingsDetailView from '../views/SavingsDetailView.vue';
+import DebtsView from '../views/DebtsView.vue';
+import DebtDetailView from '../views/DebtDetailView.vue';
 
 /**
  * Dedicated Middleware for /control-panel and /database
@@ -177,7 +183,7 @@ export const router = createRouter({
     {
       path: '/utilities/automation',
       name: 'automation',
-      component: () => import('../views/AutomationView.vue'),
+      component: AutomationView,
       meta: { requiresAuth: true },
     },
     {
@@ -187,18 +193,34 @@ export const router = createRouter({
     {
       path: '/utilities/savings',
       name: 'savings',
-      component: () => import('../views/SavingsView.vue'),
+      component: SavingsView,
       meta: { requiresAuth: true },
     },
     {
       path: '/utilities/savings/:id',
       name: 'savings-detail',
-      component: () => import('../views/SavingsDetailView.vue'),
+      component: SavingsDetailView,
       meta: { requiresAuth: true },
     },
     {
       path: '/savings',
       redirect: '/utilities/savings',
+    },
+    {
+      path: '/utilities/debts',
+      name: 'debts',
+      component: DebtsView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/utilities/debts/:id',
+      name: 'debt-detail',
+      component: DebtDetailView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/debts',
+      redirect: '/utilities/debts',
     },
     {
       path: '/database',
@@ -308,6 +330,35 @@ router.afterEach((to) => {
 
     const savingsStore = useSavingsStore();
     void savingsStore.checkAndTriggerReminders();
+
+    const debtsStore = useDebtsStore();
+    void debtsStore.checkAndTriggerReminders();
   }
 });
+
+router.onError((error, to) => {
+  const message = error instanceof Error ? error.message : String(error || '');
+  const isDynamicImportError =
+    /Failed to fetch dynamically imported module|Importing a module script failed|ChunkLoadError|Loading chunk .* failed/i.test(
+      message
+    );
+  if (!isDynamicImportError || typeof window === 'undefined') {
+    return;
+  }
+
+  const reloadGuardKey = 'sisa_uang_router_chunk_reload_at';
+  try {
+    const lastReloadAt = Number(window.sessionStorage.getItem(reloadGuardKey) || '0');
+    if (Date.now() - lastReloadAt < 10000) {
+      return;
+    }
+    window.sessionStorage.setItem(reloadGuardKey, String(Date.now()));
+  } catch {
+    // Ignore sessionStorage errors
+  }
+
+  const targetPath = to?.fullPath || window.location.pathname + window.location.search + window.location.hash;
+  window.location.assign(targetPath);
+});
+
 

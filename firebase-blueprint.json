@@ -1021,6 +1021,257 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "Debt": {
+      "title": "Debt",
+      "description": "Catatan hutang atau piutang pengguna yang terintegrasi dengan transaksi dan pengingat pelunasan.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "User account UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "type": {
+          "type": "string",
+          "description": "Jenis catatan: debt (Hutang) atau receivable (Piutang)",
+          "enum": ["debt", "receivable"]
+        },
+        "description": {
+          "type": "string",
+          "description": "Deskripsi atau nama pihak hutang/piutang",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "amount": {
+          "type": "number",
+          "description": "Nominal pokok hutang atau piutang"
+        },
+        "walletId": {
+          "type": "string",
+          "description": "ID sumber dana (wallet) terkait pencatatan awal",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "walletName": {
+          "type": "string",
+          "description": "Snapshot nama sumber dana",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "fundOwnerId": {
+          "type": "string",
+          "description": "ID kepemilikan dana terkait pencatatan awal",
+          "maxLength": 128
+        },
+        "fundOwnerName": {
+          "type": "string",
+          "description": "Snapshot nama kepemilikan dana",
+          "maxLength": 60
+        },
+        "date": {
+          "type": "string",
+          "description": "Tanggal pencatatan transaksi awal (YYYY-MM-DD)",
+          "minLength": 8,
+          "maxLength": 30
+        },
+        "deadline": {
+          "type": "string",
+          "description": "Tanggal jatuh tempo / deadline pelunasan (YYYY-MM-DD)",
+          "maxLength": 30
+        },
+        "note": {
+          "type": "string",
+          "description": "Catatan tambahan opsional",
+          "maxLength": 200
+        },
+        "color": {
+          "type": "string",
+          "description": "Warna aksen visual kartu hutang/piutang",
+          "maxLength": 20
+        },
+        "relatedTransactionId": {
+          "type": "string",
+          "description": "ID transaksi awal (Penerimaan Hutang / Pemberian Utang) di koleksi transactions",
+          "maxLength": 128
+        },
+        "reminderEnabled": {
+          "type": "boolean",
+          "description": "Aktifkan pengingat cicilan/penagihan berjadwal"
+        },
+        "reminderDays": {
+          "type": "array",
+          "description": "Daftar tanggal pengingat setiap bulan (1-31)",
+          "items": { "type": "number" }
+        },
+        "reminderTime": {
+          "type": "string",
+          "description": "Jam pengingat (HH:mm)",
+          "maxLength": 10
+        },
+        "reminderAmount": {
+          "type": "number",
+          "description": "Saran nominal cicilan/penerimaan per pengingat"
+        },
+        "lastRemindedDate": {
+          "type": "string",
+          "description": "Tanggal terakhir pengingat ditangani",
+          "maxLength": 40
+        },
+        "lastSkippedDate": {
+          "type": "string",
+          "description": "Tanggal terakhir pengingat dilewati",
+          "maxLength": 40
+        },
+        "lastPushNotifiedDate": {
+          "type": "string",
+          "description": "Tanggal terakhir push notifikasi dikirim",
+          "maxLength": 40
+        },
+        "snoozedUntil": {
+          "type": "string",
+          "description": "ISO timestamp batas tunda pengingat",
+          "maxLength": 60
+        },
+        "deleted": {
+          "type": "boolean",
+          "description": "Soft-delete flag"
+        },
+        "deletedAt": {
+          "type": "string",
+          "description": "Soft-delete timestamp or null",
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "type",
+        "description",
+        "amount",
+        "walletId",
+        "walletName",
+        "date",
+        "reminderEnabled",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DebtEntry": {
+      "title": "DebtEntry",
+      "description": "Riwayat pencatatan cicilan hutang atau penerimaan pelunasan piutang.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "User account UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "debtId": {
+          "type": "string",
+          "description": "Parent Debt document ID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "debtDescription": {
+          "type": "string",
+          "description": "Snapshot deskripsi hutang/piutang",
+          "maxLength": 150
+        },
+        "debtType": {
+          "type": "string",
+          "description": "Snapshot jenis parent: debt atau receivable",
+          "enum": ["debt", "receivable"]
+        },
+        "walletId": {
+          "type": "string",
+          "description": "ID sumber dana pembayaran/penerimaan",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "walletName": {
+          "type": "string",
+          "description": "Snapshot nama sumber dana",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "fundOwnerId": {
+          "type": "string",
+          "description": "ID kepemilikan dana",
+          "maxLength": 128
+        },
+        "fundOwnerName": {
+          "type": "string",
+          "description": "Nama pemilik dana",
+          "maxLength": 60
+        },
+        "amount": {
+          "type": "number",
+          "description": "Nominal cicilan hutang atau penerimaan piutang"
+        },
+        "date": {
+          "type": "string",
+          "description": "Tanggal transaksi pelunasan (YYYY-MM-DD)",
+          "minLength": 8,
+          "maxLength": 30
+        },
+        "note": {
+          "type": "string",
+          "description": "Deskripsi/catatan cicilan atau penerimaan",
+          "maxLength": 200
+        },
+        "relatedTransactionId": {
+          "type": "string",
+          "description": "ID transaksi Pembayaran Hutang / Penerimaan Piutang yang dibuat otomatis",
+          "maxLength": 128
+        },
+        "deleted": {
+          "type": "boolean",
+          "description": "Soft-delete flag"
+        },
+        "deletedAt": {
+          "type": "string",
+          "description": "Soft-delete timestamp or null",
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Update server timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "debtId",
+        "walletId",
+        "walletName",
+        "amount",
+        "date",
+        "note",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -1075,6 +1326,14 @@
     "/savings_entries/{entryId}": {
       "schema": { "$ref": "#/entities/SavingsEntry" },
       "description": "Riwayat setoran dan penarikan progress dana tabungan."
+    },
+    "/debts/{debtId}": {
+      "schema": { "$ref": "#/entities/Debt" },
+      "description": "Daftar catatan hutang dan piutang pengguna."
+    },
+    "/debt_entries/{entryId}": {
+      "schema": { "$ref": "#/entities/DebtEntry" },
+      "description": "Riwayat cicilan pembayaran hutang dan penerimaan pelunasan piutang."
     }
   }
 }

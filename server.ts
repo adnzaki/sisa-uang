@@ -770,6 +770,159 @@ async function syncSavingsToPeer(
   }
 }
 
+interface ServerDebtRecord {
+  id: string;
+  ownerId: string;
+  type: 'debt' | 'receivable';
+  description: string;
+  amount: number;
+  walletId: string;
+  walletName: string;
+  fundOwnerId?: string;
+  fundOwnerName?: string;
+  date: string;
+  deadline?: string | null;
+  note?: string;
+  color: string;
+  relatedTransactionId?: string | null;
+  reminderEnabled: boolean;
+  reminderDays: number[];
+  reminderTime: string;
+  reminderAmount?: number | null;
+  lastRemindedDate?: string | null;
+  lastSkippedDate?: string | null;
+  lastPushNotifiedDate?: string | null;
+  snoozedUntil?: string | null;
+  deleted?: boolean;
+  deletedAt?: string | null;
+  createdAt?: string;
+  updatedAt: string;
+}
+
+interface ServerDebtEntryRecord {
+  id: string;
+  ownerId: string;
+  debtId: string;
+  debtDescription?: string;
+  debtType?: 'debt' | 'receivable';
+  walletId: string;
+  walletName: string;
+  fundOwnerId?: string;
+  fundOwnerName?: string;
+  amount: number;
+  date: string;
+  note: string;
+  relatedTransactionId?: string | null;
+  deleted?: boolean;
+  deletedAt?: string | null;
+  createdAt?: string;
+  updatedAt: string;
+}
+
+const DEBTS_CACHE_FILE = path.join(__dirname, '.sisa_uang_debts_cache.json');
+const DEBTS_DELETED_FILE = path.join(__dirname, '.sisa_uang_debts_deleted.json');
+const DEBT_ENTRIES_CACHE_FILE = path.join(__dirname, '.sisa_uang_debt_entries_cache.json');
+const DEBT_ENTRIES_DELETED_FILE = path.join(__dirname, '.sisa_uang_debt_entries_deleted.json');
+
+const debtsStore = new Map<string, ServerDebtRecord>();
+const deletedDebtsStore = new Set<string>();
+const debtEntriesStore = new Map<string, ServerDebtEntryRecord>();
+const deletedDebtEntriesStore = new Set<string>();
+
+function loadPersistedDebtsCache() {
+  try {
+    if (fs.existsSync(DEBTS_DELETED_FILE)) {
+      const delDebts = JSON.parse(fs.readFileSync(DEBTS_DELETED_FILE, 'utf8')) as string[];
+      if (Array.isArray(delDebts)) {
+        for (const id of delDebts) if (id) deletedDebtsStore.add(String(id));
+      }
+    }
+    if (fs.existsSync(DEBT_ENTRIES_DELETED_FILE)) {
+      const delEntries = JSON.parse(fs.readFileSync(DEBT_ENTRIES_DELETED_FILE, 'utf8')) as string[];
+      if (Array.isArray(delEntries)) {
+        for (const id of delEntries) if (id) deletedDebtEntriesStore.add(String(id));
+      }
+    }
+  } catch {
+    // Ignore deleted list read error
+  }
+
+  try {
+    if (fs.existsSync(DEBTS_CACHE_FILE)) {
+      const debtsList = JSON.parse(fs.readFileSync(DEBTS_CACHE_FILE, 'utf8')) as ServerDebtRecord[];
+      if (Array.isArray(debtsList)) {
+        debtsStore.clear();
+        for (const d of debtsList) {
+          if (d && d.id && !d.deleted && !deletedDebtsStore.has(d.id)) {
+            debtsStore.set(d.id, d);
+          }
+        }
+      }
+    }
+    if (fs.existsSync(DEBT_ENTRIES_CACHE_FILE)) {
+      const entriesList = JSON.parse(fs.readFileSync(DEBT_ENTRIES_CACHE_FILE, 'utf8')) as ServerDebtEntryRecord[];
+      if (Array.isArray(entriesList)) {
+        debtEntriesStore.clear();
+        for (const e of entriesList) {
+          if (e && e.id && !e.deleted && !deletedDebtEntriesStore.has(e.id)) {
+            debtEntriesStore.set(e.id, e);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore cache read error
+  }
+}
+
+function savePersistedDebtsCache() {
+  try {
+    const debtsList = Array.from(debtsStore.values()).filter(
+      (d) => !d.deleted && !deletedDebtsStore.has(d.id)
+    );
+    const entriesList = Array.from(debtEntriesStore.values()).filter(
+      (e) => !e.deleted && !deletedDebtEntriesStore.has(e.id)
+    );
+    fs.writeFileSync(DEBTS_CACHE_FILE, JSON.stringify(debtsList, null, 2), 'utf8');
+    fs.writeFileSync(DEBTS_DELETED_FILE, JSON.stringify(Array.from(deletedDebtsStore), null, 2), 'utf8');
+    fs.writeFileSync(DEBT_ENTRIES_CACHE_FILE, JSON.stringify(entriesList, null, 2), 'utf8');
+    fs.writeFileSync(DEBT_ENTRIES_DELETED_FILE, JSON.stringify(Array.from(deletedDebtEntriesStore), null, 2), 'utf8');
+  } catch {
+    // Ignore cache write error
+  }
+}
+
+loadPersistedDebtsCache();
+
+async function syncDebtsToPeer(
+  ownerId: string,
+  kind: 'items' | 'entries',
+  recordId: string,
+  payload: any,
+  isDelete = false
+) {
+  try {
+    const peerUrls = [DEV_APP_URL, PRE_APP_URL];
+    for (const pUrl of peerUrls) {
+      if (isDelete) {
+        void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/debts/${kind}/${encodeURIComponent(recordId)}?peer=1`, {
+          method: 'DELETE',
+          signal: AbortSignal.timeout(3000),
+        }).catch(() => {});
+      } else {
+        void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/debts/${kind}?peer=1`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(3000),
+        }).catch(() => {});
+      }
+    }
+  } catch {
+    // Ignore peer sync network error
+  }
+}
+
 const ADMIN_TOKENS_CACHE_FILE = path.join(__dirname, '.sisa_uang_admin_tokens.json');
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000; // Minimum 60s between SMTP OTP dispatches per email
 const OTP_RATE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes rate-limit window
@@ -3083,6 +3236,283 @@ async function startServer() {
 
     if (syncedCount > 0) {
       savePersistedSavingsCache();
+    }
+
+    res.json({ success: true, syncedCount });
+  });
+
+  // =========================================================================
+  // Hutang & Piutang / Debts & Receivables Endpoints (/api/users/:uid/debts)
+  // =========================================================================
+
+  app.get('/api/users/:uid/debts', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_');
+
+    const matchesUid = (ownerId: string) =>
+      ownerId === uid ||
+      ownerId === rawUid ||
+      ((uid.includes('vuedevo') || uid === 'admin_vuedevo_01' || rawUid === 'KlSX6JgegtUIsQinZRKp535OJ6E3') &&
+        (ownerId.includes('vuedevo') || ownerId === 'admin_vuedevo_01' || ownerId === 'KlSX6JgegtUIsQinZRKp535OJ6E3'));
+
+    const debts = Array.from(debtsStore.values())
+      .filter((d) => matchesUid(d.ownerId) && !d.deleted && !deletedDebtsStore.has(d.id))
+      .sort((a, b) => {
+        const dateCmp = String(b.date || '').localeCompare(String(a.date || ''));
+        if (dateCmp !== 0) return dateCmp;
+        return (a.description || '').localeCompare(b.description || '');
+      });
+
+    const entries = Array.from(debtEntriesStore.values())
+      .filter((e) => matchesUid(e.ownerId) && !e.deleted && !deletedDebtEntriesStore.has(e.id))
+      .sort((a, b) => {
+        const dateCmp = String(b.date || '').localeCompare(String(a.date || ''));
+        if (dateCmp !== 0) return dateCmp;
+        return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+      });
+
+    res.json({
+      success: true,
+      debts,
+      entries,
+    });
+  });
+
+  app.post('/api/users/:uid/debts/items', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const body = req.body || {};
+
+    const id = String(body.id || `dbt_${Date.now()}`).trim();
+    deletedDebtsStore.delete(id);
+    const existing = debtsStore.get(id);
+
+    const record: ServerDebtRecord = {
+      id,
+      ownerId: uid,
+      type: (body.type || existing?.type) === 'receivable' ? 'receivable' : 'debt',
+      description: String(body.description || existing?.description || 'Catatan Hutang').slice(0, 150),
+      amount: Math.max(1, Math.abs(Number(body.amount ?? existing?.amount) || 0)),
+      walletId: String(body.walletId || existing?.walletId || '').slice(0, 128),
+      walletName: String(body.walletName || existing?.walletName || 'Dompet').slice(0, 60),
+      fundOwnerId: body.fundOwnerId !== undefined ? (body.fundOwnerId ? String(body.fundOwnerId).slice(0, 128) : undefined) : existing?.fundOwnerId,
+      fundOwnerName: body.fundOwnerName !== undefined ? (body.fundOwnerName ? String(body.fundOwnerName).slice(0, 60) : undefined) : existing?.fundOwnerName,
+      date: String(body.date || existing?.date || nowIso().slice(0, 10)).slice(0, 30),
+      deadline: body.deadline !== undefined ? (body.deadline ? String(body.deadline).slice(0, 30) : null) : (existing?.deadline || null),
+      note: String(body.note !== undefined ? body.note : (existing?.note || '')).slice(0, 200),
+      color: String(body.color || existing?.color || (body.type === 'receivable' ? 'emerald' : 'rose')).slice(0, 20),
+      relatedTransactionId: body.relatedTransactionId !== undefined ? (body.relatedTransactionId ? String(body.relatedTransactionId).slice(0, 128) : null) : (existing?.relatedTransactionId || null),
+      reminderEnabled: body.reminderEnabled !== undefined ? Boolean(body.reminderEnabled) : Boolean(existing?.reminderEnabled),
+      reminderDays: Array.isArray(body.reminderDays)
+        ? body.reminderDays.map((d: any) => Math.floor(Number(d))).filter((d: number) => d >= 1 && d <= 31)
+        : (existing?.reminderDays || [1]),
+      reminderTime: String(body.reminderTime || existing?.reminderTime || '09:00').slice(0, 10),
+      reminderAmount: body.reminderAmount !== undefined
+        ? (body.reminderAmount ? Math.max(0, Number(body.reminderAmount)) : null)
+        : (existing?.reminderAmount || null),
+      lastRemindedDate: body.lastRemindedDate !== undefined ? body.lastRemindedDate : (existing?.lastRemindedDate || null),
+      lastSkippedDate: body.lastSkippedDate !== undefined ? body.lastSkippedDate : (existing?.lastSkippedDate || null),
+      lastPushNotifiedDate: body.lastPushNotifiedDate !== undefined ? body.lastPushNotifiedDate : (existing?.lastPushNotifiedDate || null),
+      snoozedUntil: body.snoozedUntil !== undefined ? body.snoozedUntil : (existing?.snoozedUntil || null),
+      deleted: false,
+      createdAt: body.createdAt || existing?.createdAt || nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    debtsStore.set(id, record);
+    savePersistedDebtsCache();
+
+    if (req.query.peer !== '1') {
+      void syncDebtsToPeer(uid, 'items', id, record, false);
+    }
+
+    res.json({ success: true, debt: record });
+  });
+
+  app.patch('/api/users/:uid/debts/items/:id', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const id = String(req.params.id || '').trim();
+    const body = req.body || {};
+
+    const existing = debtsStore.get(id);
+    if (!existing) {
+      res.status(404).json({ error: 'Debt item not found' });
+      return;
+    }
+
+    if (body.lastRemindedDate !== undefined) existing.lastRemindedDate = body.lastRemindedDate;
+    if (body.lastSkippedDate !== undefined) existing.lastSkippedDate = body.lastSkippedDate;
+    if (body.lastPushNotifiedDate !== undefined) existing.lastPushNotifiedDate = body.lastPushNotifiedDate;
+    if (body.snoozedUntil !== undefined) existing.snoozedUntil = body.snoozedUntil;
+    if (body.reminderEnabled !== undefined) existing.reminderEnabled = Boolean(body.reminderEnabled);
+    if (body.deleted !== undefined) existing.deleted = Boolean(body.deleted);
+    existing.updatedAt = nowIso();
+
+    debtsStore.set(id, existing);
+    savePersistedDebtsCache();
+
+    if (req.query.peer !== '1') {
+      void syncDebtsToPeer(uid, 'items', id, existing, false);
+    }
+
+    res.json({ success: true, debt: existing });
+  });
+
+  app.delete('/api/users/:uid/debts/items/:id', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const id = String(req.params.id || '').trim();
+
+    deletedDebtsStore.add(id);
+    const existing = debtsStore.get(id);
+    debtsStore.delete(id);
+
+    for (const [entryId, entry] of debtEntriesStore.entries()) {
+      if (entry.debtId === id) {
+        deletedDebtEntriesStore.add(entryId);
+        debtEntriesStore.delete(entryId);
+      }
+    }
+    savePersistedDebtsCache();
+
+    if (req.query.peer !== '1' && existing) {
+      void syncDebtsToPeer(uid, 'items', id, { ...existing, deleted: true }, true);
+    }
+
+    res.json({ success: true, deletedId: id });
+  });
+
+  app.post('/api/users/:uid/debts/entries', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const body = req.body || {};
+
+    const id = String(body.id || `dbt_ent_${Date.now()}`).trim();
+    deletedDebtEntriesStore.delete(id);
+
+    const record: ServerDebtEntryRecord = {
+      id,
+      ownerId: uid,
+      debtId: String(body.debtId || '').slice(0, 128),
+      debtDescription: body.debtDescription ? String(body.debtDescription).slice(0, 150) : undefined,
+      debtType: body.debtType === 'receivable' ? 'receivable' : 'debt',
+      walletId: String(body.walletId || '').slice(0, 128),
+      walletName: String(body.walletName || 'Dompet').slice(0, 60),
+      fundOwnerId: body.fundOwnerId ? String(body.fundOwnerId).slice(0, 128) : undefined,
+      fundOwnerName: body.fundOwnerName ? String(body.fundOwnerName).slice(0, 60) : undefined,
+      amount: Math.max(1, Math.abs(Number(body.amount) || 0)),
+      date: String(body.date || nowIso().slice(0, 10)).slice(0, 30),
+      note: String(body.note || '').slice(0, 200),
+      relatedTransactionId: body.relatedTransactionId ? String(body.relatedTransactionId).slice(0, 128) : null,
+      deleted: false,
+      createdAt: body.createdAt || nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    debtEntriesStore.set(id, record);
+    savePersistedDebtsCache();
+
+    if (req.query.peer !== '1') {
+      void syncDebtsToPeer(uid, 'entries', id, record, false);
+    }
+
+    res.json({ success: true, entry: record });
+  });
+
+  app.delete('/api/users/:uid/debts/entries/:id', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const id = String(req.params.id || '').trim();
+
+    deletedDebtEntriesStore.add(id);
+    const existing = debtEntriesStore.get(id);
+    debtEntriesStore.delete(id);
+    savePersistedDebtsCache();
+
+    if (req.query.peer !== '1' && existing) {
+      void syncDebtsToPeer(uid, 'entries', id, { ...existing, deleted: true }, true);
+    }
+
+    res.json({ success: true, deletedId: id });
+  });
+
+  app.post('/api/users/:uid/debts/batch', (req: Request, res: Response) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const uid = rawUid.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'default';
+    const debts = Array.isArray(req.body?.debts) ? req.body.debts : [];
+    const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+
+    let syncedCount = 0;
+    for (const d of debts) {
+      if (d && d.id) {
+        const id = String(d.id);
+        if (deletedDebtsStore.has(id) || d.deleted) {
+          debtsStore.delete(id);
+          continue;
+        }
+        debtsStore.set(id, {
+          id,
+          ownerId: uid,
+          type: d.type === 'receivable' ? 'receivable' : 'debt',
+          description: String(d.description || 'Catatan Hutang').slice(0, 150),
+          amount: Math.max(1, Math.abs(Number(d.amount) || 0)),
+          walletId: String(d.walletId || '').slice(0, 128),
+          walletName: String(d.walletName || 'Dompet').slice(0, 60),
+          fundOwnerId: d.fundOwnerId ? String(d.fundOwnerId).slice(0, 128) : undefined,
+          fundOwnerName: d.fundOwnerName ? String(d.fundOwnerName).slice(0, 60) : undefined,
+          date: String(d.date || nowIso().slice(0, 10)).slice(0, 30),
+          deadline: d.deadline || null,
+          note: String(d.note || '').slice(0, 200),
+          color: String(d.color || 'rose').slice(0, 20),
+          relatedTransactionId: d.relatedTransactionId || null,
+          reminderEnabled: Boolean(d.reminderEnabled),
+          reminderDays: Array.isArray(d.reminderDays) ? d.reminderDays : [1],
+          reminderTime: String(d.reminderTime || '09:00').slice(0, 10),
+          reminderAmount: d.reminderAmount ?? null,
+          lastRemindedDate: d.lastRemindedDate || null,
+          lastSkippedDate: d.lastSkippedDate || null,
+          lastPushNotifiedDate: d.lastPushNotifiedDate || null,
+          snoozedUntil: d.snoozedUntil || null,
+          deleted: false,
+          createdAt: d.createdAt || nowIso(),
+          updatedAt: nowIso(),
+        });
+        syncedCount++;
+      }
+    }
+
+    for (const e of entries) {
+      if (e && e.id) {
+        const id = String(e.id);
+        if (deletedDebtEntriesStore.has(id) || e.deleted) {
+          debtEntriesStore.delete(id);
+          continue;
+        }
+        debtEntriesStore.set(id, {
+          id,
+          ownerId: uid,
+          debtId: String(e.debtId || '').slice(0, 128),
+          debtDescription: e.debtDescription ? String(e.debtDescription).slice(0, 150) : undefined,
+          debtType: e.debtType === 'receivable' ? 'receivable' : 'debt',
+          walletId: String(e.walletId || '').slice(0, 128),
+          walletName: String(e.walletName || 'Dompet').slice(0, 60),
+          fundOwnerId: e.fundOwnerId ? String(e.fundOwnerId).slice(0, 128) : undefined,
+          fundOwnerName: e.fundOwnerName ? String(e.fundOwnerName).slice(0, 60) : undefined,
+          amount: Math.max(1, Math.abs(Number(e.amount) || 0)),
+          date: String(e.date || nowIso().slice(0, 10)).slice(0, 30),
+          note: String(e.note || '').slice(0, 200),
+          relatedTransactionId: e.relatedTransactionId || null,
+          deleted: false,
+          createdAt: e.createdAt || nowIso(),
+          updatedAt: nowIso(),
+        });
+        syncedCount++;
+      }
+    }
+
+    if (syncedCount > 0) {
+      savePersistedDebtsCache();
     }
 
     res.json({ success: true, syncedCount });

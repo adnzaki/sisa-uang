@@ -198,6 +198,8 @@ export const FALLBACK_EXPENSE_CATEGORIES = [
   'Hiburan',
   'Biaya Admin',
   'Donasi',
+  'Pemberian Utang',
+  'Pembayaran Hutang',
 ];
 
 export const FALLBACK_INCOME_CATEGORIES = [
@@ -209,6 +211,8 @@ export const FALLBACK_INCOME_CATEGORIES = [
   'Refund',
   'Tips',
   'Hadiah',
+  'Penerimaan Hutang',
+  'Penerimaan Piutang',
 ];
 
 export function getCurrentMonthPeriod(): string {
@@ -2366,12 +2370,14 @@ export const useFinanceStore = defineStore('finance', () => {
         await fetchAllCollectionsFromFirestore(uid, effectiveRemoteToken);
         await fetchTransactionsServerPage(undefined, true, true);
         try {
-          const [{ useSavingsStore }, { useAutomationStore }] = await Promise.all([
+          const [{ useSavingsStore }, { useAutomationStore }, { useDebtsStore }] = await Promise.all([
             import('./savings'),
             import('./automation'),
+            import('./debts'),
           ]);
           void useSavingsStore().loadSavings(uid, true);
           void useAutomationStore().loadAutomations(uid, true);
+          void useDebtsStore().loadDebts(uid, true);
         } catch {
           // Ignore optional dynamic store sync failure
         }
@@ -2682,13 +2688,15 @@ export const useFinanceStore = defineStore('finance', () => {
       await initFinanceData(uid, true);
       await fetchTransactionsServerPage(undefined, silent, true);
       try {
-        const [{ useSavingsStore }, { useAutomationStore }] = await Promise.all([
+        const [{ useSavingsStore }, { useAutomationStore }, { useDebtsStore }] = await Promise.all([
           import('./savings'),
           import('./automation'),
+          import('./debts'),
         ]);
         await Promise.all([
           useSavingsStore().loadSavings(uid, true),
           useAutomationStore().loadAutomations(uid, true),
+          useDebtsStore().loadDebts(uid, true),
         ]);
       } catch {
         // Ignore
@@ -4218,7 +4226,8 @@ export const useFinanceStore = defineStore('finance', () => {
     note: string;
     date: string;
     automationRuleId?: string;
-  }) {
+    silentToast?: boolean;
+  }): Promise<TransactionItem> {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
     const wallet = wallets.value.find((w) => w.id === payload.walletId) || wallets.value[0];
@@ -4600,7 +4609,10 @@ export const useFinanceStore = defineStore('finance', () => {
       numericAmount >= 50000000 ? 'warning' : 'info',
       numericAmount
     );
-    useNotificationStore().notifySuccess('Transaksi Berhasil Dicatat', logMsg);
+    if (!payload.silentToast) {
+      useNotificationStore().notifySuccess('Transaksi Berhasil Dicatat', logMsg);
+    }
+    return newTxItem;
   }
 
   async function updateTransaction(
@@ -4617,6 +4629,7 @@ export const useFinanceStore = defineStore('finance', () => {
       adminFee?: number;
       note: string;
       date: string;
+      silentToast?: boolean;
     }
   ) {
     const authStore = useAuthStore();
@@ -4907,13 +4920,18 @@ export const useFinanceStore = defineStore('finance', () => {
       'info',
       numericAmount
     );
-    useNotificationStore().notifySuccess(
-      'Transaksi Diperbarui',
-      `Perubahan pada transaksi "${safeNote}" (Rp ${numericAmount.toLocaleString('id-ID')}) telah disimpan.`
-    );
+    if (!payload.silentToast) {
+      useNotificationStore().notifySuccess(
+        'Transaksi Diperbarui',
+        `Perubahan pada transaksi "${safeNote}" (Rp ${numericAmount.toLocaleString('id-ID')}) telah disimpan.`
+      );
+    }
   }
 
-  async function removeTransaction(txId: string): Promise<boolean> {
+  async function removeTransaction(
+    txId: string,
+    options?: { skipConfirmation?: boolean; silentToast?: boolean }
+  ): Promise<boolean> {
     const authStore = useAuthStore();
     const uid = sanitizeId(authStore.user?.uid || activeOwnerUid.value || 'guest');
     const tx = transactions.value.find((t) => t.id === txId);
@@ -4926,13 +4944,15 @@ export const useFinanceStore = defineStore('finance', () => {
           ? 'Pengeluaran'
           : 'Transfer';
 
-    const confirmed = await useNotificationStore().requestConfirmation({
-      title: 'Konfirmasi Hapus Transaksi',
-      message: `Apakah Anda yakin ingin menghapus transaksi ${typeLabel} "${tx.note || tx.category}"?`,
-      detail: `Nominal: Rp ${Number(tx.amount || 0).toLocaleString('id-ID')} · Tanggal: ${tx.date} · Dompet: ${tx.walletName}. Saldo dompet dan pemilik dana akan dikembalikan secara otomatis.`,
-      confirmLabel: 'Ya, Hapus Transaksi',
-    });
-    if (!confirmed) return false;
+    if (!options?.skipConfirmation) {
+      const confirmed = await useNotificationStore().requestConfirmation({
+        title: 'Konfirmasi Hapus Transaksi',
+        message: `Apakah Anda yakin ingin menghapus transaksi ${typeLabel} "${tx.note || tx.category}"?`,
+        detail: `Nominal: Rp ${Number(tx.amount || 0).toLocaleString('id-ID')} · Tanggal: ${tx.date} · Dompet: ${tx.walletName}. Saldo dompet dan pemilik dana akan dikembalikan secara otomatis.`,
+        confirmLabel: 'Ya, Hapus Transaksi',
+      });
+      if (!confirmed) return false;
+    }
 
     const sourceHolder = tx.fundOwnerId
       ? walletOwners.value.find((h) => h.id === tx.fundOwnerId)
@@ -5050,10 +5070,12 @@ export const useFinanceStore = defineStore('finance', () => {
       `Menghapus transaksi ${tx.category} sebesar Rp ${tx.amount.toLocaleString('id-ID')} secara Soft Delete (histori tetap tersimpan).`,
       'info'
     );
-    useNotificationStore().notifySuccess(
-      'Transaksi Dihapus',
-      `Transaksi ${tx.category} (Rp ${tx.amount.toLocaleString('id-ID')}) telah diarsipkan (Soft Delete) dan saldo dompet telah dikembalikan.`
-    );
+    if (!options?.silentToast) {
+      useNotificationStore().notifySuccess(
+        'Transaksi Dihapus',
+        `Transaksi ${tx.category} (Rp ${tx.amount.toLocaleString('id-ID')}) telah diarsipkan (Soft Delete) dan saldo dompet telah dikembalikan.`
+      );
+    }
     return true;
   }
 
