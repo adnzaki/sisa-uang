@@ -165,11 +165,23 @@ const PRICING_SECTION_HTML = `
               </li>
               <li class="flex items-center gap-2">
                 <svg class="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                <span>1 Rencana Tabungan (Target)</span>
+              </li>
+              <li class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                <span>1 Catatan Hutang &amp; 1 Piutang</span>
+              </li>
+              <li class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
                 <span>Anggaran Bulan Berjalan</span>
               </li>
               <li class="flex items-center gap-2">
                 <svg class="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
                 <span>Analitik Keuangan</span>
+              </li>
+              <li class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                <span>Otomatisasi Transaksi</span>
               </li>
             </ul>
           </div>
@@ -211,6 +223,14 @@ const PRICING_SECTION_HTML = `
               <li class="flex items-start gap-2">
                 <svg class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
                 <span><strong>Lebih dari 2 Kepemilikan Dana:</strong> Pisahkan alokasi kepemilikan dana keluarga atau bisnis di setiap dompet tanpa batas.</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <svg class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                <span><strong>Rencana Tabungan Tanpa Batas:</strong> Buat target tabungan berencana beserta jadwal pengingatnya sebanyak yang Anda butuhkan (unlimited).</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <svg class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                <span><strong>Hutang &amp; Piutang Tanpa Batas:</strong> Kelola catatan hutang &amp; piutang terintegrasi transaksi beserta pengingat cicilan tanpa batas (Free maks. 1 Hutang &amp; 1 Piutang).</span>
               </li>
             </ul>
           </div>
@@ -519,7 +539,7 @@ const LANDING_PAGE_DATA: PreRenderPageData = {
 
               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 <!-- Feature 1 -->
-                <div class="p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
+                <div class="md:col-span-2 lg:col-span-1 p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
                   <div class="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-bold">1</div>
                   <h4 class="text-base font-bold text-slate-900 dark:text-slate-100">Multi Sumber Dana (Wallet)</h4>
                   <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
@@ -569,6 +589,33 @@ const LANDING_PAGE_DATA: PreRenderPageData = {
                   <h4 class="text-base font-bold text-slate-900 dark:text-slate-100">Keamanan &amp; Perlindungan Data Penuh</h4>
                   <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
                     Data disimpan terenkripsi di Google Cloud Platform. SisaUang tidak pernah menjual atau membagikan catatan keuangan Anda kepada pihak luar.
+                  </p>
+                </div>
+
+                <!-- Feature 7 -->
+                <div class="p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
+                  <div class="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold">7</div>
+                  <h4 class="text-base font-bold text-slate-900 dark:text-slate-100">Otomatisasi Transaksi Terjadwal</h4>
+                  <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    Atur jadwal transaksi rutin harian, mingguan, atau bulanan secara otomatis penuh maupun mode konfirmasi cepat dengan pengingat Push Notification.
+                  </p>
+                </div>
+
+                <!-- Feature 8 -->
+                <div class="p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
+                  <div class="w-10 h-10 rounded-xl bg-cyan-50 dark:bg-cyan-950/60 text-cyan-600 dark:text-cyan-400 flex items-center justify-center font-bold">8</div>
+                  <h4 class="text-base font-bold text-slate-900 dark:text-slate-100">Rencana Tabungan &amp; Target Dana</h4>
+                  <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    Rencanakan target tabungan dari berbagai dompet tanpa mengubah saldo keseluruhan Anda, lengkap dengan progres setoran, tenggat waktu, dan Push Notification.
+                  </p>
+                </div>
+
+                <!-- Feature 9 -->
+                <div class="p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
+                  <div class="w-10 h-10 rounded-xl bg-orange-50 dark:bg-orange-950/60 text-orange-600 dark:text-orange-400 flex items-center justify-center font-bold">9</div>
+                  <h4 class="text-base font-bold text-slate-900 dark:text-slate-100">Catatan Hutang &amp; Piutang Terintegrasi</h4>
+                  <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    Kelola catatan hutang dan piutang yang otomatis tercatat ke mutasi transaksi beserta riwayat cicilan atau penerimaan dan pengingat Push Notification.
                   </p>
                 </div>
               </div>

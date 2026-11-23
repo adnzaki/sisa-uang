@@ -21,6 +21,9 @@ import {
   Phone,
   Mail,
   ChevronDown,
+  Clock,
+  Target,
+  HandCoins,
 } from 'lucide-vue-next';
 import PublicNavbar from '../components/PublicNavbar.vue';
 import PublicFooter from '../components/PublicFooter.vue';
@@ -260,7 +263,7 @@ const faqs = [
 
           <div class="mt-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <!-- Feature 1 -->
-            <div class="p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
+            <div class="md:col-span-2 lg:col-span-1 p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
               <div class="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
                 <Layers class="w-5 h-5" />
               </div>
@@ -330,10 +333,49 @@ const faqs = [
                 <Lock class="w-5 h-5" />
               </div>
               <h4 class="text-base font-bold text-slate-900 dark:text-slate-100">
-                Keamanan & Perlindungan Data Penuh
+                Keamanan &amp; Perlindungan Data Penuh
               </h4>
               <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
                 Data disimpan terenkripsi di Google Cloud Platform. SisaUang tidak pernah menjual atau membagikan catatan keuangan Anda kepada pihak luar.
+              </p>
+            </div>
+
+            <!-- Feature 7 -->
+            <div class="p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
+              <div class="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                <Clock class="w-5 h-5" />
+              </div>
+              <h4 class="text-base font-bold text-slate-900 dark:text-slate-100">
+                Otomatisasi Transaksi Terjadwal
+              </h4>
+              <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                Atur jadwal transaksi rutin harian, mingguan, atau bulanan secara otomatis penuh maupun mode konfirmasi cepat dengan pengingat Push Notification.
+              </p>
+            </div>
+
+            <!-- Feature 8 -->
+            <div class="p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
+              <div class="w-10 h-10 rounded-xl bg-cyan-50 dark:bg-cyan-950/60 text-cyan-600 dark:text-cyan-400 flex items-center justify-center">
+                <Target class="w-5 h-5" />
+              </div>
+              <h4 class="text-base font-bold text-slate-900 dark:text-slate-100">
+                Rencana Tabungan &amp; Target Dana
+              </h4>
+              <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                Rencanakan target tabungan dari berbagai dompet tanpa mengubah saldo keseluruhan Anda, lengkap dengan progres setoran, tenggat waktu, dan Push Notification.
+              </p>
+            </div>
+
+            <!-- Feature 9 -->
+            <div class="p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
+              <div class="w-10 h-10 rounded-xl bg-orange-50 dark:bg-orange-950/60 text-orange-600 dark:text-orange-400 flex items-center justify-center">
+                <HandCoins class="w-5 h-5" />
+              </div>
+              <h4 class="text-base font-bold text-slate-900 dark:text-slate-100">
+                Catatan Hutang &amp; Piutang Terintegrasi
+              </h4>
+              <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                Kelola catatan hutang dan piutang yang otomatis tercatat ke mutasi transaksi beserta riwayat cicilan atau penerimaan dan pengingat Push Notification.
               </p>
             </div>
           </div>
@@ -394,6 +436,10 @@ const faqs = [
                   <li class="flex items-center gap-2">
                     <Check class="w-4 h-4 text-emerald-600 shrink-0" />
                     <span>Analitik Keuangan</span>
+                  </li>
+                  <li class="flex items-center gap-2">
+                    <Check class="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Otomatisasi Transaksi</span>
                   </li>
                 </ul>
               </div>
