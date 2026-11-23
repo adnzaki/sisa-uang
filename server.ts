@@ -1172,7 +1172,7 @@ async function sendSuperAdminOtpEmail(
         </p>
         <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
         <p style="margin: 0; color: #94a3b8; font-size: 11px;">
-          Sisa Uang — Your Finance Assistant · v1.0.2
+          Sisa Uang — Your Finance Assistant · v1.0.3
         </p>
       </div>
     </div>
@@ -1232,7 +1232,7 @@ async function sendPrimaryDeviceOtpEmail(
         </p>
         <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
         <p style="margin: 0; color: #94a3b8; font-size: 11px;">
-          Sisa Uang — Your Finance Assistant · v1.0.2
+          Sisa Uang — Your Finance Assistant · v1.0.3
         </p>
       </div>
     </div>
@@ -5852,7 +5852,7 @@ async function startServer() {
   // App Version & Live Update Detection Endpoint
   // =========================================================================
   function computeCurrentBuildFingerprint(): { version: string; buildHash: string } {
-    let version = '1.0.2';
+    let version = '1.0.3';
     const hash = crypto.createHash('sha1');
     try {
       const pkgRaw = fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8');

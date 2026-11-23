@@ -2755,7 +2755,7 @@ async function handleSubmitProPayment() {
     <!-- Global App Update Notification & Full Reload Banner -->
     <AppUpdateBanner />
 
-    <!-- Global Official Release Notes & Changelog Modal (v1.0.2) -->
+    <!-- Global Official Release Notes & Changelog Modal (v1.0.3) -->
     <ReleaseNotesModal />
 
     <!-- Global SisaUang Pro Upgrade Notification Modal -->

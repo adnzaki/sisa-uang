@@ -5,13 +5,12 @@ import {
   Rocket,
   Layers,
   Check,
-  Clock,
-  RotateCcw,
   Crown,
-  QrCode,
-  Wrench,
   Database,
-  Users,
+  Target,
+  HandCoins,
+  BellRing,
+  Smartphone,
 } from 'lucide-vue-next';
 import { useNotificationStore } from '../stores/notification';
 import { useAuthStore } from '../stores/auth';
@@ -20,9 +19,9 @@ import AppModal from './AppModal.vue';
 const LAST_SEEN_VERSION_KEY = 'sisa_uang_last_seen_app_version';
 const LAST_SEEN_BUILD_KEY = 'sisa_uang_last_seen_build_number';
 const JUST_UPDATED_FLAG_KEY = 'sisa_uang_app_just_updated';
-const RELEASE_VERSION = '1.0.2';
+const RELEASE_VERSION = '1.0.3';
 const RELEASE_DATE = 'November 2026';
-const BUILD_NUMBER = '10222';
+const BUILD_NUMBER = '10323';
 const CHANGELOG_SEEN_KEY = computed(
   () => `sisa_uang_changelog_seen_v${RELEASE_VERSION.replace(/\./g, '_')}_b${BUILD_NUMBER}`
 );
@@ -30,12 +29,12 @@ const CHANGELOG_SEEN_KEY = computed(
 const notificationStore = useNotificationStore();
 const authStore = useAuthStore();
 
-type ChangelogCategory = 'all' | 'payment' | 'navigation' | 'database' | 'feature';
+type ChangelogCategory = 'all' | 'feature' | 'database' | 'notification' | 'layout';
 const activeFilter = ref<ChangelogCategory>('all');
 
 export interface ChangelogItem {
   id: string;
-  category: 'payment' | 'navigation' | 'database' | 'feature';
+  category: 'feature' | 'database' | 'notification' | 'layout';
   badge: string;
   badgeColor: 'emerald' | 'indigo' | 'amber' | 'rose' | 'sky';
   isProExclusive?: boolean;
@@ -47,88 +46,118 @@ export interface ChangelogItem {
 
 const changelogItems: ChangelogItem[] = [
   {
-    id: 'qris-nusapay-support',
-    category: 'payment',
-    badge: 'PEMBAYARAN QRIS (NUSAPAY)',
+    id: 'savings-feature',
+    category: 'feature',
+    badge: 'FITUR TABUNGAN',
     badgeColor: 'emerald',
-    title: 'Dukungan Pembayaran Instan via QRIS (Nusapay)',
+    title: 'Menambahkan Fitur Tabungan',
     summary:
-      'Integrasi resmi metode pembayaran instan QRIS melalui kanal gateway Nusapay dengan verifikasi transaksi real-time dan aktivasi otomatis paket SisaUang Pro:',
+      'Hadir modul Tabungan & Perencanaan untuk membantu Anda menyisihkan dan memantau target dana tanpa mengganggu saldo utama:',
     details: [
-      'Barcode QRIS Standar Nasional Dinamis: Mendukung pemindaian langsung dari seluruh aplikasi perbankan (BCA, Mandiri, BRI, BNI, Permata, dll.) serta dompet digital ternama (GoPay, OVO, DANA, ShopeePay, LinkAja).',
-      'Aktivasi Lisensi Pro Otomatis Tanpa Upload Bukti: Sistem pembayaran secara seketika memverifikasi notifikasi gateway dan langsung meningkatkan status akun ke SisaUang Pro tanpa perlu upload bukti transfer.',
-      'Fallback Multi-Kanal Cerdas: Arsitektur payment gateway dilengkapi sistem failover cerdas demi menjamin ketersediaan layanan QRIS yang stabil dan dapat diandalkan setiap saat.',
+      'Target Tabungan Terstruktur: Buat rencana tabungan dengan nominal target, tanggal tenggat (deadline), dan rincian riwayat setoran maupun penarikan.',
+      'Integrasi Saldo Dompet & Kepemilikan: Kelola dana tabungan langsung dari dompet serta kepemilikan dana yang telah terdaftar dengan kalkulasi progres otomatis.',
+      'Kuota Akun Free & Pro: Pengguna Free dapat membuat 1 rencana tabungan aktif, sedangkan pelanggan SisaUang Pro mendapatkan kuota tabungan tanpa batas.',
     ],
-    icon: QrCode,
+    icon: Target,
   },
   {
-    id: 'utilities-menu-reorder',
-    category: 'navigation',
-    badge: 'NAVIGASI & TATA LETAK',
-    badgeColor: 'indigo',
-    title: 'Pemindahan Menu Utilitas ke Posisi Atas Pengaturan',
+    id: 'debts-receivables-feature',
+    category: 'feature',
+    badge: 'HUTANG & PIUTANG',
+    badgeColor: 'rose',
+    title: 'Menambahkan Fitur Hutang / Piutang',
     summary:
-      'Penyempurnaan hierarki navigasi dan penataan urutan menu guna menghadirkan alur kerja yang lebih ergonomis dan teratur:',
+      'Hadir modul pencatatan Hutang dan Piutang yang terintegrasi penuh dengan riwayat transaksi serta pengelolaan cicilan:',
     details: [
-      'Penempatan Strategis Menu Utilitas: Menu Utilitas beserta submenu Otomatisasi kini diposisikan tepat di atas Pengaturan pada bilah navigasi utama.',
-      'Tata Letak Sinkron Desktop & Mobile: Tatanan menu diterapkan secara konsisten baik pada sidebar desktop layar lebar maupun panel drawer navigasi pada layar ponsel.',
-      'Akses Cepat Fitur Otomatisasi: Memudahkan pengguna membuka dan memantau jadwal transaksi rutin harian tanpa harus menggulir melewati menu pengaturan umum.',
+      'Pencatatan Terintegrasi Transaksi: Menambah hutang atau piutang serta mencatat pembayaran ("Cicil") maupun penerimaan ("Terima") otomatis tercatat ke dalam mutasi transaksi.',
+      'Halaman Detail & Riwayat Pelunasan: Setiap kartu Hutang/Piutang memiliki halaman detail tersendiri lengkap dengan progres pelunasan dan riwayat angsuran.',
+      'Kuota Akun Free & Pro: Akun Free mendapatkan masing-masing 1 kuota Hutang dan 1 kuota Piutang, sedangkan SisaUang Pro bebas tanpa batas.',
     ],
-    icon: Wrench,
+    icon: HandCoins,
   },
   {
-    id: 'automation-transaction-schema-sync',
+    id: 'caching-database-performance',
     category: 'database',
-    badge: 'SINKRONISASI SKEMA DATA',
+    badge: 'PERFORMA & DATABASE',
     badgeColor: 'sky',
-    title: 'Sinkronisasi Skema Otomatisasi dan Transaksi',
+    title: 'Meningkatkan Performa Caching dan Operasi Database',
     summary:
-      'Penyelarasan menyeluruh antara struktur skema data jadwal otomatisasi dengan catatan mutasi transaksi pada database Cloud Firestore:',
+      'Optimalisasi mekanisme caching dan operasi pembacaan/penulisan database agar aplikasi berjalan lebih cepat dan responsif:',
     details: [
-      'Standardisasi Parameter Transaksi Otomatis: Menyelaraskan seluruh atribut transaksi terjadwal, meliputi ID aturan (automationRuleId), relasi kategori, rincian kepemilikan dana, serta biaya admin transfer.',
-      'Pencegahan Transaksi Ganda Multi-Perangkat: Penerapan ID transaksi deterministik harian yang sinkron memastikan transaksi otomatis hanya dicatat tepat satu kali meski aplikasi terbuka di banyak tab atau perangkat.',
-      'Integritas Saldo & Akuntansi Presisi: Seluruh mutasi saldo dompet dan rincian alokasi kepemilikan dana hasil eksekusi otomatis tersinkronisasi akurat sesuai aturan akuntansi ganda.',
+      'Efisiensi Cache Lokal & Sinkronisasi: Mengurangi operasi baca berulang ke server dan Cloud Firestore dengan mekanisme cache lokal yang lebih terstruktur.',
+      'Akses Data & Navigasi Lebih Cepat: Pemuatan ringkasan saldo, riwayat transaksi, dompet, tabungan, dan hutang/piutang terasa lebih ringan serta responsif.',
+      'Kestabilan Operasi Data: Pengelolaan antrean pembacaan dan pembaruan data dioptimalkan untuk mencegah beban berlebih pada database.',
     ],
     icon: Database,
   },
   {
-    id: 'wallet-existing-owner-selector',
-    category: 'feature',
-    badge: 'MANAJEMEN DOMPET',
+    id: 'push-notification-reminders',
+    category: 'notification',
+    badge: 'PUSH NOTIFICATION',
     badgeColor: 'amber',
-    title: 'Dukungan Pemilihan Pemilik Dana yang Sudah Ada pada Form Dompet',
+    title: 'Mengimplementasikan Push Notification untuk Otomatisasi, Tabungan dan Hutang / Piutang',
     summary:
-      'Peningkatan fleksibilitas form penambahan dan pengubahan dompet dengan fitur pemilihan pemilik dana yang telah terdaftar sebelumnya:',
+      'Dukungan notifikasi perangkat secara langsung agar jadwal transaksi rutin, setoran tabungan, dan cicilan tidak pernah terlewat:',
     details: [
-      'Pilihan Cepat Pemilik Dana Terdaftar: Form pembuatan dan pengubahan dompet kini menyediakan opsi pilihan langsung dari seluruh kepemilikan dana yang telah ada tanpa perlu mengetik ulang nama dari awal.',
-      'Fleksibilitas Tambah Pemilik Baru: Tetap menyediakan opsi beralih instan untuk mengetik nama pemilik baru secara leluasa bila ingin membuat alokasi terpisah.',
-      'Pencegahan Typo & Duplikasi Kepemilikan: Mencegah timbulnya variasi penamaan pemilik dana yang serupa sehingga laporan keuangan per kepemilikan tetap rapi dan konsisten.',
+      'Pengingat Otomatisasi Transaksi: Mengirimkan push notification sesuai jadwal otomatisasi yang telah dikonfirmasi maupun yang membutuhkan konfirmasi pengguna.',
+      'Pengingat Rutin Tabungan & Hutang / Piutang: Mendukung notifikasi terjadwal untuk pengingat setoran tabungan serta jatuh tempo cicilan hutang maupun piutang.',
+      'Kontrol Izin Notifikasi Langsung: Tersedia tombol pengaturan status izin push notification pada masing-masing halaman fitur.',
     ],
-    icon: Users,
+    icon: BellRing,
+  },
+  {
+    id: 'mobile-menu-structure-fix',
+    category: 'layout',
+    badge: 'NAVIGASI MOBILE',
+    badgeColor: 'indigo',
+    title: 'Memperbaiki Struktur Menu pada Tampilan Mobile',
+    summary:
+      'Penataan ulang susunan menu pada sidebar mobile agar lebih ringkas, tidak duplikatif dengan bottom navbar, dan lebih mudah dijangkau:',
+    details: [
+      'Penghapusan Menu Duplikat di Sidebar Mobile: Menu Ringkasan, Transaksi, dan Dompet dihilangkan khusus dari sidebar mobile karena sudah tersedia di bottom navbar, sementara Pengaturan tetap dipertahankan.',
+      'Menu Utilitas Menjadi Menu Utama di Mobile: Sub-menu Otomatisasi, Tabungan, dan Hutang & Piutang dikeluarkan dari grup Utilitas menjadi menu utama langsung di sidebar mobile.',
+      'Konsistensi Tampilan Tablet & Desktop: Struktur menu lengkap beserta akordeon Utilitas tetap dipertahankan pada layar tablet dan desktop.',
+    ],
+    icon: Smartphone,
+  },
+  {
+    id: 'sidebar-version-changelog-fix',
+    category: 'layout',
+    badge: 'PERBAIKAN INFO RILIS',
+    badgeColor: 'emerald',
+    title: 'Memperbaiki Informasi Versi dan Catatan Rilis pada Sidebar yang Tidak Menampilkan Info Versi dan Changelog',
+    summary:
+      'Memperbaiki kendala pada tombol informasi versi di bagian bawah sidebar agar modal detail versi dan catatan pembaruan tampil sempurna saat diklik:',
+    details: [
+      'Perbaikan Sinkronisasi State Modal & Drawer: Mengatasi konflik riwayat navigasi antara penutupan sidebar drawer dan pembukaan modal sehingga modal changelog tidak langsung tertutup kembali.',
+      'Rendering Modal Tingkat Atas (Teleport): Memastikan modal informasi versi dan changelog selalu tampil di lapisan teratas baik pada perangkat desktop maupun mobile.',
+      'Akses Konsisten dari Seluruh Titik Masuk: Tombol Versi & Info Rilis pada sidebar, menu akun, dan halaman Pengaturan kini berfungsi andal membuka informasi versi beserta daftar perubahannya.',
+    ],
+    icon: Sparkles,
   },
 ];
 
 const filterTabs = computed(() => [
   { id: 'all' as const, label: 'Semua Pembaruan', count: changelogItems.length },
   {
-    id: 'payment' as const,
-    label: 'QRIS (Nusapay)',
-    count: changelogItems.filter((i) => i.category === 'payment').length,
-  },
-  {
-    id: 'navigation' as const,
-    label: 'Tata Letak Menu',
-    count: changelogItems.filter((i) => i.category === 'navigation').length,
+    id: 'feature' as const,
+    label: 'Fitur Baru',
+    count: changelogItems.filter((i) => i.category === 'feature').length,
   },
   {
     id: 'database' as const,
-    label: 'Skema Database',
+    label: 'Cache & Database',
     count: changelogItems.filter((i) => i.category === 'database').length,
   },
   {
-    id: 'feature' as const,
-    label: 'Manajemen Dompet',
-    count: changelogItems.filter((i) => i.category === 'feature').length,
+    id: 'notification' as const,
+    label: 'Push Notification',
+    count: changelogItems.filter((i) => i.category === 'notification').length,
+  },
+  {
+    id: 'layout' as const,
+    label: 'Menu & Perbaikan',
+    count: changelogItems.filter((i) => i.category === 'layout').length,
   },
 ]);
 
@@ -191,10 +220,10 @@ function checkAutoOpenOnUpdate() {
     if (sessionJustUpdated) sessionStorage.removeItem(JUST_UPDATED_FLAG_KEY);
     if (localJustUpdated) localStorage.removeItem(JUST_UPDATED_FLAG_KEY);
 
-    // Condition 1: Upgraded from an older stored version (e.g. 1.0.1 -> 1.0.2)
+    // Condition 1: Upgraded from an older stored version (e.g. 1.0.2 -> 1.0.3)
     const isVersionChanged = Boolean(prevVersion && prevVersion !== RELEASE_VERSION);
 
-    // Condition 2: Build number changed (e.g. 10218 -> 10219)
+    // Condition 2: Build number changed (e.g. 10222 -> 10323)
     const isBuildChanged = Boolean(prevBuild && prevBuild !== BUILD_NUMBER);
 
     // Condition 3: Explicit reload update triggered by PWA / update banner
@@ -306,7 +335,7 @@ watch(
               Catatan Pembaruan Sisa Uang v{{ RELEASE_VERSION }}
             </h3>
             <p class="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Pembaruan versi <strong class="text-emerald-300 font-mono">v{{ RELEASE_VERSION }}</strong> (Build {{ BUILD_NUMBER }}) menghadirkan dukungan pembayaran instan via QRIS (Nusapay), penataan posisi menu Utilitas di atas Pengaturan, sinkronisasi skema otomatisasi dan transaksi, serta kemudahan memilih pemilik dana yang sudah ada pada form dompet.
+              Pembaruan versi <strong class="text-emerald-300 font-mono">v{{ RELEASE_VERSION }}</strong> (Build {{ BUILD_NUMBER }}) menghadirkan fitur Tabungan, fitur Hutang / Piutang, peningkatan performa caching dan operasi database, implementasi Push Notification untuk Otomatisasi, Tabungan serta Hutang / Piutang, perbaikan struktur menu tampilan mobile, serta perbaikan tampilan informasi versi dan catatan rilis pada sidebar.
             </p>
           </div>
         </div>
