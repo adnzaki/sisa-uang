@@ -110,6 +110,21 @@ export const useAutomationStore = defineStore('automation', () => {
   const activeRules = computed(() => rules.value.filter((r) => r.isActive && !r.deleted));
   const hasActiveRules = computed(() => activeRules.value.length > 0);
 
+  // Browser Notification Permission State
+  const notificationPermission = ref<'default' | 'granted' | 'denied' | 'unsupported'>(
+    typeof window !== 'undefined' && 'Notification' in window
+      ? Notification.permission
+      : 'unsupported'
+  );
+
+  function refreshNotificationPermission() {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      notificationPermission.value = Notification.permission;
+    } else {
+      notificationPermission.value = 'unsupported';
+    }
+  }
+
   let automationsUnsubscribe: (() => void) | null = null;
 
   // Cross-tab / cross-window synchronization channel for multi-tab automation execution deduplication
@@ -448,9 +463,19 @@ export const useAutomationStore = defineStore('automation', () => {
       const combinedMap = new Map<string, AutomationItem>();
 
       if (firestoreFetchSuccess) {
+        const serverPushMap = new Map<string, string>();
+        for (const sr of serverRules) {
+          if (sr.lastPushNotifiedDate) serverPushMap.set(sr.id, sr.lastPushNotifiedDate);
+        }
+        for (const cr of cached.rules) {
+          if (cr.lastPushNotifiedDate && !serverPushMap.has(cr.id)) {
+            serverPushMap.set(cr.id, cr.lastPushNotifiedDate);
+          }
+        }
         for (const item of firestoreRules) {
           if (!item.deleted && !deletedIds.has(item.id)) {
-            combinedMap.set(item.id, item);
+            const preservedPushDate = item.lastPushNotifiedDate || serverPushMap.get(item.id) || null;
+            combinedMap.set(item.id, preservedPushDate ? { ...item, lastPushNotifiedDate: preservedPushDate } : item);
           }
         }
         // ONLY if an item was specifically created offline on this device with an explicit offline flag,
@@ -646,6 +671,7 @@ export const useAutomationStore = defineStore('automation', () => {
       isActive: payload.isActive !== undefined ? payload.isActive : true,
       lastExecutedDate: existingRule?.lastExecutedDate,
       lastCancelledDate: existingRule?.lastCancelledDate,
+      lastPushNotifiedDate: existingRule?.lastPushNotifiedDate || null,
       snoozedUntil: existingRule?.snoozedUntil,
       deleted: false,
     };
@@ -1262,6 +1288,128 @@ export const useAutomationStore = defineStore('automation', () => {
   }
 
   // =========================================================================
+  // Native Push Notification Integration
+  // =========================================================================
+
+  const PUSH_NOTIFIED_KEY_PREFIX = 'su_auto_push_notified_';
+
+  function getLocalPushNotifiedMap(uid: string): Record<string, string> {
+    if (typeof window === 'undefined') return {};
+    try {
+      const raw = localStorage.getItem(`${PUSH_NOTIFIED_KEY_PREFIX}${uid}`);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function hasPushNotifiedToday(
+    uid: string,
+    rule: AutomationItem,
+    wibDateIso: string,
+    localDateIso: string
+  ): boolean {
+    if (rule.lastPushNotifiedDate === wibDateIso || rule.lastPushNotifiedDate === localDateIso) {
+      return true;
+    }
+    const localMap = getLocalPushNotifiedMap(uid);
+    const savedDate = localMap[rule.id];
+    return savedDate === wibDateIso || savedDate === localDateIso;
+  }
+
+  function markPushNotifiedToday(uid: string, rule: AutomationItem, dateIso: string) {
+    rule.lastPushNotifiedDate = dateIso;
+    writeLocalStorageCache(uid, rules.value, CACHE_TTL_MS);
+
+    if (typeof window !== 'undefined') {
+      try {
+        const localMap = getLocalPushNotifiedMap(uid);
+        localMap[rule.id] = dateIso;
+        localStorage.setItem(`${PUSH_NOTIFIED_KEY_PREFIX}${uid}`, JSON.stringify(localMap));
+      } catch {
+        // Ignore storage error
+      }
+    }
+
+    void fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(rule.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lastPushNotifiedDate: dateIso }),
+    }).catch(() => {});
+  }
+
+  async function requestNotificationPermission(): Promise<boolean> {
+    const notify = useNotificationStore();
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      notificationPermission.value = 'unsupported';
+      notify.notifyError('Tidak Didukung', 'Browser atau perangkat Anda belum mendukung Notifikasi Push.');
+      return false;
+    }
+
+    try {
+      const result = await Notification.requestPermission();
+      notificationPermission.value = result;
+      if (result === 'granted') {
+        await triggerNativePush(
+          'Pengingat Otomatisasi Transaksi Aktif',
+          'Anda akan menerima notifikasi push saat jadwal transaksi otomatis tiba atau memerlukan konfirmasi.'
+        );
+        notify.notifySuccess(
+          'Notifikasi Push Diaktifkan',
+          'Pengingat jadwal otomatisasi transaksi via native push notification siap digunakan.'
+        );
+        return true;
+      } else {
+        notify.notifyWarning(
+          'Izin Notifikasi Ditolak',
+          'Aktifkan izin notifikasi di pengaturan browser agar notifikasi push dapat muncul.'
+        );
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  async function triggerNativePush(
+    title: string,
+    body: string,
+    tag = 'sisauang-automation-reminder',
+    targetUrl = '/utilities/automation'
+  ) {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+
+    const options: NotificationOptions = {
+      body,
+      icon: '/pwa-192x192.png',
+      badge: '/pwa-192x192.png',
+      tag,
+      renotify: true,
+      data: { url: targetUrl },
+    } as NotificationOptions;
+
+    try {
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg && typeof reg.showNotification === 'function') {
+          await reg.showNotification(title, options);
+          return;
+        }
+      }
+      const notif = new Notification(title, options);
+      notif.onclick = () => {
+        window.focus();
+        notif.close();
+      };
+    } catch {
+      // Ignore notification API errors
+    }
+  }
+
+  // =========================================================================
   // Activity Check Trigger (Called on route change, data change, app focus)
   // Evaluates schedules. Respects the 5-minute quota cache strictly!
   // =========================================================================
@@ -1278,6 +1426,7 @@ export const useAutomationStore = defineStore('automation', () => {
     if (isEvaluating.value) return;
 
     const uid = sanitizeId(authStore.user.uid);
+    refreshNotificationPermission();
 
     // Fast-path quota check: inspect local storage cache
     const cached = readLocalStorageCache(uid);
@@ -1401,11 +1550,40 @@ export const useAutomationStore = defineStore('automation', () => {
         }
 
         // Rule is DUE!
+        const amtStr = `Rp ${Number(rule.amount || 0).toLocaleString('id-ID')}`;
+        const txTypeLabel =
+          rule.type === 'income' ? 'Pemasukan' : rule.type === 'transfer' ? 'Transfer' : 'Pengeluaran';
+
         if (rule.mode === 'without_confirmation') {
           // Immediately record transaction automatically!
-          await executeTransaction(rule, { isManualEarly: false });
+          const executed = await executeTransaction(rule, { isManualEarly: false });
+          if (
+            executed &&
+            notificationPermission.value === 'granted' &&
+            !hasPushNotifiedToday(uid, rule, wib.dateIso, localDateIso)
+          ) {
+            await triggerNativePush(
+              `Transaksi Otomatis Tercatat: ${rule.name}`,
+              `${txTypeLabel} sebesar ${amtStr} (${rule.walletName}) telah dicatat otomatis sesuai jadwal (${rule.executionTime} WIB).`,
+              `sisauang-auto-${rule.id}-${wib.dateIso}`,
+              '/transactions'
+            );
+            markPushNotifiedToday(uid, rule, wib.dateIso);
+          }
         } else if (rule.mode === 'with_confirmation') {
           dueWithConfirmation.push(rule);
+          if (
+            notificationPermission.value === 'granted' &&
+            !hasPushNotifiedToday(uid, rule, wib.dateIso, localDateIso)
+          ) {
+            await triggerNativePush(
+              `Konfirmasi Transaksi Otomatis: ${rule.name}`,
+              `${txTypeLabel} sebesar ${amtStr} (${rule.walletName}) telah memasuki jadwal (${rule.executionTime} WIB). Ketuk untuk catat, tunda, atau batalkan.`,
+              `sisauang-auto-${rule.id}-${wib.dateIso}`,
+              '/utilities/automation'
+            );
+            markPushNotifiedToday(uid, rule, wib.dateIso);
+          }
         }
       }
 
@@ -1439,6 +1617,7 @@ export const useAutomationStore = defineStore('automation', () => {
     pendingQueue,
     activeRules,
     hasActiveRules,
+    notificationPermission,
     subscribeToAutomations,
     unsubscribeFromAutomations,
     loadAutomations,
@@ -1449,6 +1628,9 @@ export const useAutomationStore = defineStore('automation', () => {
     snoozeRule,
     cancelRuleForToday,
     dismissCurrentConfirmation,
+    refreshNotificationPermission,
+    requestNotificationPermission,
+    triggerNativePush,
     checkAndTriggerOnActivity,
   };
 });

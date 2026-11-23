@@ -534,6 +534,7 @@ export interface ServerAutomationRecord {
   isActive: boolean;
   lastExecutedDate?: string | null;
   lastCancelledDate?: string | null;
+  lastPushNotifiedDate?: string | null;
   snoozedUntil?: string | null;
   claimedExecutionDate?: string | null;
   claimedAt?: number | null;
@@ -2684,6 +2685,7 @@ async function startServer() {
       isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
       lastExecutedDate: body.lastExecutedDate || null,
       lastCancelledDate: body.lastCancelledDate || null,
+      lastPushNotifiedDate: body.lastPushNotifiedDate || null,
       snoozedUntil: body.snoozedUntil || null,
       deleted: false,
       createdAt: body.createdAt || nowIso(),
@@ -2737,6 +2739,7 @@ async function startServer() {
       isActive: body.isActive !== undefined ? Boolean(body.isActive) : (existing?.isActive !== undefined ? existing.isActive : true),
       lastExecutedDate: body.lastExecutedDate !== undefined ? body.lastExecutedDate : (existing?.lastExecutedDate || null),
       lastCancelledDate: body.lastCancelledDate !== undefined ? body.lastCancelledDate : (existing?.lastCancelledDate || null),
+      lastPushNotifiedDate: body.lastPushNotifiedDate !== undefined ? body.lastPushNotifiedDate : (existing?.lastPushNotifiedDate || null),
       snoozedUntil: body.snoozedUntil !== undefined ? body.snoozedUntil : (existing?.snoozedUntil || null),
       deleted: false,
       createdAt: existing?.createdAt || nowIso(),
@@ -2782,6 +2785,7 @@ async function startServer() {
       existing.claimedAt = null;
       existing.claimedBy = null;
     }
+    if (body.lastPushNotifiedDate !== undefined) existing.lastPushNotifiedDate = body.lastPushNotifiedDate;
     if (body.snoozedUntil !== undefined) existing.snoozedUntil = body.snoozedUntil;
     if (body.deleted !== undefined) existing.deleted = Boolean(body.deleted);
     existing.updatedAt = nowIso();
@@ -2959,6 +2963,7 @@ async function startServer() {
           isActive: item.isActive !== undefined ? Boolean(item.isActive) : true,
           lastExecutedDate: item.lastExecutedDate || null,
           lastCancelledDate: item.lastCancelledDate || null,
+          lastPushNotifiedDate: item.lastPushNotifiedDate || null,
           snoozedUntil: item.snoozedUntil || null,
           deleted: false,
           createdAt: item.createdAt || nowIso(),

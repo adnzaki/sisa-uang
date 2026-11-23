@@ -22,6 +22,7 @@ export interface AutomationItem {
   isActive: boolean;
   lastExecutedDate?: string; // YYYY-MM-DD
   lastCancelledDate?: string; // YYYY-MM-DD
+  lastPushNotifiedDate?: string | null; // YYYY-MM-DD
   snoozedUntil?: string; // ISO timestamp
   claimedExecutionDate?: string | null;
   claimedAt?: number | null;

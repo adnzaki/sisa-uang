@@ -39,6 +39,7 @@ let openedAtFullPath = '';
 
 function handlePopState() {
   if (!isOpen.value) return;
+  if (window.history.state?.__sisaUangModalKey === modalInstanceKey) return;
   if (hasPushedHistoryState) {
     isClosedByBackButton = true;
     hasPushedHistoryState = false;
@@ -90,7 +91,8 @@ watch(
       isClosedByBackButton = false;
       openedAtFullPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
       try {
-        const currentState = window.history.state || {};
+        const currentState = { ...(window.history.state || {}) };
+        delete currentState.__sisaUangDrawerKey;
         window.history.pushState(
           { ...currentState, __sisaUangModalKey: modalInstanceKey },
           '',
@@ -139,12 +141,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <Transition name="modal">
-    <div
-      v-if="isOpen"
-      class="fixed inset-0 z-50 flex items-stretch sm:items-center justify-center bg-black/55 backdrop-blur-xs p-0 sm:p-4"
-      @click.self="closeModal"
-    >
+  <Teleport to="body">
+    <Transition name="modal">
+      <div
+        v-if="isOpen"
+        class="fixed inset-0 z-[70] flex items-stretch sm:items-center justify-center bg-black/55 backdrop-blur-xs p-0 sm:p-4"
+        @click.self="closeModal"
+      >
       <!--
         Mobile (< sm): Full screen (w-full h-dvh max-h-dvh rounded-none)
         Desktop (sm+): Centered modal card with rounded-2xl and max-h-[90dvh]
@@ -202,6 +205,7 @@ onBeforeUnmount(() => {
           <slot name="footer" />
         </div>
       </div>
-    </div>
-  </Transition>
+      </div>
+    </Transition>
+  </Teleport>
 </template>

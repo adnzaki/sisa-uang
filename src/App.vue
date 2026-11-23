@@ -409,11 +409,31 @@ let openedDrawerAtFullPath = '';
 
 function handleDrawerPopState() {
   if (!mobileDrawerOpen.value) return;
+  if (window.history.state?.__sisaUangDrawerKey === drawerHistoryKey) return;
   if (hasPushedDrawerHistory) {
     isClosedByBack = true;
     hasPushedDrawerHistory = false;
     mobileDrawerOpen.value = false;
   }
+}
+
+function openChangelogModalFromUI() {
+  accountMenuOpen.value = false;
+  if (mobileDrawerOpen.value) {
+    isClosedByBack = true;
+    hasPushedDrawerHistory = false;
+    mobileDrawerOpen.value = false;
+    try {
+      if (window.history.state?.__sisaUangDrawerKey === drawerHistoryKey) {
+        const nextState = { ...(window.history.state || {}) };
+        delete nextState.__sisaUangDrawerKey;
+        window.history.replaceState(nextState, '', window.location.href);
+      }
+    } catch {
+      // Ignore history errors
+    }
+  }
+  notificationStore.openChangelogModal();
 }
 
 function navigateFromMobileDrawer(targetPath: string) {
@@ -454,14 +474,16 @@ watch(mobileDrawerOpen, (isOpen) => {
     if (hasPushedDrawerHistory && !isClosedByBack) {
       hasPushedDrawerHistory = false;
       const snapshotPath = openedDrawerAtFullPath;
-      // Defer history.back() to next microtask so if the drawer was closed as part of a router.push(),
-      // we detect that route changed and do NOT pop the new route back to the previous page!
+      // Defer history.back() to next microtask so if the drawer was closed as part of a router.push()
+      // or modal open, we do NOT pop the new route or immediately close the newly opened modal!
       setTimeout(() => {
         try {
           const currentFullPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
           if (
             currentFullPath === snapshotPath &&
-            window.history.state?.__sisaUangDrawerKey === drawerHistoryKey
+            window.history.state?.__sisaUangDrawerKey === drawerHistoryKey &&
+            !window.history.state?.__sisaUangModalKey &&
+            !notificationStore.changelogModalOpen
           ) {
             window.history.back();
           }
@@ -1499,7 +1521,7 @@ async function handleSubmitProPayment() {
             type="button"
             class="w-full py-1.5 px-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/80 text-center text-[11px] font-mono text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center justify-center gap-1.5 transition-colors"
             :title="`Lihat Informasi Rilis & Changelog v${clientAppVersion}`"
-            @click="notificationStore.openChangelogModal()"
+            @click="openChangelogModalFromUI"
           >
             <Sparkles class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <span>Versi {{ clientAppVersion }} · Info Rilis</span>
@@ -1766,7 +1788,7 @@ async function handleSubmitProPayment() {
                   <button
                     type="button"
                     class="w-full min-h-[38px] px-3.5 py-2 rounded-xl border border-emerald-200/80 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/30 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-between gap-2 transition-colors"
-                    @click="accountMenuOpen = false; notificationStore.openChangelogModal()"
+                    @click="openChangelogModalFromUI"
                   >
                     <span class="flex items-center gap-2 truncate">
                       <Sparkles class="w-3.5 h-3.5 shrink-0" />
@@ -2055,7 +2077,7 @@ async function handleSubmitProPayment() {
                   <button
                     type="button"
                     class="w-full min-h-[38px] px-3.5 py-2 rounded-xl border border-emerald-200/80 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/30 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-between gap-2 transition-colors"
-                    @click="accountMenuOpen = false; notificationStore.openChangelogModal()"
+                    @click="openChangelogModalFromUI"
                   >
                     <span class="flex items-center gap-2 truncate">
                       <Sparkles class="w-3.5 h-3.5 shrink-0" />
@@ -2207,12 +2229,15 @@ async function handleSubmitProPayment() {
                 v-for="item in userNavItems"
                 :key="item.path"
                 :href="item.path"
-                class="min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
-                :class="
+                class="min-h-[44px] items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                :class="[
+                  ['/dashboard', '/transactions', '/wallets'].includes(item.path)
+                    ? 'hidden md:flex'
+                    : 'flex',
                   route.path === item.path
                     ? 'bg-emerald-600 text-white shadow-2xs'
-                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                "
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800',
+                ]"
                 @click.prevent="navigateFromMobileDrawer(item.path)"
               >
                 <div class="flex items-center gap-3 truncate min-w-0">
@@ -2233,8 +2258,59 @@ async function handleSubmitProPayment() {
                 </span>
               </a>
               
-              <!-- Mobile Drawer Utilitas Accordion: Menu Utama dengan Sub-menu Otomatisasi -->
-              <div class="pt-1">
+              <!-- Mobile-Only Top-Level Menus (Extracted from Utilitas on < md) -->
+              <div class="md:hidden space-y-1">
+                <a
+                  href="/utilities/automation"
+                  class="min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                  :class="
+                    route.path === '/utilities/automation'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  "
+                  @click.prevent="navigateFromMobileDrawer('/utilities/automation')"
+                >
+                  <div class="flex items-center gap-3 truncate min-w-0">
+                    <Clock class="w-4 h-4 shrink-0" />
+                    <span class="truncate">{{ t('nav.automation') }}</span>
+                  </div>
+                </a>
+
+                <a
+                  href="/utilities/savings"
+                  class="min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                  :class="
+                    route.path.startsWith('/utilities/savings')
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  "
+                  @click.prevent="navigateFromMobileDrawer('/utilities/savings')"
+                >
+                  <div class="flex items-center gap-3 truncate min-w-0">
+                    <Target class="w-4 h-4 shrink-0" />
+                    <span class="truncate">{{ t('nav.savings') }}</span>
+                  </div>
+                </a>
+
+                <a
+                  href="/utilities/debts"
+                  class="min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                  :class="
+                    route.path.startsWith('/utilities/debts')
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  "
+                  @click.prevent="navigateFromMobileDrawer('/utilities/debts')"
+                >
+                  <div class="flex items-center gap-3 truncate min-w-0">
+                    <HandCoins class="w-4 h-4 shrink-0" />
+                    <span class="truncate">{{ t('nav.debts') }}</span>
+                  </div>
+                </a>
+              </div>
+
+              <!-- Tablet Drawer Utilitas Accordion (md to < lg): Menu Utama dengan Sub-menu -->
+              <div class="hidden md:block pt-1">
                 <button
                   type="button"
                   class="w-full min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors select-none text-left cursor-pointer"
@@ -2262,7 +2338,7 @@ async function handleSubmitProPayment() {
                   </div>
                 </button>
 
-                <!-- Accordion Submenu: Otomatisasi & Tabungan -->
+                <!-- Accordion Submenu: Otomatisasi, Tabungan & Hutang/Piutang -->
                 <div
                   v-show="utilitiesAccordionOpen"
                   class="mt-1 pl-3 py-1 space-y-1 border-l-2 border-emerald-200/80 dark:border-emerald-900/60 ml-4 transition-all"
@@ -2494,7 +2570,7 @@ async function handleSubmitProPayment() {
               type="button"
               class="w-full py-1.5 px-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/80 text-center text-[11px] font-mono text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center justify-center gap-1.5 transition-colors"
               :title="`Lihat Informasi Rilis & Changelog v${clientAppVersion}`"
-              @click="mobileDrawerOpen = false; notificationStore.openChangelogModal()"
+              @click="openChangelogModalFromUI"
             >
               <Sparkles class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span>Versi {{ clientAppVersion }} · Info Rilis</span>

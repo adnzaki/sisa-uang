@@ -245,7 +245,7 @@ watch(
 
 <template>
   <AppModal
-    v-model="notificationStore.changelogModalOpen"
+    :open="notificationStore.changelogModalOpen"
     title="Informasi Rilis Resmi & Catatan Pembaruan"
     max-width="2xl"
     @close="markChangelogSeenAndClose"

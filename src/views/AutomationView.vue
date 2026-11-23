@@ -19,6 +19,8 @@ import {
   ChevronDown,
   Info,
   RefreshCw,
+  Bell,
+  BellOff,
   BellRing,
   Zap,
   ArrowDownLeft,
@@ -82,6 +84,7 @@ async function ensureDataReady(force = false) {
     await Promise.all(tasks);
   }
   automationStore.subscribeToAutomations(uid);
+  automationStore.refreshNotificationPermission();
 
   // Automatically check & execute any scheduled automations that are due
   void automationStore.checkAndTriggerOnActivity();
@@ -575,35 +578,72 @@ function getExecutionStatusText(rule: AutomationItem): { text: string; color: st
 
 <template>
   <div class="space-y-6 pb-20">
-    <!-- Header Section -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-      <div>
+    <!-- Header Section (Matching SavingsView & DebtsView Layout) -->
+    <div class="grid grid-cols-[1fr_auto] sm:flex sm:items-center sm:justify-between gap-x-3 gap-y-3 sm:gap-4">
+      <div class="col-span-1 min-w-0 sm:flex-1">
         <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
           Otomatisasi Transaksi
         </h1>
-        <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+        <p class="hidden sm:block text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
           Pencatatan transaksi berkala otomatis (Dengan Konfirmasi / Tanpa Konfirmasi)
         </p>
       </div>
 
-      <div class="flex items-center gap-2.5">
-        <button
-          type="button"
-          :disabled="isRefreshing"
-          class="min-h-[42px] px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-all shadow-2xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
-          title="Segarkan Jadwal Otomatis"
-          @click="handleManualRefresh"
-        >
-          <RefreshCw class="w-4 h-4 text-emerald-600 dark:text-emerald-400" :class="{ 'animate-spin': isRefreshing }" />
-          <span class="hidden sm:inline">Segarkan</span>
-        </button>
+      <div class="contents sm:flex sm:items-center sm:gap-2 sm:shrink-0 sm:flex-nowrap">
+        <div class="flex items-center justify-end gap-2 shrink-0 justify-self-end self-start sm:self-center">
+          <button
+            v-if="automationStore.notificationPermission !== 'unsupported'"
+            type="button"
+            class="w-11 h-11 min-w-[44px] min-h-[44px] rounded-xl border transition-all flex items-center justify-center shrink-0 cursor-pointer active:scale-95"
+            :class="
+              automationStore.notificationPermission === 'granted'
+                ? 'border-teal-400/60 dark:border-teal-400/40 bg-gradient-to-br from-teal-500 to-cyan-600 hover:from-teal-600 hover:to-cyan-700 text-white shadow-sm shadow-teal-600/20'
+                : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 shadow-2xs'
+            "
+            :title="
+              automationStore.notificationPermission === 'granted'
+                ? 'Push Notifikasi Otomatisasi Transaksi Aktif'
+                : 'Aktifkan Push Notifikasi Otomatisasi Transaksi'
+            "
+            :aria-label="
+              automationStore.notificationPermission === 'granted'
+                ? 'Push Notifikasi Otomatisasi Transaksi Aktif'
+                : 'Aktifkan Push Notifikasi Otomatisasi Transaksi'
+            "
+            @click="automationStore.requestNotificationPermission()"
+          >
+            <Bell
+              v-if="automationStore.notificationPermission === 'granted'"
+              class="w-4.5 h-4.5 shrink-0"
+            />
+            <BellOff v-else class="w-4.5 h-4.5 shrink-0 text-amber-500 dark:text-amber-400" />
+          </button>
+
+          <button
+            type="button"
+            :disabled="isRefreshing"
+            class="w-11 h-11 min-w-[44px] min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-all shadow-2xs flex items-center justify-center shrink-0 cursor-pointer disabled:opacity-50 active:scale-95"
+            title="Segarkan Jadwal Otomatis"
+            aria-label="Segarkan Jadwal Otomatis"
+            @click="handleManualRefresh"
+          >
+            <RefreshCw
+              class="w-4.5 h-4.5 text-emerald-600 dark:text-emerald-400"
+              :class="{ 'animate-spin': isRefreshing }"
+            />
+          </button>
+        </div>
+
+        <p class="col-span-2 sm:hidden text-xs text-slate-500 dark:text-slate-400 -mt-1">
+          Pencatatan transaksi berkala otomatis (Dengan Konfirmasi / Tanpa Konfirmasi)
+        </p>
 
         <button
           type="button"
-          class="min-h-[42px] px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-sm hover:shadow active:scale-95 flex items-center gap-2 cursor-pointer"
+          class="col-span-2 sm:col-span-1 w-full sm:w-auto h-11 min-h-[44px] px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-sm hover:shadow active:scale-[0.98] flex items-center justify-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
           @click="openAddModal"
         >
-          <Plus class="w-4 h-4" />
+          <Plus class="w-4 h-4 shrink-0" />
           <span>Tambah Jadwal Otomatis</span>
         </button>
       </div>
@@ -1054,6 +1094,18 @@ function getExecutionStatusText(rule: AutomationItem): { text: string; color: st
                 <p class="text-[10px] text-slate-500 dark:text-slate-400 leading-snug">
                   Sistem langsung mencatat otomatis saat memasuki jadwal tanpa konfirmasi.
                 </p>
+              </button>
+            </div>
+
+            <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400 pt-1">
+              <span>Jadwal otomatisasi akan mengirim Push Notifikasi native saat aktif.</span>
+              <button
+                v-if="automationStore.notificationPermission !== 'granted' && automationStore.notificationPermission !== 'unsupported'"
+                type="button"
+                class="text-emerald-600 dark:text-emerald-400 font-bold hover:underline cursor-pointer"
+                @click="automationStore.requestNotificationPermission()"
+              >
+                Izinkan Push Notifikasi &rarr;
               </button>
             </div>
           </div>
