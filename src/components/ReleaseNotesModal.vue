@@ -19,6 +19,7 @@ import AppModal from './AppModal.vue';
 const LAST_SEEN_VERSION_KEY = 'sisa_uang_last_seen_app_version';
 const LAST_SEEN_BUILD_KEY = 'sisa_uang_last_seen_build_number';
 const JUST_UPDATED_FLAG_KEY = 'sisa_uang_app_just_updated';
+const PENDING_CHANGELOG_ACK_KEY = 'sisa_uang_pending_changelog_ack';
 const RELEASE_VERSION = '1.0.3';
 const RELEASE_DATE = 'November 2026';
 const BUILD_NUMBER = '10323';
@@ -166,38 +167,26 @@ const filteredChangelog = computed(() => {
   return changelogItems.filter((item) => item.category === activeFilter.value);
 });
 
-function markChangelogSeenAndClose() {
+function acknowledgeChangelogAndClose() {
   try {
     localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
     localStorage.setItem(LAST_SEEN_BUILD_KEY, BUILD_NUMBER);
     localStorage.setItem(CHANGELOG_SEEN_KEY.value, 'true');
     localStorage.removeItem(JUST_UPDATED_FLAG_KEY);
     sessionStorage.removeItem(JUST_UPDATED_FLAG_KEY);
+    localStorage.removeItem(PENDING_CHANGELOG_ACK_KEY);
   } catch {
     // Ignore storage error
   }
   notificationStore.closeChangelogModal();
 }
 
-// Watch modal closure to ensure seen keys are recorded even if dismissed via backdrop or Esc
-watch(
-  () => notificationStore.changelogModalOpen,
-  (isOpen) => {
-    if (!isOpen) {
-      try {
-        localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
-        localStorage.setItem(LAST_SEEN_BUILD_KEY, BUILD_NUMBER);
-        localStorage.setItem(CHANGELOG_SEEN_KEY.value, 'true');
-        localStorage.removeItem(JUST_UPDATED_FLAG_KEY);
-        sessionStorage.removeItem(JUST_UPDATED_FLAG_KEY);
-      } catch {
-        // Ignore storage error
-      }
-    }
-  }
-);
+function dismissChangelogModal() {
+  notificationStore.closeChangelogModal();
+}
 
-// One-time evaluation: Only show automatically when the application was JUST updated (new version or new build number)
+// One-time evaluation: Automatically show changelog after an update reload or new version/build,
+// and keep prompting on load until user clicks "Mengerti & Mulai Gunakan".
 let hasEvaluatedAutoOpen = false;
 
 function checkAutoOpenOnUpdate() {
@@ -213,43 +202,50 @@ function checkAutoOpenOnUpdate() {
     const prevBuild = localStorage.getItem(LAST_SEEN_BUILD_KEY);
     const sessionJustUpdated = sessionStorage.getItem(JUST_UPDATED_FLAG_KEY) === 'true';
     const localJustUpdated = localStorage.getItem(JUST_UPDATED_FLAG_KEY) === 'true';
+    const hasPendingAck = localStorage.getItem(PENDING_CHANGELOG_ACK_KEY) === 'true';
     const currentSeenKey = CHANGELOG_SEEN_KEY.value;
-    const releaseAlreadySeen = localStorage.getItem(currentSeenKey) === 'true';
+    const releaseAcknowledged = localStorage.getItem(currentSeenKey) === 'true';
 
-    // Clear one-time reload flags
+    // Clear one-time reload flags after reading
     if (sessionJustUpdated) sessionStorage.removeItem(JUST_UPDATED_FLAG_KEY);
     if (localJustUpdated) localStorage.removeItem(JUST_UPDATED_FLAG_KEY);
 
-    // Condition 1: Upgraded from an older stored version (e.g. 1.0.2 -> 1.0.3)
-    const isVersionChanged = Boolean(prevVersion && prevVersion !== RELEASE_VERSION);
-
-    // Condition 2: Build number changed (e.g. 10222 -> 10323)
-    const isBuildChanged = Boolean(prevBuild && prevBuild !== BUILD_NUMBER);
-
-    // Condition 3: Explicit reload update triggered by PWA / update banner
+    // Condition 1: Explicit reload update triggered by PWA / update banner / settings reload
     const isExplicitUpdateReload = sessionJustUpdated || localJustUpdated;
 
-    // If both version and build number already match and this release was seen, do not pop up again
+    // Condition 2: Upgraded from an older stored version (e.g. 1.0.2 -> 1.0.3)
+    const isVersionChanged = Boolean(prevVersion && prevVersion !== RELEASE_VERSION);
+
+    // Condition 3: Build number changed (e.g. 10222 -> 10323)
+    const isBuildChanged = Boolean(prevBuild && prevBuild !== BUILD_NUMBER);
+
+    if (isExplicitUpdateReload || isVersionChanged || isBuildChanged || hasPendingAck) {
+      // Mark pending acknowledgment until user explicitly clicks "Mengerti & Mulai Gunakan"
+      localStorage.setItem(PENDING_CHANGELOG_ACK_KEY, 'true');
+      localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
+      localStorage.setItem(LAST_SEEN_BUILD_KEY, BUILD_NUMBER);
+      notificationStore.openChangelogModal();
+      return;
+    }
+
     const isSameVersionAndBuild = prevVersion === RELEASE_VERSION && prevBuild === BUILD_NUMBER;
-    if (isSameVersionAndBuild || releaseAlreadySeen) {
+    if (isSameVersionAndBuild && releaseAcknowledged) {
+      // User already clicked "Mengerti & Mulai Gunakan" for this version/build: never auto-open again
+      return;
+    }
+
+    if (!prevVersion && !prevBuild) {
+      // First visit / clean storage: record current version silently so initial visit doesn't pop up update dialog
       localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
       localStorage.setItem(LAST_SEEN_BUILD_KEY, BUILD_NUMBER);
       localStorage.setItem(currentSeenKey, 'true');
       return;
     }
 
-    if (isVersionChanged || isBuildChanged || isExplicitUpdateReload) {
-      // Show automatically once because version or build number changed
-      localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
-      localStorage.setItem(LAST_SEEN_BUILD_KEY, BUILD_NUMBER);
-      localStorage.setItem(currentSeenKey, 'true');
-      notificationStore.openChangelogModal();
-    } else {
-      // First visit or fresh install: record silently so regular reloads don't pop up
-      localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
-      localStorage.setItem(LAST_SEEN_BUILD_KEY, BUILD_NUMBER);
-      localStorage.setItem(currentSeenKey, 'true');
-    }
+    // Fallback: version/build exists in storage without acknowledgment -> record silently unless explicit update
+    localStorage.setItem(LAST_SEEN_VERSION_KEY, RELEASE_VERSION);
+    localStorage.setItem(LAST_SEEN_BUILD_KEY, BUILD_NUMBER);
+    localStorage.setItem(currentSeenKey, 'true');
   } catch {
     // Ignore storage errors
   }
@@ -277,7 +273,7 @@ watch(
     :open="notificationStore.changelogModalOpen"
     title="Informasi Rilis Resmi & Catatan Pembaruan"
     max-width="2xl"
-    @close="markChangelogSeenAndClose"
+    @close="dismissChangelogModal"
   >
     <template #header>
       <div class="flex items-center gap-2.5 min-w-0">
@@ -449,7 +445,7 @@ watch(
         <button
           type="button"
           class="w-full sm:w-auto min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors shrink-0 shadow-xs cursor-pointer"
-          @click="markChangelogSeenAndClose"
+          @click="acknowledgeChangelogAndClose"
         >
           <Check class="w-4 h-4 shrink-0" />
           <span>Mengerti &amp; Mulai Gunakan</span>
