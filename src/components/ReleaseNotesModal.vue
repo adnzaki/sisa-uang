@@ -22,7 +22,7 @@ const JUST_UPDATED_FLAG_KEY = 'sisa_uang_app_just_updated';
 const PENDING_CHANGELOG_ACK_KEY = 'sisa_uang_pending_changelog_ack';
 const RELEASE_VERSION = '1.0.3';
 const RELEASE_DATE = 'November 2026';
-const BUILD_NUMBER = '10325';
+const BUILD_NUMBER = '10326';
 const CHANGELOG_SEEN_KEY = computed(
   () => `sisa_uang_changelog_seen_v${RELEASE_VERSION.replace(/\./g, '_')}_b${BUILD_NUMBER}`
 );
