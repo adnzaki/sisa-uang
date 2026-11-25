@@ -59,10 +59,29 @@ export function getUserAuthHeaders(): Record<string, string> {
 
 let inFlightUserTokenRefresh: Promise<boolean> | null = null;
 
+export async function waitForAuthStateReady(): Promise<void> {
+  try {
+    const readyFn = (auth as any)?.authStateReady;
+    if (typeof readyFn === 'function') {
+      await Promise.race([
+        readyFn.call(auth),
+        new Promise<void>((resolve) => setTimeout(resolve, 2500)),
+      ]);
+    }
+  } catch {
+    // Ignore Firebase authStateReady errors
+  }
+}
+
 export async function refreshFirebaseBackedUserToken(): Promise<boolean> {
   if (inFlightUserTokenRefresh) {
     return inFlightUserTokenRefresh;
   }
+
+  if (!auth.currentUser) {
+    await waitForAuthStateReady();
+  }
+
   const fbUser = auth.currentUser;
   if (!fbUser || fbUser.isAnonymous) {
     return false;
@@ -95,6 +114,17 @@ export async function refreshFirebaseBackedUserToken(): Promise<boolean> {
 }
 
 apiClient.interceptors.request.use(async (config) => {
+  const reqUrl = String(config.url || '');
+  const isUnauthenticatedAuthEndpoint =
+    reqUrl.includes('/auth/login') ||
+    reqUrl.includes('/auth/register') ||
+    reqUrl.includes('/auth/reset-password') ||
+    reqUrl.includes('/auth/verify-hash');
+
+  if (!auth.currentUser && !isUnauthenticatedAuthEndpoint) {
+    await waitForAuthStateReady();
+  }
+
   const adminToken = localStorage.getItem(ADMIN_TOKEN_KEY);
   const userToken = localStorage.getItem(USER_TOKEN_KEY);
   let actorEmail = localStorage.getItem(ACTOR_EMAIL_KEY);

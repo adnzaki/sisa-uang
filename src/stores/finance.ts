@@ -2205,7 +2205,7 @@ export const useFinanceStore = defineStore('finance', () => {
           'categories',
           { wheres: [{ field: 'ownerId', op: '==', value: DEFAULT_CATEGORY_OWNER_ID }] },
           uid
-        )
+        ).catch(() => ({ empty: true, size: 0, docs: [] }))
       );
     }
 

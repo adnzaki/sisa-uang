@@ -10,6 +10,7 @@ import multer from 'multer';
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { initializeApp as initServerFirebaseApp } from 'firebase/app';
 import {
@@ -83,7 +84,25 @@ restoreUnquotedEnvHashValues();
 const SUPER_ADMIN_EMAIL = 'vuedevo@gmail.com';
 const SUPER_ADMIN_USERNAME = 'vuedevo';
 const WORKSPACE_ADMIN_EMAIL = 'adnanzaki65@admin.sd.belajar.id';
-const RUNTIME_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+
+function loadOrCreateRuntimeSecret(): string {
+  const secretPath = path.join(os.tmpdir(), '.sisa_uang_runtime_secret');
+  try {
+    if (fs.existsSync(secretPath)) {
+      const existing = fs.readFileSync(secretPath, 'utf8').trim();
+      if (existing.length >= 32) {
+        return existing;
+      }
+    }
+    const generated = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(secretPath, generated, { mode: 0o600, encoding: 'utf8' });
+    return generated;
+  } catch {
+    return crypto.randomBytes(32).toString('hex');
+  }
+}
+
+const RUNTIME_SESSION_SECRET = loadOrCreateRuntimeSecret();
 let runtimeServerFbPassword = '';
 
 function getSessionSecret(): string {
@@ -975,8 +994,8 @@ function savePersistedReportSettingsCache() {
 
 loadPersistedReportSettingsCache();
 
-const DEV_APP_URL = 'https://ais-dev-mmsxhrlhyl6nd34sur3nm5-416811674365.asia-southeast1.run.app';
-const PRE_APP_URL = 'https://ais-pre-mmsxhrlhyl6nd34sur3nm5-416811674365.asia-southeast1.run.app';
+const DEV_APP_URL = 'https://ais-dev-es4jlpfdzwpqk2v5gwm6ux-692522329374.asia-east1.run.app';
+const PRE_APP_URL = 'https://ais-pre-es4jlpfdzwpqk2v5gwm6ux-692522329374.asia-east1.run.app';
 
 function computePeerSignature(ownerId: string): string | null {
   const secret = (process.env.SESSION_SECRET || '').trim();
@@ -1557,10 +1576,22 @@ function recordOtpSentRate(emailRaw: string) {
 }
 
 function issueSuperAdminToken(email: string): string {
-  const adminToken = crypto.randomBytes(24).toString('hex');
+  const cleanEmail = email.toLowerCase();
+  const verifiedAt = Date.now();
+  const payload = {
+    email: cleanEmail,
+    iat: verifiedAt,
+    jti: crypto.randomBytes(12).toString('hex'),
+  };
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', getSessionSecret())
+    .update(`sa1:${encoded}`)
+    .digest('base64url');
+  const adminToken = `sa1.${encoded}.${sig}`;
   verifiedAdminTokens.set(adminToken, {
-    email: email.toLowerCase(),
-    verifiedAt: Date.now(),
+    email: cleanEmail,
+    verifiedAt,
   });
   savePersistedAdminTokens();
   return adminToken;
@@ -2006,19 +2037,51 @@ async function startServer() {
 
   function validateVerifiedAdminToken(adminToken: string | undefined): { email: string } | null {
     if (!adminToken) return null;
-    const session = verifiedAdminTokens.get(adminToken);
-    if (!session) return null;
     const MAX_TOKEN_AGE_MS = 24 * 60 * 60 * 1000;
-    if (Date.now() - session.verifiedAt > MAX_TOKEN_AGE_MS) {
-      verifiedAdminTokens.delete(adminToken);
-      savePersistedAdminTokens();
-      return null;
+    const session = verifiedAdminTokens.get(adminToken);
+    if (session) {
+      if (Date.now() - session.verifiedAt > MAX_TOKEN_AGE_MS) {
+        verifiedAdminTokens.delete(adminToken);
+        savePersistedAdminTokens();
+        return null;
+      }
+      const email = session.email.toLowerCase();
+      if (email !== SUPER_ADMIN_EMAIL && email !== WORKSPACE_ADMIN_EMAIL) {
+        return null;
+      }
+      return { email };
     }
-    const email = session.email.toLowerCase();
-    if (email !== SUPER_ADMIN_EMAIL && email !== WORKSPACE_ADMIN_EMAIL) {
-      return null;
+
+    if (adminToken.startsWith('sa1.')) {
+      const parts = adminToken.split('.');
+      if (parts.length !== 3) return null;
+      const [, encoded, sig] = parts;
+      if (!encoded || !sig) return null;
+      const expectedSig = crypto
+        .createHmac('sha256', getSessionSecret())
+        .update(`sa1:${encoded}`)
+        .digest('base64url');
+      if (sig.length !== expectedSig.length) return null;
+      try {
+        if (!crypto.timingSafeEqual(Buffer.from(sig, 'utf8'), Buffer.from(expectedSig, 'utf8'))) {
+          return null;
+        }
+        const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as {
+          email?: string;
+          iat?: number;
+        };
+        const email = String(parsed?.email || '').trim().toLowerCase();
+        const iat = Number(parsed?.iat || 0);
+        if (!email || !iat || Date.now() - iat > MAX_TOKEN_AGE_MS) return null;
+        if (email !== SUPER_ADMIN_EMAIL && email !== WORKSPACE_ADMIN_EMAIL) return null;
+        verifiedAdminTokens.set(adminToken, { email, verifiedAt: iat });
+        return { email };
+      } catch {
+        return null;
+      }
     }
-    return { email };
+
+    return null;
   }
 
   async function doesCallerOwnTargetUid(
@@ -2216,46 +2279,17 @@ async function startServer() {
       return;
     }
 
-    const session = verifiedAdminTokens.get(adminToken);
-    if (!session) {
+    const verifiedAdmin = validateVerifiedAdminToken(adminToken);
+    if (!verifiedAdmin) {
       appendLog(
         'unknown_actor',
         actorEmail || 'anonymous',
         'invalid_admin_token',
-        `Akses admin (${req.path}) ditolak: token admin tidak valid atau sudah dicabut.`,
+        `Akses admin (${req.path}) ditolak: token admin tidak valid atau sudah kedaluwarsa.`,
         'critical'
       );
       res.status(403).json({
-        error: 'Sesi Super Admin tidak valid atau telah dicabut. Silakan login kembali.',
-      });
-      return;
-    }
-
-    // Check token expiration (max 24 hours)
-    const MAX_TOKEN_AGE_MS = 24 * 60 * 60 * 1000;
-    if (Date.now() - session.verifiedAt > MAX_TOKEN_AGE_MS) {
-      verifiedAdminTokens.delete(adminToken);
-      savePersistedAdminTokens();
-      appendLog(
-        'admin_vuedevo_01',
-        session.email,
-        'expired_admin_token',
-        `Sesi Super Admin kedaluwarsa untuk ${session.email}.`,
-        'warning'
-      );
-      res.status(401).json({
-        error: 'Sesi Super Admin telah kedaluwarsa. Silakan masuk kembali.',
-      });
-      return;
-    }
-
-    // Verify authorized admin email
-    const sessionEmail = session.email.toLowerCase();
-    if (sessionEmail !== SUPER_ADMIN_EMAIL && sessionEmail !== WORKSPACE_ADMIN_EMAIL) {
-      verifiedAdminTokens.delete(adminToken);
-      savePersistedAdminTokens();
-      res.status(403).json({
-        error: 'Akses ditolak: Identitas akun tidak memiliki hak akses Super Admin.',
+        error: 'Sesi Super Admin tidak valid atau telah kedaluwarsa. Silakan login kembali.',
       });
       return;
     }
@@ -2647,64 +2681,124 @@ async function startServer() {
           if (signInData?.localId && signInData?.idToken) {
             const fbUid = String(signInData.localId).trim();
             const fbEmail = String(signInData.email || identifierRaw).trim().toLowerCase();
-            if (!matchedUser) {
-              matchedUser = await findUserInServerFirestore(fbEmail, signInData.idToken);
-            }
-            if (!matchedUser) {
-              let fsDocData: Record<string, any> | null = null;
-              try {
-                const restSnap = await firestoreRestGetDocRaw(signInData.idToken, 'users', fbUid);
-                if (restSnap.exists && restSnap.fields) {
-                  fsDocData = decodeFirestoreRestFields(restSnap.fields);
-                }
-              } catch {
-                // Ignore REST profile lookup error; construct from token profile
+            let fsDocData: Record<string, any> | null = null;
+            try {
+              const restSnap = await firestoreRestGetDocRaw(signInData.idToken, 'users', fbUid);
+              if (restSnap.exists && restSnap.fields) {
+                fsDocData = decodeFirestoreRestFields(restSnap.fields);
               }
-              const isDeactivated = Boolean(fsDocData?.isExplicitlyDeactivated === true);
+            } catch {
+              // Ignore REST profile lookup error
+            }
+
+            if (fsDocData) {
+              const existingUidUser = usersStore.get(fbUid);
+              const isDeactivated = Boolean(fsDocData.isExplicitlyDeactivated === true);
               const isPro =
                 !isDeactivated &&
-                (fsDocData?.isPro === true || fsDocData?.subscriptionStatus === 'pro') &&
+                (fsDocData.isPro === true || fsDocData.subscriptionStatus === 'pro') &&
                 isUserSubscriptionActive({
                   isPro: true,
                   subscriptionStatus: 'pro',
-                  subscriptionExpiresAt: fsDocData?.subscriptionExpiresAt,
+                  subscriptionExpiresAt: fsDocData.subscriptionExpiresAt,
                   isExplicitlyDeactivated: isDeactivated,
                 });
-              const isPending = !isDeactivated && !isPro && fsDocData?.subscriptionStatus === 'pending';
+              const isPending = !isDeactivated && !isPro && fsDocData.subscriptionStatus === 'pending';
               const fallbackUsername = (fbEmail.split('@')[0] || fbUid.slice(0, 8)).toLowerCase();
               matchedUser = {
                 uid: fbUid,
-                username: String(fsDocData?.username || fallbackUsername).toLowerCase(),
+                username: String(fsDocData.username || existingUidUser?.username || fallbackUsername).toLowerCase(),
                 email: fbEmail,
                 displayName: String(
-                  fsDocData?.displayName || signInData.displayName || fsDocData?.username || fallbackUsername
+                  fsDocData.displayName || signInData.displayName || existingUidUser?.displayName || fallbackUsername
                 ).slice(0, 80),
                 role: 'user',
-                status: fsDocData?.status === 'blocked' ? 'blocked' : 'active',
-                authProvider: 'password',
-                currency: fsDocData?.currency === 'USD' ? 'USD' : 'IDR',
+                status: fsDocData.status === 'blocked' ? 'blocked' : 'active',
+                authProvider: fsDocData.authProvider === 'google' ? 'google' : 'password',
+                currency: fsDocData.currency === 'USD' ? 'USD' : 'IDR',
                 subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
                 isPro,
                 isExplicitlyDeactivated: isDeactivated,
                 subscriptionPlan:
-                  isPro || isPending ? (fsDocData?.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly') : null,
-                subscriptionExpiresAt: isPro ? fsDocData?.subscriptionExpiresAt || null : null,
+                  isPro || isPending ? (fsDocData.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly') : null,
+                subscriptionExpiresAt: isPro ? fsDocData.subscriptionExpiresAt || null : null,
                 passwordHash: incomingHash,
-                createdAt: tsToIsoValue(fsDocData?.createdAt || nowIso()),
+                createdAt: tsToIsoValue(fsDocData.createdAt || existingUidUser?.createdAt || nowIso()),
                 updatedAt: nowIso(),
               };
               usersStore.set(matchedUser.uid, matchedUser);
               savePersistedUsersCache();
             } else {
-              matchedUser.passwordHash = incomingHash;
-              matchedUser.updatedAt = nowIso();
-              savePersistedUsersCache();
+              if (!matchedUser) {
+                matchedUser = await findUserInServerFirestore(fbEmail, signInData.idToken);
+              }
+              if (!matchedUser) {
+                const fallbackUsername = (fbEmail.split('@')[0] || fbUid.slice(0, 8)).toLowerCase();
+                matchedUser = {
+                  uid: fbUid,
+                  username: fallbackUsername,
+                  email: fbEmail,
+                  displayName: String(signInData.displayName || fallbackUsername).slice(0, 80),
+                  role: 'user',
+                  status: 'active',
+                  authProvider: 'password',
+                  currency: 'IDR',
+                  subscriptionStatus: 'free',
+                  isPro: false,
+                  isExplicitlyDeactivated: false,
+                  subscriptionPlan: null,
+                  subscriptionExpiresAt: null,
+                  passwordHash: incomingHash,
+                  createdAt: nowIso(),
+                  updatedAt: nowIso(),
+                };
+                usersStore.set(matchedUser.uid, matchedUser);
+                savePersistedUsersCache();
+              } else {
+                matchedUser.passwordHash = incomingHash;
+                matchedUser.updatedAt = nowIso();
+                savePersistedUsersCache();
+              }
             }
             isPasswordValid = true;
           }
+        } else {
+          const errBody = (await signInRes.json().catch(() => null)) as any;
+          const fbErrCode = String(errBody?.error?.message || '').toUpperCase();
+          if (fbErrCode.includes('TOO_MANY_ATTEMPTS') || fbErrCode.includes('TOO-MANY-REQUESTS')) {
+            res.status(429).json({
+              code: 'TOO_MANY_ATTEMPTS',
+              error: 'Terlalu banyak percobaan masuk. Tunggu beberapa menit atau gunakan tombol Masuk dengan Google.',
+            });
+            return;
+          }
+          if (fbErrCode.includes('USER_DISABLED')) {
+            res.status(403).json({
+              code: 'USER_DISABLED',
+              error: 'Akun ini sedang dinonaktifkan pada Firebase Authentication.',
+            });
+            return;
+          }
+          const isCredentialMismatch =
+            fbErrCode.includes('INVALID_LOGIN_CREDENTIALS') ||
+            fbErrCode.includes('INVALID_PASSWORD') ||
+            fbErrCode.includes('WRONG_PASSWORD') ||
+            fbErrCode.includes('EMAIL_NOT_FOUND') ||
+            fbErrCode.includes('INVALID_EMAIL');
+          if (!isCredentialMismatch) {
+            res.status(503).json({
+              code: 'SERVER_FIREBASE_AUTH_UNAVAILABLE',
+              error: 'Autentikasi Firebase server sedang tidak tersedia; beralih ke autentikasi klien.',
+            });
+            return;
+          }
         }
       } catch {
-        // Ignore Firebase REST verify failure and proceed to standard 401
+        res.status(503).json({
+          code: 'SERVER_FIREBASE_AUTH_UNAVAILABLE',
+          error: 'Koneksi ke layanan autentikasi Firebase server terganggu; silakan coba lagi.',
+        });
+        return;
       }
     }
 
@@ -2728,6 +2822,13 @@ async function startServer() {
           `Akun ${identifierRaw} mengalami ${fails} kali gagal login berturut-turut.`,
           'warning'
         );
+      }
+
+      if (!identifierRaw.includes('@') && !matchedUser && !isServerFirebaseBridgeReady()) {
+        res.status(401).json({
+          error: 'Username belum ditemukan di cache server. Silakan masuk menggunakan alamat Email terdaftar atau tombol Masuk dengan Google.',
+        });
+        return;
       }
 
       res.status(401).json({ error: 'Email/Username atau kata sandi tidak valid.' });
@@ -2785,6 +2886,46 @@ async function startServer() {
       fbEmail === SUPER_ADMIN_EMAIL || fbEmail === WORKSPACE_ADMIN_EMAIL;
 
     let matchedUser: ServerUserRecord | undefined = usersStore.get(fbUser.uid);
+    if (!matchedUser) {
+      try {
+        const directSnap = await firestoreRestGetDocRaw(idToken, 'users', fbUser.uid);
+        if (directSnap.exists && directSnap.fields) {
+          const data = decodeFirestoreRestFields(directSnap.fields);
+          const isDeactivated = Boolean(data.isExplicitlyDeactivated === true);
+          const isPro =
+            !isDeactivated &&
+            (data.isPro === true || data.subscriptionStatus === 'pro') &&
+            isUserSubscriptionActive({
+              isPro: true,
+              subscriptionStatus: 'pro',
+              subscriptionExpiresAt: data.subscriptionExpiresAt,
+              isExplicitlyDeactivated: isDeactivated,
+            });
+          const isPending = !isDeactivated && !isPro && data.subscriptionStatus === 'pending';
+          matchedUser = {
+            uid: fbUser.uid,
+            username: String(data.username || fbEmail.split('@')[0] || fbUser.uid).toLowerCase(),
+            email: fbEmail,
+            displayName: String(data.displayName || fbUser.displayName || data.username || fbEmail.split('@')[0]),
+            role: isSuperAdminEmail ? 'admin' : data.role === 'admin' ? 'admin' : 'user',
+            status: data.status === 'blocked' ? 'blocked' : 'active',
+            authProvider: data.authProvider === 'google' ? 'google' : 'password',
+            currency: data.currency === 'USD' ? 'USD' : 'IDR',
+            subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
+            isPro,
+            isExplicitlyDeactivated: isDeactivated,
+            subscriptionPlan: isPro || isPending ? (data.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly') : null,
+            subscriptionExpiresAt: isPro ? data.subscriptionExpiresAt || null : null,
+            createdAt: tsToIsoValue(data.createdAt || nowIso()),
+            updatedAt: tsToIsoValue(data.updatedAt || nowIso()),
+          };
+          usersStore.set(matchedUser.uid, matchedUser);
+          savePersistedUsersCache();
+        }
+      } catch {
+        // Fall through to email lookup
+      }
+    }
     if (!matchedUser) {
       for (const u of usersStore.values()) {
         if (u.email.toLowerCase() === fbEmail) {

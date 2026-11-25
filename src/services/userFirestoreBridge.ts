@@ -26,6 +26,7 @@ import {
   getUserAuthHeaders,
   setApiUserToken,
   refreshFirebaseBackedUserToken,
+  waitForAuthStateReady,
 } from './api';
 
 export { isServerBridgeConfigError, isSessionExpiredError };
@@ -190,6 +191,9 @@ async function buildBridgeHeaders(
   ownerUid?: string,
   forceRefreshIdToken = false
 ): Promise<Record<string, string>> {
+  if (!auth.currentUser) {
+    await waitForAuthStateReady();
+  }
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...getUserAuthHeaders(),

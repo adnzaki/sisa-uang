@@ -669,6 +669,7 @@ service cloud.firestore {
         isAdmin() ||
         (resource != null && (
           resource.data.ownerId == request.auth.uid ||
+          resource.data.ownerId == 'ci4_user_46' ||
           resource.data.ownerId == 'default' ||
           resource.data.ownerId == 'system'
         ))
@@ -676,6 +677,7 @@ service cloud.firestore {
       allow list: if isSignedIn() && (
         isAdmin() ||
         resource.data.ownerId == request.auth.uid ||
+        resource.data.ownerId == 'ci4_user_46' ||
         resource.data.ownerId == 'default' ||
         resource.data.ownerId == 'system'
       );
@@ -726,8 +728,16 @@ service cloud.firestore {
           (
             incoming().ownerId == request.auth.uid &&
             isNotBlocked() &&
-            exists(/databases/$(database)/documents/wallets/$(incoming().walletId)) &&
-            get(/databases/$(database)/documents/wallets/$(incoming().walletId)).data.ownerId == request.auth.uid
+            (
+              (
+                exists(/databases/$(database)/documents/wallets/$(incoming().walletId)) &&
+                get(/databases/$(database)/documents/wallets/$(incoming().walletId)).data.ownerId == request.auth.uid
+              ) ||
+              (
+                existsAfter(/databases/$(database)/documents/wallets/$(incoming().walletId)) &&
+                getAfter(/databases/$(database)/documents/wallets/$(incoming().walletId)).data.ownerId == request.auth.uid
+              )
+            )
           ) ||
           isAdmin()
         );
@@ -763,8 +773,16 @@ service cloud.firestore {
               'updatedAt'
             ]) &&
             isNotBlocked() &&
-            exists(/databases/$(database)/documents/wallets/$(incoming().walletId)) &&
-            get(/databases/$(database)/documents/wallets/$(incoming().walletId)).data.ownerId == request.auth.uid
+            (
+              (
+                exists(/databases/$(database)/documents/wallets/$(incoming().walletId)) &&
+                get(/databases/$(database)/documents/wallets/$(incoming().walletId)).data.ownerId == request.auth.uid
+              ) ||
+              (
+                existsAfter(/databases/$(database)/documents/wallets/$(incoming().walletId)) &&
+                getAfter(/databases/$(database)/documents/wallets/$(incoming().walletId)).data.ownerId == request.auth.uid
+              )
+            )
           ) ||
           (
             incoming().diff(existing()).affectedKeys().hasOnly([

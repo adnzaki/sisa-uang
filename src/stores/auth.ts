@@ -26,6 +26,8 @@ import {
   setApiAdminContext,
   getApiUserToken,
   setApiUserToken,
+  refreshFirebaseBackedUserToken,
+  waitForAuthStateReady,
 } from '../services/api';
 import {
   fsGetDoc,
@@ -1470,9 +1472,18 @@ export const useAuthStore = defineStore('auth', () => {
               setApiAdminContext(parsed.email, null);
             }
 
-            void registerCurrentDeviceSession(parsed, false);
-            void syncSubscriptionFromFirestoreForUser(parsed.uid, parsed.email);
             startUserStatusMonitor(parsed);
+            void (async () => {
+              await waitForAuthStateReady();
+              if (!user.value || user.value.uid !== parsed.uid) return;
+              if (!isAdminAccount && !getApiUserToken() && auth.currentUser && !auth.currentUser.isAnonymous) {
+                await refreshFirebaseBackedUserToken();
+              }
+              await Promise.allSettled([
+                registerCurrentDeviceSession(parsed, false),
+                syncSubscriptionFromFirestoreForUser(parsed.uid, parsed.email),
+              ]);
+            })();
           }
         } catch {
           localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -1532,6 +1543,9 @@ export const useAuthStore = defineStore('auth', () => {
         }
 
         if (user.value || isRegisteringInProgress) {
+          if (user.value && !isFbSuperAdmin && !getApiUserToken()) {
+            void refreshFirebaseBackedUserToken();
+          }
           isReady.value = true;
           return;
         }
@@ -1716,10 +1730,14 @@ export const useAuthStore = defineStore('auth', () => {
       );
       return { requiresOtp: false };
     } catch (err: any) {
-      // Fallback ONLY if backend returned 404/network error for a native Firebase Auth non-admin email user
-      const errStatus = err?.response?.status;
+      // Fallback if backend returned 404, 5xx, network error, or Identity Toolkit unavailable for a native Firebase Auth non-admin email user
+      const errStatus = Number(err?.response?.status || 0);
+      const errCode = String(err?.response?.data?.code || '').toUpperCase();
       if (
-        (!errStatus || errStatus === 404) &&
+        (!errStatus ||
+          errStatus === 404 ||
+          errStatus >= 500 ||
+          errCode === 'SERVER_FIREBASE_AUTH_UNAVAILABLE') &&
         cleanIdentifier.includes('@') &&
         cleanIdentifier !== SUPER_ADMIN_EMAIL &&
         cleanIdentifier !== WORKSPACE_ADMIN_EMAIL
