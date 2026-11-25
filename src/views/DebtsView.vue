@@ -1462,17 +1462,21 @@ watch(
             </div>
           </div>
         </div>
-
-        <button
-          type="button"
-          :disabled="isSavingDebt"
-          class="w-full min-h-[50px] rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:opacity-50"
-          @click="submitDebtForm"
-        >
-          <Check class="w-4 h-4" />
-          <span>{{ editingDebtId ? 'Simpan Perubahan' : `Simpan ${debtType === 'debt' ? 'Hutang' : 'Piutang'}` }}</span>
-        </button>
       </div>
+
+      <template #footer>
+        <div class="flex items-center justify-between gap-2.5">
+          <button
+            type="button"
+            :disabled="isSavingDebt"
+            class="flex-1 min-h-[46px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-xs cursor-pointer"
+            @click="submitDebtForm"
+          >
+            <Check class="w-4 h-4 shrink-0" />
+            <span>{{ editingDebtId ? 'Simpan Perubahan' : `Simpan ${debtType === 'debt' ? 'Hutang' : 'Piutang'}` }}</span>
+          </button>
+        </div>
+      </template>
     </AppModal>
 
     <!-- =================================================================== -->
@@ -1560,22 +1564,26 @@ watch(
         <p v-if="instError" class="text-xs font-medium text-rose-600 dark:text-rose-400 px-1">
           {{ instError }}
         </p>
-
-        <button
-          type="button"
-          :disabled="isSubmittingInstallment"
-          class="w-full min-h-[50px] rounded-2xl text-white text-sm font-bold transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:opacity-50"
-          :class="
-            activeDebtForInstallment.type === 'debt'
-              ? 'bg-rose-600 hover:bg-rose-700'
-              : 'bg-emerald-600 hover:bg-emerald-700'
-          "
-          @click="submitInstallment"
-        >
-          <Check class="w-4 h-4" />
-          <span>{{ activeDebtForInstallment.type === 'debt' ? 'Simpan Cicilan Hutang' : 'Simpan Penerimaan Piutang' }}</span>
-        </button>
       </div>
+
+      <template v-if="activeDebtForInstallment" #footer>
+        <div class="flex items-center justify-between gap-2.5">
+          <button
+            type="button"
+            :disabled="isSubmittingInstallment"
+            class="flex-1 min-h-[46px] px-5 py-2.5 rounded-xl text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-xs cursor-pointer"
+            :class="
+              activeDebtForInstallment.type === 'debt'
+                ? 'bg-rose-600 hover:bg-rose-700'
+                : 'bg-emerald-600 hover:bg-emerald-700'
+            "
+            @click="submitInstallment"
+          >
+            <Check class="w-4 h-4 shrink-0" />
+            <span>{{ activeDebtForInstallment.type === 'debt' ? 'Simpan Cicilan Hutang' : 'Simpan Penerimaan Piutang' }}</span>
+          </button>
+        </div>
+      </template>
     </AppModal>
   </div>
 </template>
