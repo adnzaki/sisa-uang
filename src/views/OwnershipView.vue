@@ -291,7 +291,13 @@ function openAddHolderModal(wallet?: WalletItem) {
   isNewHolderCustom.value = false;
   selectedHolderOwner.value = (existingOwnerOptions.value[0]?.value as string) || 'Pribadi';
   customNewHolderName.value = '';
-  newHolderBalance.value = '';
+  const targetWalletForModal = financeStore.wallets.find((w) => w.id === selectedWalletId.value);
+  newHolderBalance.value =
+    targetWalletForModal &&
+    financeStore.getHoldersByWalletId(targetWalletForModal.id).length === 0 &&
+    Number(targetWalletForModal.balance || 0) !== 0
+      ? Number(targetWalletForModal.balance || 0)
+      : '';
   showAddHolderModal.value = true;
 }
 

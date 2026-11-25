@@ -4,6 +4,7 @@ import {
   auth,
   OperationType,
   handleFirestoreError,
+  isFirestoreOfflineError,
   isFirestoreQuotaError,
   isServerBridgeConfigError,
   isServerFirebaseRateLimitError,
@@ -688,11 +689,13 @@ export const useFinanceStore = defineStore('finance', () => {
       const holders = rawWalletOwners.value.filter(
         (fo) => !fo.deleted && fo.walletId === w.id
       );
-      w.balance = holders.reduce((sum, h) => sum + Number(h.balance || 0), 0);
-      // Also keep walletName on holders in sync with parent wallet name
-      for (const h of holders) {
-        if (w.name && h.walletName !== w.name) {
-          h.walletName = w.name;
+      if (holders.length > 0) {
+        w.balance = holders.reduce((sum, h) => sum + Number(h.balance || 0), 0);
+        // Also keep walletName on holders in sync with parent wallet name
+        for (const h of holders) {
+          if (w.name && h.walletName !== w.name) {
+            h.walletName = w.name;
+          }
         }
       }
     }
@@ -2213,18 +2216,26 @@ export const useFinanceStore = defineStore('finance', () => {
     const [walletsSnap, holdersSnap, userCatSnap, txSnap, budgetSnap, defaultCatSnap] = results;
 
     wallets.value = walletsSnap.docs
-      .map((d: any) => ({
-        id: d.id,
-        ...(d.data() as Omit<WalletItem, 'id'>),
-      }))
+      .map((d: any) => {
+        const data = d.data() as Omit<WalletItem, 'id'>;
+        return {
+          id: d.id,
+          ...data,
+          balance: Number(data?.balance || 0),
+        };
+      })
       .filter((w: WalletItem) => !w.deleted)
       .sort((a: WalletItem, b: WalletItem) => a.name.localeCompare(b.name));
 
     rawWalletOwners.value = holdersSnap.docs
-      .map((d: any) => ({
-        id: d.id,
-        ...(d.data() as Omit<WalletOwnerItem, 'id'>),
-      }))
+      .map((d: any) => {
+        const data = d.data() as Omit<WalletOwnerItem, 'id'>;
+        return {
+          id: d.id,
+          ...data,
+          balance: Number(data?.balance || 0),
+        };
+      })
       .filter((fo: WalletOwnerItem) => !fo.deleted);
 
     rawUserCategories.value = userCatSnap.docs
@@ -2935,13 +2946,19 @@ export const useFinanceStore = defineStore('finance', () => {
         ]);
 
         const fetchedWallets = walletsSnap.docs
-          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletItem, 'id'>) }))
+          .map((d: any) => {
+            const data = d.data() as Omit<WalletItem, 'id'>;
+            return { id: d.id, ...data, balance: Number(data?.balance || 0) };
+          })
           .filter((w: WalletItem) => !w.deleted)
           .sort((a: WalletItem, b: WalletItem) => a.name.localeCompare(b.name));
         if (fetchedWallets.length > 0) wallets.value = fetchedWallets;
 
         const fetchedHolders = holdersSnap.docs
-          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletOwnerItem, 'id'>) }))
+          .map((d: any) => {
+            const data = d.data() as Omit<WalletOwnerItem, 'id'>;
+            return { id: d.id, ...data, balance: Number(data?.balance || 0) };
+          })
           .filter((fo: WalletOwnerItem) => !fo.deleted);
         if (fetchedHolders.length > 0) rawWalletOwners.value = fetchedHolders;
         syncWalletTotalBalancesFromHolders();
@@ -2987,13 +3004,19 @@ export const useFinanceStore = defineStore('finance', () => {
         ]);
 
         const fetchedWallets = walletsSnap.docs
-          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletItem, 'id'>) }))
+          .map((d: any) => {
+            const data = d.data() as Omit<WalletItem, 'id'>;
+            return { id: d.id, ...data, balance: Number(data?.balance || 0) };
+          })
           .filter((w: WalletItem) => !w.deleted)
           .sort((a: WalletItem, b: WalletItem) => a.name.localeCompare(b.name));
         if (fetchedWallets.length > 0) wallets.value = fetchedWallets;
 
         const fetchedHolders = holdersSnap.docs
-          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletOwnerItem, 'id'>) }))
+          .map((d: any) => {
+            const data = d.data() as Omit<WalletOwnerItem, 'id'>;
+            return { id: d.id, ...data, balance: Number(data?.balance || 0) };
+          })
           .filter((fo: WalletOwnerItem) => !fo.deleted);
         if (fetchedHolders.length > 0) rawWalletOwners.value = fetchedHolders;
         syncWalletTotalBalancesFromHolders();
@@ -3015,13 +3038,19 @@ export const useFinanceStore = defineStore('finance', () => {
         ]);
 
         const fetchedWallets = walletsSnap.docs
-          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletItem, 'id'>) }))
+          .map((d: any) => {
+            const data = d.data() as Omit<WalletItem, 'id'>;
+            return { id: d.id, ...data, balance: Number(data?.balance || 0) };
+          })
           .filter((w: WalletItem) => !w.deleted)
           .sort((a: WalletItem, b: WalletItem) => a.name.localeCompare(b.name));
         if (fetchedWallets.length > 0) wallets.value = fetchedWallets;
 
         const fetchedHolders = holdersSnap.docs
-          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletOwnerItem, 'id'>) }))
+          .map((d: any) => {
+            const data = d.data() as Omit<WalletOwnerItem, 'id'>;
+            return { id: d.id, ...data, balance: Number(data?.balance || 0) };
+          })
           .filter((fo: WalletOwnerItem) => !fo.deleted);
         if (fetchedHolders.length > 0) rawWalletOwners.value = fetchedHolders;
         syncWalletTotalBalancesFromHolders();
@@ -3118,13 +3147,19 @@ export const useFinanceStore = defineStore('finance', () => {
         ]);
 
         const fetchedWallets = walletsSnap.docs
-          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletItem, 'id'>) }))
+          .map((d: any) => {
+            const data = d.data() as Omit<WalletItem, 'id'>;
+            return { id: d.id, ...data, balance: Number(data?.balance || 0) };
+          })
           .filter((w: WalletItem) => !w.deleted)
           .sort((a: WalletItem, b: WalletItem) => a.name.localeCompare(b.name));
         if (fetchedWallets.length > 0) wallets.value = fetchedWallets;
 
         const fetchedHolders = holdersSnap.docs
-          .map((d: any) => ({ id: d.id, ...(d.data() as Omit<WalletOwnerItem, 'id'>) }))
+          .map((d: any) => {
+            const data = d.data() as Omit<WalletOwnerItem, 'id'>;
+            return { id: d.id, ...data, balance: Number(data?.balance || 0) };
+          })
           .filter((fo: WalletOwnerItem) => !fo.deleted);
         if (fetchedHolders.length > 0) rawWalletOwners.value = fetchedHolders;
         syncWalletTotalBalancesFromHolders();
@@ -3833,6 +3868,19 @@ export const useFinanceStore = defineStore('finance', () => {
     }
 
     rawWalletOwners.value = rawWalletOwners.value.filter((fo) => !matchingIds.has(fo.id));
+    for (const wId of affectedWalletIds) {
+      const remainingInWallet = rawWalletOwners.value.filter(
+        (fo) => !fo.deleted && fo.walletId === wId
+      );
+      const nextWalletBal = remainingInWallet.reduce(
+        (sum, h) => sum + Number(h.balance || 0),
+        0
+      );
+      const targetWallet = wallets.value.find((w) => w.id === wId);
+      if (targetWallet) {
+        targetWallet.balance = nextWalletBal;
+      }
+    }
     syncWalletTotalBalancesFromHolders();
     saveLocalSnapshot(uid, true);
 
@@ -4730,7 +4778,12 @@ export const useFinanceStore = defineStore('finance', () => {
           }
         }
       } catch (err: any) {
-        console.warn('[Finance] Direct Firestore batch commit error (persisting to local storage seamlessly):', err?.message || err);
+        if (isFirestoreOfflineError(err)) {
+          console.warn('[Finance] Firestore offline during batch commit (persisting locally):', err?.message || err);
+        } else {
+          useNotificationStore().notifyError('Gagal Menyimpan Transaksi', err);
+          handleFirestoreError(err, OperationType.WRITE, txPath);
+        }
       }
     }
 
@@ -4801,6 +4854,10 @@ export const useFinanceStore = defineStore('finance', () => {
     if (payload.type === 'transfer' && destHolder) {
       const rawDest = rawWalletOwners.value.find((h) => h.id === destHolder.id);
       if (rawDest) rawDest.balance = newDestHolderBalance;
+    }
+    wallet.balance = newSourceWalletBalance;
+    if (payload.type === 'transfer' && destWallet && destWallet.id !== wallet.id) {
+      destWallet.balance = newDestWalletBalance;
     }
     syncWalletTotalBalancesFromHolders();
     saveLocalSnapshot(uid, false);
@@ -5158,6 +5215,13 @@ export const useFinanceStore = defineStore('finance', () => {
         rawHolder.balance = Number(rawHolder.balance || 0) + delta;
       }
     }
+    for (const [wId, delta] of walletDeltas.entries()) {
+      if (delta === 0) continue;
+      const targetW = wallets.value.find((w) => w.id === wId);
+      if (targetW) {
+        targetW.balance = Number(targetW.balance || 0) + delta;
+      }
+    }
     syncWalletTotalBalancesFromHolders();
     saveLocalSnapshot(uid, false);
 
@@ -5298,12 +5362,22 @@ export const useFinanceStore = defineStore('finance', () => {
       (t) => t.id !== txId
     );
     txServerTotalFiltered.value = Math.max(0, txServerTotalFiltered.value - 1);
-    if (tx.type === 'income' && sourceHolder) {
-      const rawSrc = rawWalletOwners.value.find((h) => h.id === sourceHolder.id);
-      if (rawSrc) rawSrc.balance = Number(rawSrc.balance || 0) - tx.amount;
-    } else if (tx.type === 'expense' && sourceHolder) {
-      const rawSrc = rawWalletOwners.value.find((h) => h.id === sourceHolder.id);
-      if (rawSrc) rawSrc.balance = Number(rawSrc.balance || 0) + tx.amount;
+    if (tx.type === 'income') {
+      if (sourceHolder) {
+        const rawSrc = rawWalletOwners.value.find((h) => h.id === sourceHolder.id);
+        if (rawSrc) rawSrc.balance = Number(rawSrc.balance || 0) - tx.amount;
+      }
+      if (wallet) {
+        wallet.balance = Number(wallet.balance || 0) - tx.amount;
+      }
+    } else if (tx.type === 'expense') {
+      if (sourceHolder) {
+        const rawSrc = rawWalletOwners.value.find((h) => h.id === sourceHolder.id);
+        if (rawSrc) rawSrc.balance = Number(rawSrc.balance || 0) + tx.amount;
+      }
+      if (wallet) {
+        wallet.balance = Number(wallet.balance || 0) + tx.amount;
+      }
     } else if (tx.type === 'transfer') {
       const txAdminFee = Number(tx.adminFee || 0);
       if (sourceHolder) {
@@ -5313,6 +5387,12 @@ export const useFinanceStore = defineStore('finance', () => {
       if (destHolder) {
         const rawDest = rawWalletOwners.value.find((h) => h.id === destHolder.id);
         if (rawDest) rawDest.balance = Number(rawDest.balance || 0) - tx.amount;
+      }
+      if (wallet && destWallet && wallet.id !== destWallet.id) {
+        wallet.balance = Number(wallet.balance || 0) + tx.amount + txAdminFee;
+        destWallet.balance = Number(destWallet.balance || 0) - tx.amount;
+      } else if (wallet && txAdminFee > 0) {
+        wallet.balance = Number(wallet.balance || 0) + txAdminFee;
       }
     }
     syncWalletTotalBalancesFromHolders();
