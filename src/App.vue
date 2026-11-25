@@ -1013,7 +1013,7 @@ async function handleSubmitProPayment() {
     <!-- ===================================================================== -->
     <div
       v-if="notificationStore.banners.length > 0"
-      class="fixed top-4 inset-x-4 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:w-full sm:max-w-xl z-[80] flex flex-col gap-2.5 pointer-events-none"
+      class="fixed top-4 inset-x-4 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:w-full sm:max-w-xl z-[95] flex flex-col gap-2.5 pointer-events-none"
     >
       <div
         v-for="banner in notificationStore.banners"
@@ -2764,6 +2764,7 @@ async function handleSubmitProPayment() {
       title="Fitur Eksklusif SisaUang Pro"
       subtitle="Berlangganan SisaUang Pro untuk membuka seluruh fitur lanjutan tanpa batas."
       max-width="md"
+      z-index-class="z-[80]"
       @close="notificationStore.closeProModal()"
     >
       <div v-if="notificationStore.proModalOptions" class="space-y-4">
@@ -2886,6 +2887,7 @@ async function handleSubmitProPayment() {
       :title="notificationStore.confirmDialog?.title || 'Konfirmasi Hapus Data'"
       subtitle="Pastikan Anda yakin sebelum menghapus data ini."
       max-width="sm"
+      z-index-class="z-[90]"
       @close="notificationStore.resolveConfirmation(false)"
     >
       <div v-if="notificationStore.confirmDialog" class="space-y-4">

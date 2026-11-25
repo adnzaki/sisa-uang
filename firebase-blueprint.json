@@ -424,6 +424,23 @@
           "description": "ID aturan otomatisasi jika transaksi berasal dari jadwal otomatis",
           "maxLength": 128
         },
+        "attachments": {
+          "type": "array",
+          "description": "Daftar lampiran bukti pembelanjaan (invoice/kwitansi PDF atau gambar) yang disimpan di Cloudflare R2",
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "maxLength": 80 },
+              "key": { "type": "string", "maxLength": 300 },
+              "name": { "type": "string", "maxLength": 160 },
+              "mimeType": { "type": "string", "maxLength": 80 },
+              "size": { "type": "number" },
+              "uploadedAt": { "type": "string", "maxLength": 40 }
+            },
+            "required": ["id", "key", "name", "mimeType", "size", "uploadedAt"]
+          }
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",

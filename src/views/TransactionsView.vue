@@ -9,22 +9,40 @@ import {
   RotateCcw,
   Check,
   X,
+  Paperclip,
 } from 'lucide-vue-next';
 import {
   useFinanceStore,
   formatPeriodLabel,
   formatTransactionDateBadge,
+  type TransactionItem,
 } from '../stores/finance';
 import { useThemeStore } from '../stores/theme';
+import { useAuthStore } from '../stores/auth';
 import AppModal from '../components/AppModal.vue';
 import AppPagination from '../components/AppPagination.vue';
 import CustomSelect, { type SelectOptionItem } from '../components/CustomSelect.vue';
+import TransactionAttachmentList from '../components/TransactionAttachmentList.vue';
 
 const { t, locale } = useI18n();
 const financeStore = useFinanceStore();
 const themeStore = useThemeStore();
+const authStore = useAuthStore();
 
 const showFilterModal = ref(false);
+const attachmentsModalTx = ref<TransactionItem | null>(null);
+const attachmentsModalOpen = computed({
+  get: () => Boolean(attachmentsModalTx.value),
+  set: (val: boolean) => {
+    if (!val) attachmentsModalTx.value = null;
+  },
+});
+
+function openAttachmentsModal(tx: TransactionItem) {
+  if (!Array.isArray(tx.attachments) || tx.attachments.length === 0) return;
+  attachmentsModalTx.value = tx;
+}
+
 // Default period on Transactions page is 'all' (Semua Periode)
 const txSelectedPeriod = ref<string>('all');
 const typeFilter = ref<'all' | 'income' | 'expense' | 'transfer'>('all');
@@ -459,15 +477,34 @@ function getDateBadge(dateStr: string) {
             </div>
           </div>
 
-          <!-- Enlarged Delete Button -->
-          <button
-            type="button"
-            class="w-11 h-11 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl border border-rose-200/70 dark:border-rose-900/50 bg-rose-50/70 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 shrink-0 transition-colors"
-            :title="t('transactions.delete')"
-            @click.stop="financeStore.removeTransaction(tx.id)"
-          >
-            <Trash2 class="w-5 h-5" />
-          </button>
+          <!-- Action Buttons: Attachment Icon (Desktop & Tablet only, left of Delete) + Enlarged Delete Button -->
+          <div class="flex items-center gap-2 shrink-0">
+            <button
+              v-if="Array.isArray(tx.attachments) && tx.attachments.length > 0"
+              type="button"
+              class="hidden md:inline-flex relative w-11 h-11 min-w-[44px] min-h-[44px] items-center justify-center rounded-xl border border-emerald-200/80 dark:border-emerald-900/50 bg-emerald-50/70 dark:bg-emerald-950/30 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400 shrink-0 transition-colors cursor-pointer"
+              :aria-label="`Lihat ${tx.attachments.length} lampiran bukti pembelanjaan`"
+              :title="`Lihat ${tx.attachments.length} bukti pembelanjaan`"
+              @click.stop="openAttachmentsModal(tx)"
+            >
+              <Paperclip class="w-5 h-5" />
+              <span
+                v-if="tx.attachments.length > 1"
+                class="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center leading-none shadow-xs"
+              >
+                {{ tx.attachments.length }}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              class="w-11 h-11 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl border border-rose-200/70 dark:border-rose-900/50 bg-rose-50/70 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 shrink-0 transition-colors"
+              :title="t('transactions.delete')"
+              @click.stop="financeStore.removeTransaction(tx.id)"
+            >
+              <Trash2 class="w-5 h-5" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -570,6 +607,57 @@ function getDateBadge(dateStr: string) {
           >
             <Check class="w-4 h-4 shrink-0" />
             <span>Terapkan ({{ totalFilteredTransactions }})</span>
+          </button>
+        </div>
+      </template>
+    </AppModal>
+
+    <!-- =================================================================== -->
+    <!-- MODAL: Daftar Lampiran / Bukti Pembelanjaan Transaksi               -->
+    <!-- =================================================================== -->
+    <AppModal
+      v-model="attachmentsModalOpen"
+      title="Bukti Pembelanjaan"
+      max-width="lg"
+    >
+      <div v-if="attachmentsModalTx" class="space-y-3.5">
+        <div class="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 px-3.5 py-2.5 flex items-center justify-between gap-3">
+          <div class="min-w-0 flex-1">
+            <div class="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+              {{ attachmentsModalTx.note || attachmentsModalTx.category }}
+            </div>
+            <div class="text-[11px] text-slate-500 dark:text-slate-400">
+              {{ attachmentsModalTx.date }} · {{ attachmentsModalTx.walletName }}
+            </div>
+          </div>
+          <div
+            class="text-xs sm:text-sm font-money font-bold shrink-0"
+            :class="
+              attachmentsModalTx.type === 'income'
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : attachmentsModalTx.type === 'transfer'
+                ? 'text-indigo-600 dark:text-indigo-400'
+                : 'text-rose-600 dark:text-rose-400'
+            "
+          >
+            {{ themeStore.formatMoney(attachmentsModalTx.amount) }}
+          </div>
+        </div>
+
+        <TransactionAttachmentList
+          :attachments="attachmentsModalTx.attachments || []"
+          :owner-uid="authStore.user?.uid"
+        />
+      </div>
+
+      <template #footer>
+        <div class="flex justify-end w-full">
+          <button
+            type="button"
+            class="min-h-[44px] px-5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-semibold cursor-pointer transition-colors"
+            @click="attachmentsModalOpen = false"
+          >
+            Tutup
           </button>
         </div>
       </template>

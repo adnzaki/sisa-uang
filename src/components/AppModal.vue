@@ -10,6 +10,7 @@ const props = withDefaults(
     subtitle?: string;
     maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
     hideFooter?: boolean;
+    zIndexClass?: string;
   }>(),
   {
     modelValue: undefined,
@@ -17,6 +18,7 @@ const props = withDefaults(
     subtitle: '',
     maxWidth: 'lg',
     hideFooter: false,
+    zIndexClass: 'z-[70]',
   }
 );
 
@@ -145,7 +147,8 @@ onBeforeUnmount(() => {
     <Transition name="modal">
       <div
         v-if="isOpen"
-        class="fixed inset-0 z-[70] flex items-stretch sm:items-center justify-center bg-black/55 backdrop-blur-xs p-0 sm:p-4"
+        class="fixed inset-0 flex items-stretch sm:items-center justify-center bg-black/55 backdrop-blur-xs p-0 sm:p-4"
+        :class="zIndexClass"
         @click.self="closeModal"
       >
       <!--

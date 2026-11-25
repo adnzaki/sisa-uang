@@ -159,6 +159,18 @@ service cloud.firestore {
         (data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 40));
     }
 
+    function isValidTransactionAttachmentItem(item) {
+      return item is map &&
+        item.keys().hasAll(['id', 'key', 'name', 'mimeType', 'size', 'uploadedAt']) &&
+        item.keys().hasOnly(['id', 'key', 'name', 'mimeType', 'size', 'uploadedAt']) &&
+        item.id is string && item.id.size() >= 1 && item.id.size() <= 80 &&
+        item.key is string && item.key.size() >= 1 && item.key.size() <= 300 &&
+        item.name is string && item.name.size() >= 1 && item.name.size() <= 160 &&
+        item.mimeType is string && item.mimeType.size() >= 1 && item.mimeType.size() <= 80 &&
+        (item.size is int || item.size is float) && item.size >= 0 && item.size <= 20000000 &&
+        item.uploadedAt is string && item.uploadedAt.size() >= 1 && item.uploadedAt.size() <= 40;
+    }
+
     function isValidTransaction(data) {
       return data.keys().hasAll(['ownerId', 'walletId', 'walletName', 'type', 'category', 'amount', 'note', 'date', 'createdAt', 'updatedAt']) &&
         data.keys().hasOnly([
@@ -179,6 +191,7 @@ service cloud.firestore {
           'note',
           'date',
           'automationRuleId',
+          'attachments',
           'deleted',
           'deletedAt',
           'createdAt',
@@ -197,6 +210,11 @@ service cloud.firestore {
         data.category is string && data.category.size() >= 1 && data.category.size() <= 50 &&
         (!('categoryId' in data) || (data.categoryId is string && data.categoryId.size() <= 128)) &&
         (!('automationRuleId' in data) || data.automationRuleId == null || (data.automationRuleId is string && data.automationRuleId.size() <= 128)) &&
+        (!('attachments' in data) || (
+          data.attachments is list &&
+          data.attachments.size() <= 10 &&
+          (data.attachments.size() == 0 || isValidTransactionAttachmentItem(data.attachments[0]))
+        )) &&
         (data.amount is int || data.amount is float) && data.amount > 0 &&
         (!('adminFee' in data) || ((data.adminFee is int || data.adminFee is float) && data.adminFee >= 0)) &&
         data.note is string && data.note.size() <= 200 &&
@@ -739,6 +757,7 @@ service cloud.firestore {
               'note',
               'date',
               'automationRuleId',
+              'attachments',
               'deleted',
               'deletedAt',
               'updatedAt'
@@ -766,6 +785,7 @@ service cloud.firestore {
               'note',
               'date',
               'automationRuleId',
+              'attachments',
               'deleted',
               'deletedAt',
               'createdAt',

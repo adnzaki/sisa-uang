@@ -6,6 +6,8 @@ import { createServer as createViteServer } from 'vite';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import nodemailer from 'nodemailer';
+import multer from 'multer';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -5904,6 +5906,455 @@ async function startServer() {
       ...computeCurrentBuildFingerprint(),
       serverTimeMs: Date.now(),
     });
+  });
+
+  // =========================================================================
+  // Cloudflare R2 (S3-Compatible) Endpoints for Transaction Attachments
+  // =========================================================================
+  function getR2RuntimeConfig() {
+    const endpoint = String(process.env.R2_ENDPOINT || '').trim().replace(/\/+$/, '');
+    const bucket = String(process.env.R2_BUCKET_NAME || '').trim();
+    const accessKeyId = String(process.env.R2_ACCESS_KEY_ID || '').trim();
+    const secretAccessKey = String(process.env.R2_SECRET_ACCESS_KEY || '').trim();
+    if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) {
+      return null;
+    }
+    return { endpoint, bucket, accessKeyId, secretAccessKey };
+  }
+
+  let cachedR2Client: S3Client | null = null;
+  let cachedR2Signature = '';
+  function getR2Client() {
+    const cfg = getR2RuntimeConfig();
+    if (!cfg) return null;
+    const sig = `${cfg.endpoint}|${cfg.accessKeyId}|${cfg.bucket}`;
+    if (!cachedR2Client || cachedR2Signature !== sig) {
+      cachedR2Client = new S3Client({
+        region: 'auto',
+        endpoint: cfg.endpoint,
+        forcePathStyle: true,
+        credentials: {
+          accessKeyId: cfg.accessKeyId,
+          secretAccessKey: cfg.secretAccessKey,
+        },
+      });
+      cachedR2Signature = sig;
+    }
+    return { client: cachedR2Client, bucket: cfg.bucket };
+  }
+
+  async function verifyTransactionAttachmentCaller(
+    req: Request
+  ): Promise<{ ok: true; ownerUid: string } | { ok: false; status: number; error: string }> {
+    const authHeader = String(req.headers.authorization || '').trim();
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    const idToken = match?.[1]?.trim() || '';
+    if (!idToken) {
+      return { ok: false, status: 401, error: 'Autentikasi diperlukan untuk mengelola lampiran transaksi.' };
+    }
+
+    try {
+      const lookupRes = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(firebaseServerConfig.apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken }),
+          signal: AbortSignal.timeout(8000),
+        }
+      );
+      if (!lookupRes.ok) {
+        return { ok: false, status: 401, error: 'Sesi autentikasi tidak valid atau kedaluwarsa.' };
+      }
+      const lookupData = (await lookupRes.json()) as {
+        users?: Array<{ localId?: string; email?: string; emailVerified?: boolean; disabled?: boolean }>;
+      };
+      const fbUser = lookupData?.users?.[0];
+      if (!fbUser?.localId || fbUser.disabled) {
+        return { ok: false, status: 401, error: 'Akun autentikasi tidak ditemukan atau dinonaktifkan.' };
+      }
+
+      const tokenUid = String(fbUser.localId).trim();
+      const tokenEmail = String(fbUser.email || '').trim().toLowerCase();
+      const rawRequestedUid = String(
+        req.headers['x-owner-uid'] || req.body?.ownerUid || req.query?.ownerUid || ''
+      ).trim();
+      const sanitizedRequestedUid = rawRequestedUid.replace(/[^a-zA-Z0-9_\-]/g, '_');
+
+      if (!sanitizedRequestedUid || sanitizedRequestedUid === tokenUid) {
+        return { ok: true, ownerUid: tokenUid };
+      }
+
+      const isTrustedAppSession =
+        tokenEmail === SUPER_ADMIN_EMAIL ||
+        tokenEmail === WORKSPACE_ADMIN_EMAIL ||
+        tokenEmail === 'sdnpengasinantujuh@gmail.com';
+
+      if (isTrustedAppSession && /^[a-zA-Z0-9_\-]{1,128}$/.test(sanitizedRequestedUid)) {
+        return { ok: true, ownerUid: sanitizedRequestedUid };
+      }
+
+      return { ok: false, status: 403, error: 'Akses ditolak: Anda tidak berwenang mengakses lampiran pengguna ini.' };
+    } catch {
+      return { ok: false, status: 401, error: 'Gagal memverifikasi sesi autentikasi pengguna.' };
+    }
+  }
+
+  function detectVerifiedUploadType(
+    buf: Buffer
+  ): { mimeType: string; ext: string } | null {
+    if (!buf || buf.length < 4) return null;
+    // PDF: %PDF-
+    if (buf.length >= 5 && buf.subarray(0, 5).toString('ascii') === '%PDF-') {
+      return { mimeType: 'application/pdf', ext: 'pdf' };
+    }
+    // JPEG: FF D8 FF
+    if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+      return { mimeType: 'image/jpeg', ext: 'jpg' };
+    }
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if (
+      buf.length >= 8 &&
+      buf[0] === 0x89 &&
+      buf[1] === 0x50 &&
+      buf[2] === 0x4e &&
+      buf[3] === 0x47 &&
+      buf[4] === 0x0d &&
+      buf[5] === 0x0a &&
+      buf[6] === 0x1a &&
+      buf[7] === 0x0a
+    ) {
+      return { mimeType: 'image/png', ext: 'png' };
+    }
+    // GIF: GIF87a / GIF89a
+    const head6 = buf.subarray(0, 6).toString('ascii');
+    if (head6 === 'GIF87a' || head6 === 'GIF89a') {
+      return { mimeType: 'image/gif', ext: 'gif' };
+    }
+    // WEBP: RIFF....WEBP
+    if (
+      buf.length >= 12 &&
+      buf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      buf.subarray(8, 12).toString('ascii') === 'WEBP'
+    ) {
+      return { mimeType: 'image/webp', ext: 'webp' };
+    }
+    // BMP: 42 4D
+    if (buf[0] === 0x42 && buf[1] === 0x4d) {
+      return { mimeType: 'image/bmp', ext: 'bmp' };
+    }
+    // HEIC / HEIF: ISO BMFF ftyp brand
+    if (buf.length >= 12 && buf.subarray(4, 8).toString('ascii') === 'ftyp') {
+      const brand = buf.subarray(8, 12).toString('ascii').toLowerCase();
+      if (['heic', 'heix', 'hevc', 'hevx', 'mif1', 'msf1'].includes(brand)) {
+        return { mimeType: 'image/heic', ext: 'heic' };
+      }
+    }
+    return null;
+  }
+
+  function sanitizeAttachmentDisplayName(rawName: string, fallbackExt: string): string {
+    const base = path.basename(String(rawName || 'lampiran')).replace(/[\x00-\x1f\x7f<>:"/\\|?*]+/g, '_').trim();
+    if (!base) return `lampiran.${fallbackExt}`;
+    return base.slice(0, 120);
+  }
+
+  function isValidOwnedAttachmentKey(key: string, ownerUid: string): boolean {
+    if (!key || key.length > 300) return false;
+    if (key.includes('..') || key.includes('\\') || key.includes('\0') || key.startsWith('/')) {
+      return false;
+    }
+    const baseName = key.slice(`receipts/${ownerUid}/`.length);
+    if (!baseName || baseName.startsWith('_')) return false;
+    return key.startsWith(`receipts/${ownerUid}/`) && /^receipts\/[a-zA-Z0-9_\-]+\/[a-zA-Z0-9_.\-]+$/.test(key);
+  }
+
+  const r2AttachmentUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: 10 * 1024 * 1024, // 10 MB per file
+      files: 10,
+    },
+  });
+
+  app.post('/api/transactions/attachments/upload', (req: Request, res: Response) => {
+    r2AttachmentUpload.array('files', 10)(req, res, async (multerErr: any) => {
+      if (multerErr) {
+        const msg =
+          multerErr?.code === 'LIMIT_FILE_SIZE'
+            ? 'Ukuran berkas melebihi batas maksimal 10 MB per file.'
+            : multerErr?.code === 'LIMIT_FILE_COUNT'
+              ? 'Maksimal 10 berkas dalam satu kali unggah.'
+              : multerErr?.message || 'Gagal memproses unggahan berkas.';
+        res.status(400).json({ success: false, error: msg });
+        return;
+      }
+
+      const authResult = await verifyTransactionAttachmentCaller(req);
+      if (!authResult.ok) {
+        res.status(authResult.status).json({ success: false, error: authResult.error });
+        return;
+      }
+
+      const r2 = getR2Client();
+      if (!r2) {
+        res.status(503).json({
+          success: false,
+          error: 'Konfigurasi Cloudflare R2 belum lengkap di server.',
+        });
+        return;
+      }
+
+      const files = (req.files as Express.Multer.File[]) || [];
+      if (!Array.isArray(files) || files.length === 0) {
+        res.status(400).json({ success: false, error: 'Tidak ada berkas yang dikirim.' });
+        return;
+      }
+
+      const uploadedAttachments: Array<{
+        id: string;
+        key: string;
+        name: string;
+        mimeType: string;
+        size: number;
+        uploadedAt: string;
+      }> = [];
+
+      try {
+        for (const file of files) {
+          const verifiedType = detectVerifiedUploadType(file.buffer);
+          if (!verifiedType) {
+            res.status(400).json({
+              success: false,
+              error: `Format berkas "${file.originalname || 'file'}" tidak didukung. Gunakan file PDF atau gambar (JPG, PNG, WEBP, GIF, HEIC).`,
+            });
+            return;
+          }
+
+          const safeName = sanitizeAttachmentDisplayName(file.originalname, verifiedType.ext);
+          const randomHex = crypto.randomBytes(6).toString('hex');
+          const ts = Date.now();
+          const objectKey = `receipts/${authResult.ownerUid}/${ts}_${randomHex}.${verifiedType.ext}`;
+
+          await r2.client.send(
+            new PutObjectCommand({
+              Bucket: r2.bucket,
+              Key: objectKey,
+              Body: file.buffer,
+              ContentType: verifiedType.mimeType,
+              Metadata: {
+                owneruid: authResult.ownerUid,
+              },
+            })
+          );
+
+          uploadedAttachments.push({
+            id: `att_${ts}_${crypto.randomBytes(4).toString('hex')}`,
+            key: objectKey,
+            name: safeName,
+            mimeType: verifiedType.mimeType,
+            size: Number(file.size || file.buffer.length || 0),
+            uploadedAt: nowIso(),
+          });
+        }
+
+        res.json({
+          success: true,
+          attachments: uploadedAttachments,
+        });
+      } catch (err: any) {
+        console.error('[R2 Upload Error]', err?.message || err);
+        res.status(500).json({
+          success: false,
+          error: 'Gagal menyimpan berkas ke penyimpanan cloud. Silakan coba lagi.',
+        });
+      }
+    });
+  });
+
+  app.get('/api/transactions/attachments/file', async (req: Request, res: Response) => {
+    const authResult = await verifyTransactionAttachmentCaller(req);
+    if (!authResult.ok) {
+      res.status(authResult.status).json({ success: false, error: authResult.error });
+      return;
+    }
+
+    const r2 = getR2Client();
+    if (!r2) {
+      res.status(503).json({
+        success: false,
+        error: 'Konfigurasi Cloudflare R2 belum lengkap di server.',
+      });
+      return;
+    }
+
+    const key = String(req.query.key || '').trim();
+    if (!isValidOwnedAttachmentKey(key, authResult.ownerUid)) {
+      res.status(403).json({ success: false, error: 'Key berkas tidak valid atau bukan milik Anda.' });
+      return;
+    }
+
+    const disposition = req.query.disposition === 'attachment' ? 'attachment' : 'inline';
+    const fallbackName = path.basename(key);
+    const requestedName = sanitizeAttachmentDisplayName(
+      String(req.query.name || fallbackName),
+      path.extname(key).replace('.', '') || 'bin'
+    );
+    const asciiSafeName = requestedName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+
+    try {
+      const obj = await r2.client.send(
+        new GetObjectCommand({
+          Bucket: r2.bucket,
+          Key: key,
+        })
+      );
+
+      if (!obj.Body) {
+        res.status(404).json({ success: false, error: 'Berkas tidak ditemukan.' });
+        return;
+      }
+
+      const bytes = await obj.Body.transformToByteArray();
+      const contentType = obj.ContentType || 'application/octet-stream';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.setHeader(
+        'Content-Disposition',
+        `${disposition}; filename="${asciiSafeName}"; filename*=UTF-8''${encodeURIComponent(requestedName)}`
+      );
+      res.send(Buffer.from(bytes));
+    } catch (err: any) {
+      if (err?.name === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404) {
+        res.status(404).json({ success: false, error: 'Berkas tidak ditemukan di penyimpanan cloud.' });
+        return;
+      }
+      console.error('[R2 Get File Error]', err?.message || err);
+      res.status(500).json({ success: false, error: 'Gagal memuat berkas dari penyimpanan cloud.' });
+    }
+  });
+
+  app.delete('/api/transactions/attachments/file', async (req: Request, res: Response) => {
+    const authResult = await verifyTransactionAttachmentCaller(req);
+    if (!authResult.ok) {
+      res.status(authResult.status).json({ success: false, error: authResult.error });
+      return;
+    }
+
+    const r2 = getR2Client();
+    if (!r2) {
+      res.status(503).json({
+        success: false,
+        error: 'Konfigurasi Cloudflare R2 belum lengkap di server.',
+      });
+      return;
+    }
+
+    const key = String(req.body?.key || req.query?.key || '').trim();
+    if (!isValidOwnedAttachmentKey(key, authResult.ownerUid)) {
+      res.status(403).json({ success: false, error: 'Key berkas tidak valid atau bukan milik Anda.' });
+      return;
+    }
+
+    try {
+      await r2.client.send(
+        new DeleteObjectCommand({
+          Bucket: r2.bucket,
+          Key: key,
+        })
+      );
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[R2 Delete Error]', err?.message || err);
+      res.status(500).json({ success: false, error: 'Gagal menghapus berkas dari penyimpanan cloud.' });
+    }
+  });
+
+  app.get('/api/transactions/attachments/index', async (req: Request, res: Response) => {
+    const authResult = await verifyTransactionAttachmentCaller(req);
+    if (!authResult.ok) {
+      res.status(authResult.status).json({ success: false, error: authResult.error });
+      return;
+    }
+    const r2 = getR2Client();
+    if (!r2) {
+      res.json({ success: true, index: {} });
+      return;
+    }
+    const indexKey = `receipts/${authResult.ownerUid}/_tx_index.json`;
+    try {
+      const obj = await r2.client.send(new GetObjectCommand({ Bucket: r2.bucket, Key: indexKey }));
+      const raw = obj.Body ? await obj.Body.transformToString() : '{}';
+      const parsed = JSON.parse(raw || '{}');
+      res.json({ success: true, index: parsed && typeof parsed === 'object' ? parsed : {} });
+    } catch (err: any) {
+      if (err?.name === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404) {
+        res.json({ success: true, index: {} });
+        return;
+      }
+      res.json({ success: true, index: {} });
+    }
+  });
+
+  app.put('/api/transactions/attachments/index', async (req: Request, res: Response) => {
+    const authResult = await verifyTransactionAttachmentCaller(req);
+    if (!authResult.ok) {
+      res.status(authResult.status).json({ success: false, error: authResult.error });
+      return;
+    }
+    const r2 = getR2Client();
+    if (!r2) {
+      res.status(503).json({ success: false, error: 'Konfigurasi Cloudflare R2 belum lengkap di server.' });
+      return;
+    }
+    const txId = String(req.body?.txId || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '');
+    if (!txId || txId.length > 128) {
+      res.status(400).json({ success: false, error: 'ID transaksi tidak valid.' });
+      return;
+    }
+    const rawList = Array.isArray(req.body?.attachments) ? req.body.attachments.slice(0, 10) : [];
+    const safeList = rawList.filter(
+      (item: any) =>
+        item &&
+        typeof item.id === 'string' &&
+        typeof item.key === 'string' &&
+        isValidOwnedAttachmentKey(item.key, authResult.ownerUid) &&
+        typeof item.name === 'string' &&
+        typeof item.mimeType === 'string'
+    );
+
+    const indexKey = `receipts/${authResult.ownerUid}/_tx_index.json`;
+    let currentMap: Record<string, any[]> = {};
+    try {
+      const existingObj = await r2.client.send(new GetObjectCommand({ Bucket: r2.bucket, Key: indexKey }));
+      const raw = existingObj.Body ? await existingObj.Body.transformToString() : '{}';
+      const parsed = JSON.parse(raw || '{}');
+      if (parsed && typeof parsed === 'object') currentMap = parsed;
+    } catch {
+      currentMap = {};
+    }
+
+    if (safeList.length > 0) {
+      currentMap[txId] = safeList;
+    } else {
+      delete currentMap[txId];
+    }
+
+    try {
+      await r2.client.send(
+        new PutObjectCommand({
+          Bucket: r2.bucket,
+          Key: indexKey,
+          Body: JSON.stringify(currentMap),
+          ContentType: 'application/json',
+        })
+      );
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[R2 Index Save Error]', err?.message || err);
+      res.status(500).json({ success: false, error: 'Gagal memperbarui indeks lampiran.' });
+    }
   });
 
   // =========================================================================

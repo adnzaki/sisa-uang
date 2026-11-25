@@ -42,22 +42,53 @@ const selectedWalletId = ref<string>('');
 const isNewHolderCustom = ref(false);
 const selectedHolderOwner = ref('Pribadi');
 const customNewHolderName = ref('');
-const newHolderBalance = ref<number | ''>('');
+const newHolderBalance = ref<number | string | ''>('');
 
 // 2. Modal: Edit Single Fund Owner (Tap on Holder Row)
 const editingHolder = ref<{ holder: WalletOwnerItem; walletName: string } | null>(null);
 const isEditHolderCustom = ref(false);
 const editSelectedHolderOwner = ref('Pribadi');
 const editCustomHolderName = ref('');
-const editHolderBalance = ref<number | ''>(0);
+const editHolderBalance = ref<number | string | ''>(0);
 
 function formatNominalDisplay(val: number | string | ''): string {
   if (val === '' || val === null || val === undefined) return '';
   const str = String(val).trim();
-  if (str === '0') return '0';
-  const digits = str.replace(/\D/g, '').replace(/^0+/, '');
-  if (!digits) return str.includes('0') ? '0' : '';
-  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  if (str === '-') return '-';
+  const isNegative = str.startsWith('-');
+  const allDigits = str.replace(/\D/g, '');
+  if (!allDigits) return isNegative ? '-' : '';
+  const cleanDigits = allDigits.replace(/^0+/, '');
+  if (!cleanDigits) return isNegative ? '-0' : '0';
+  const formatted = cleanDigits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return isNegative ? `-${formatted}` : formatted;
+}
+
+function parseNominalBalance(val: number | string | ''): number {
+  const num = Number(val);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function toggleBalanceSign(targetRef: { value: number | string | '' }) {
+  const cur = targetRef.value;
+  if (cur === '' || cur === null || cur === undefined) {
+    targetRef.value = '-';
+    return;
+  }
+  if (cur === '-') {
+    targetRef.value = '';
+    return;
+  }
+  if (cur === '-0') {
+    targetRef.value = 0;
+    return;
+  }
+  const num = Number(cur);
+  if (!Number.isFinite(num)) {
+    targetRef.value = '-';
+    return;
+  }
+  targetRef.value = num === 0 ? '-0' : -num;
 }
 
 const newHolderBalanceDisplay = computed(() => formatNominalDisplay(newHolderBalance.value));
@@ -65,34 +96,50 @@ const editHolderBalanceDisplay = computed(() => formatNominalDisplay(editHolderB
 
 function applyFormattedNominalInput(
   event: Event,
-  targetRef: { value: number | '' }
+  targetRef: { value: number | string | '' }
 ) {
   const input = event.target as HTMLInputElement;
   const rawValue = input.value;
+  const trimmedLeft = rawValue.trimStart();
+  const isNegative = trimmedLeft.startsWith('-');
   const selectionStart = input.selectionStart ?? rawValue.length;
   const rawSlice = rawValue.slice(0, selectionStart);
-  const digitsBeforeCursor =
-    rawSlice.replace(/\D/g, '') === '0'
-      ? 1
-      : rawSlice.replace(/\D/g, '').replace(/^0+/, '').length;
+  const rawSliceDigits = rawSlice.replace(/\D/g, '');
+  const sliceWasZeroOnly = rawSliceDigits.length > 0 && /^0+$/.test(rawSliceDigits);
+  const digitsBeforeCursor = sliceWasZeroOnly
+    ? 1
+    : rawSliceDigits.replace(/^0+/, '').length;
+  const hadMinusBeforeCursor = rawSlice.includes('-');
 
   const allDigits = rawValue.replace(/\D/g, '');
   if (!allDigits) {
-    targetRef.value = '';
-    input.value = '';
+    if (isNegative) {
+      targetRef.value = '-';
+      input.value = '-';
+      if (document.activeElement === input) {
+        input.setSelectionRange(1, 1);
+      }
+    } else {
+      targetRef.value = '';
+      input.value = '';
+    }
     return;
   }
 
   const cleanDigits = allDigits.replace(/^0+/, '');
-  targetRef.value = cleanDigits ? Number(cleanDigits) : 0;
+  const unsignedNum = cleanDigits ? Number(cleanDigits) : 0;
+  targetRef.value =
+    unsignedNum === 0 ? (isNegative ? '-0' : 0) : isNegative ? -unsignedNum : unsignedNum;
 
   const formatted = cleanDigits
-    ? cleanDigits.replace(/\B(?=(\d{3})+(?!\d))/g, '.')
-    : '0';
+    ? `${isNegative ? '-' : ''}${cleanDigits.replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`
+    : isNegative
+      ? '-0'
+      : '0';
   input.value = formatted;
 
   if (document.activeElement === input) {
-    let newCursorPos = 0;
+    let newCursorPos = isNegative && hadMinusBeforeCursor ? 1 : 0;
     if (digitsBeforeCursor > 0) {
       let seenDigits = 0;
       for (let i = 0; i < formatted.length; i++) {
@@ -216,6 +263,16 @@ function enableCustomEditHolder() {
 }
 
 function openAddHolderModal(wallet?: WalletItem) {
+  if (!wallet && !authStore.isProUser && financeStore.ownershipSummary.length >= 2) {
+    notificationStore.openProModal({
+      featureTitle: 'Batas Maksimal 2 Kepemilikan Dana',
+      featureDescription:
+        'Pengguna paket Free hanya dapat memiliki maksimal 2 kepemilikan dana berbeda. Berlangganan SisaUang Pro untuk menambahkan kepemilikan dana tanpa batas.',
+      limitSummary: `${financeStore.ownershipSummary.length} / 2 Kepemilikan Aktif`,
+    });
+    return;
+  }
+
   const walletHoldersCount = wallet
     ? financeStore.getHoldersByWalletId(wallet.id).length
     : 0;
@@ -247,7 +304,7 @@ async function handleAddHolder() {
   const created = await financeStore.addWalletOwner({
     walletId: selectedWalletId.value,
     holderName: targetHolder,
-    balance: Number(newHolderBalance.value || 0),
+    balance: parseNominalBalance(newHolderBalance.value),
   });
   if (created) {
     showAddHolderModal.value = false;
@@ -271,7 +328,7 @@ async function handleSaveEditHolder() {
 
   await financeStore.updateWalletOwner(editingHolder.value.holder.id, {
     holderName: targetHolder,
-    balance: Number(editHolderBalance.value || 0),
+    balance: parseNominalBalance(editHolderBalance.value),
   });
   editingHolder.value = null;
 }
@@ -378,7 +435,14 @@ async function handleDeleteGlobalOwner() {
             </span>
           </div>
 
-          <div class="text-lg sm:text-xl font-money font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+          <div
+            class="text-lg sm:text-xl font-money font-bold tabular-nums"
+            :class="
+              owner.totalBalance < 0
+                ? 'text-rose-600 dark:text-rose-400'
+                : 'text-emerald-600 dark:text-emerald-400'
+            "
+          >
             {{ themeStore.formatMoney(owner.totalBalance) }}
           </div>
 
@@ -389,7 +453,14 @@ async function handleDeleteGlobalOwner() {
               class="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400"
             >
               <span class="truncate">{{ wItem.walletName }}</span>
-              <span class="font-money tabular-nums font-semibold text-slate-700 dark:text-slate-300 shrink-0">
+              <span
+                class="font-money tabular-nums font-semibold shrink-0"
+                :class="
+                  wItem.balance < 0
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : 'text-slate-700 dark:text-slate-300'
+                "
+              >
                 {{ themeStore.formatMoney(wItem.balance) }}
               </span>
             </div>
@@ -444,7 +515,14 @@ async function handleDeleteGlobalOwner() {
                 <h3 class="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 truncate">
                   {{ w.name }}
                 </h3>
-                <div class="text-xs font-money font-semibold text-emerald-600 dark:text-emerald-400">
+                <div
+                  class="text-xs font-money font-semibold"
+                  :class="
+                    w.balance < 0
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : 'text-emerald-600 dark:text-emerald-400'
+                  "
+                >
                   Total: {{ themeStore.formatMoney(w.balance) }}
                 </div>
               </div>
@@ -452,11 +530,18 @@ async function handleDeleteGlobalOwner() {
 
             <button
               type="button"
-              class="min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center gap-1 shrink-0 transition-colors"
+              class="min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer"
               @click="openAddHolderModal(w)"
             >
               <Plus class="w-3.5 h-3.5 shrink-0" />
               <span>Tambah</span>
+              <span
+                v-if="!authStore.isProUser && financeStore.getHoldersByWalletId(w.id).length >= 2"
+                class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 text-[9px] font-extrabold uppercase tracking-wider"
+              >
+                <Crown class="w-2.5 h-2.5 shrink-0" />
+                <span>PRO</span>
+              </span>
             </button>
           </div>
 
@@ -481,14 +566,27 @@ async function handleDeleteGlobalOwner() {
                 <div class="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
                   {{ formatHolderName(holder.holderName) }}
                 </div>
-                <div class="text-sm sm:text-base font-money font-bold tabular-nums text-slate-700 dark:text-slate-300 mt-0.5 truncate">
+                <div
+                  class="text-sm sm:text-base font-money font-bold tabular-nums mt-0.5 truncate"
+                  :class="
+                    holder.balance < 0
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : 'text-slate-700 dark:text-slate-300'
+                  "
+                >
                   {{ themeStore.formatMoney(holder.balance) }}
                 </div>
                 <div
                   v-if="savingsStore.getHolderSavingsBalance(w.id, holder.id) > 0"
                   class="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] font-money"
                 >
-                  <span class="text-emerald-600 dark:text-emerald-400">
+                  <span
+                    :class="
+                      savingsStore.getHolderOperationalBalance(w.id, holder.id) < 0
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                    "
+                  >
                     Bergerak: {{ themeStore.formatMoney(savingsStore.getHolderOperationalBalance(w.id, holder.id)) }}
                   </span>
                   <span class="text-indigo-600 dark:text-indigo-400">
@@ -529,11 +627,18 @@ async function handleDeleteGlobalOwner() {
               </span>
               <button
                 type="button"
-                class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors"
+                class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors cursor-pointer"
                 @click="enableCustomNewHolder"
               >
                 <Plus class="w-3.5 h-3.5 shrink-0" />
                 <span>Tambah Pemilik</span>
+                <span
+                  v-if="!authStore.isProUser && financeStore.ownershipSummary.length >= 2"
+                  class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 text-[9px] font-extrabold uppercase tracking-wider"
+                >
+                  <Crown class="w-2.5 h-2.5 shrink-0" />
+                  <span>PRO</span>
+                </span>
               </button>
             </div>
           </template>
@@ -561,16 +666,31 @@ async function handleDeleteGlobalOwner() {
           </template>
         </div>
 
-        <input
-          :value="newHolderBalanceDisplay"
-          type="text"
-          inputmode="numeric"
-          autocomplete="off"
-          required
-          placeholder="Saldo Kepemilikan (Rp)"
-          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
-          @input="handleNewHolderBalanceInput"
-        />
+        <div class="relative flex items-center">
+          <input
+            :value="newHolderBalanceDisplay"
+            type="text"
+            inputmode="text"
+            autocomplete="off"
+            required
+            placeholder="Saldo Kepemilikan (Rp)"
+            class="w-full min-h-[54px] sm:min-h-[50px] pl-4 pr-16 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold tabular-nums placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+            :class="
+              newHolderBalanceDisplay.startsWith('-')
+                ? 'text-rose-600 dark:text-rose-400'
+                : 'text-slate-900 dark:text-slate-100'
+            "
+            @input="handleNewHolderBalanceInput"
+          />
+          <button
+            type="button"
+            title="Ubah tanda positif/minus"
+            class="absolute right-2.5 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
+            @click="toggleBalanceSign(newHolderBalance)"
+          >
+            +/−
+          </button>
+        </div>
       </form>
 
       <template #footer>
@@ -616,11 +736,18 @@ async function handleDeleteGlobalOwner() {
               </span>
               <button
                 type="button"
-                class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors"
+                class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors cursor-pointer"
                 @click="enableCustomEditHolder"
               >
                 <Plus class="w-3.5 h-3.5 shrink-0" />
                 <span>Tambah Pemilik</span>
+                <span
+                  v-if="!authStore.isProUser && financeStore.ownershipSummary.length >= 2"
+                  class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 text-[9px] font-extrabold uppercase tracking-wider"
+                >
+                  <Crown class="w-2.5 h-2.5 shrink-0" />
+                  <span>PRO</span>
+                </span>
               </button>
             </div>
           </template>
@@ -648,16 +775,36 @@ async function handleDeleteGlobalOwner() {
           </template>
         </div>
 
-        <input
-          :value="editHolderBalanceDisplay"
-          type="text"
-          inputmode="numeric"
-          autocomplete="off"
-          required
-          placeholder="Saldo Saat Ini (Rp)"
-          class="w-full min-h-[54px] sm:min-h-[50px] px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold tabular-nums text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
-          @input="handleEditHolderBalanceInput"
-        />
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 px-1">
+            Saldo Saat Ini (Rp)
+          </label>
+          <div class="relative flex items-center">
+            <input
+              :value="editHolderBalanceDisplay"
+              type="text"
+              inputmode="text"
+              autocomplete="off"
+              required
+              placeholder="Saldo Saat Ini (Rp)"
+              class="w-full min-h-[54px] sm:min-h-[50px] pl-4 pr-16 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 text-base sm:text-lg font-money font-semibold tabular-nums placeholder:font-sans placeholder:font-normal placeholder:text-sm sm:placeholder:text-base placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+              :class="
+                editHolderBalanceDisplay.startsWith('-')
+                  ? 'text-rose-600 dark:text-rose-400'
+                  : 'text-slate-900 dark:text-slate-100'
+              "
+              @input="handleEditHolderBalanceInput"
+            />
+            <button
+              type="button"
+              title="Ubah tanda positif/minus"
+              class="absolute right-2.5 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
+              @click="toggleBalanceSign(editHolderBalance)"
+            >
+              +/−
+            </button>
+          </div>
+        </div>
       </form>
 
       <template #footer>

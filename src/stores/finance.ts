@@ -82,6 +82,32 @@ export interface CategoryItem {
   updatedAt?: any;
 }
 
+export interface TransactionAttachment {
+  id: string;
+  key: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  uploadedAt: string;
+}
+
+export function sanitizeTransactionAttachments(raw?: any): TransactionAttachment[] {
+  if (!Array.isArray(raw)) return [];
+  const out: TransactionAttachment[] = [];
+  for (const item of raw.slice(0, 10)) {
+    if (!item || typeof item !== 'object') continue;
+    const id = String(item.id || '').trim().slice(0, 80);
+    const key = String(item.key || '').trim().slice(0, 300);
+    const name = String(item.name || '').trim().slice(0, 160);
+    const mimeType = String(item.mimeType || '').trim().slice(0, 80);
+    const size = Math.max(0, Math.min(20000000, Number(item.size) || 0));
+    const uploadedAt = String(item.uploadedAt || new Date().toISOString()).trim().slice(0, 40);
+    if (!id || !key || !name || !mimeType) continue;
+    out.push({ id, key, name, mimeType, size, uploadedAt });
+  }
+  return out;
+}
+
 export interface TransactionItem {
   id: string;
   ownerId: string;
@@ -101,6 +127,7 @@ export interface TransactionItem {
   note: string;
   date: string;
   automationRuleId?: string;
+  attachments?: TransactionAttachment[];
   deleted?: boolean;
   deletedAt?: any;
   createdAt?: any;
@@ -115,10 +142,12 @@ export function parseTransactionDoc(id: string, data: any): TransactionItem {
       automationRuleId = match[1];
     }
   }
+  const cleanAttachments = sanitizeTransactionAttachments(data?.attachments);
   return {
     id,
     ...(data as Omit<TransactionItem, 'id'>),
     automationRuleId,
+    ...(cleanAttachments.length > 0 ? { attachments: cleanAttachments } : {}),
   };
 }
 
@@ -277,6 +306,7 @@ export const useFinanceStore = defineStore('finance', () => {
   const rawUserCategories = ref<CategoryItem[]>([]);
   const defaultCategories = ref<CategoryItem[]>([]);
   const rawTransactions = ref<TransactionItem[]>([]);
+  const txAttachmentsIndexMap = ref<Record<string, TransactionAttachment[]>>({});
   const budgets = ref<BudgetItem[]>([]);
   const budgetPeriods = ref<string[]>([]);
   const annualBudgetMetaMap = ref<Record<string, AnnualBudgetMetaItem>>({});
@@ -851,6 +881,11 @@ export const useFinanceStore = defineStore('finance', () => {
           resolvedToFundOwnerName = resolvedFundOwnerName;
         }
 
+        const mergedAttachments =
+          Array.isArray(tx.attachments) && tx.attachments.length > 0
+            ? tx.attachments
+            : txAttachmentsIndexMap.value[tx.id];
+
         return {
           ...tx,
           walletName: resolvedWalletName,
@@ -860,6 +895,9 @@ export const useFinanceStore = defineStore('finance', () => {
           toWalletName: resolvedToWalletName,
           toFundOwnerId: resolvedDestHolder?.id || tx.toFundOwnerId,
           toFundOwnerName: resolvedToFundOwnerName,
+          ...(mergedAttachments && mergedAttachments.length > 0
+            ? { attachments: mergedAttachments }
+            : {}),
         };
       }
 
@@ -891,6 +929,11 @@ export const useFinanceStore = defineStore('finance', () => {
       }
     }
 
+    const mergedAttachments =
+      Array.isArray(tx.attachments) && tx.attachments.length > 0
+        ? tx.attachments
+        : txAttachmentsIndexMap.value[tx.id];
+
     return {
       ...tx,
       walletName: resolvedWalletName,
@@ -899,7 +942,22 @@ export const useFinanceStore = defineStore('finance', () => {
       toWalletId: resolvedToWalletId,
       toWalletName: resolvedToWalletName,
       toFundOwnerName: resolvedToFundOwnerName,
+      ...(mergedAttachments && mergedAttachments.length > 0
+        ? { attachments: mergedAttachments }
+        : {}),
     };
+  }
+
+  async function refreshTxAttachmentsIndex(uid: string) {
+    try {
+      const { fetchTransactionAttachmentIndex } = await import('../services/attachments');
+      const idx = await fetchTransactionAttachmentIndex(uid);
+      if (idx && typeof idx === 'object') {
+        txAttachmentsIndexMap.value = idx;
+      }
+    } catch {
+      // Ignore attachment index fetch errors
+    }
   }
 
   /**
@@ -2265,6 +2323,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
     isSyncedWithFirestore.value = true;
     saveLocalSnapshot(uid, true, effectiveSyncToken);
+    void refreshTxAttachmentsIndex(uid);
 
     // Pastikan transaksi periode aktif langsung dimuat agar serapan anggaran di ringkasan akurat
     const activeTargetPeriod = selectedPeriod.value || getCurrentMonthPeriod();
@@ -2428,6 +2487,7 @@ export const useFinanceStore = defineStore('finance', () => {
     rawWalletOwners.value = [];
     rawUserCategories.value = [];
     rawTransactions.value = [];
+    txAttachmentsIndexMap.value = {};
     budgets.value = [];
     budgetPeriods.value = [];
     annualBudgetMetaMap.value = {};
@@ -2565,6 +2625,7 @@ export const useFinanceStore = defineStore('finance', () => {
       }
       isSyncedWithFirestore.value = true;
       isLoading.value = false;
+      void refreshTxAttachmentsIndex(uid);
 
       // Ensure transactions for active period are preloaded ONLY if not already restored from valid period cache
       const activeTargetPeriod = selectedPeriod.value || getCurrentMonthPeriod();
@@ -4226,6 +4287,7 @@ export const useFinanceStore = defineStore('finance', () => {
     note: string;
     date: string;
     automationRuleId?: string;
+    attachments?: TransactionAttachment[];
     silentToast?: boolean;
   }): Promise<TransactionItem> {
     const authStore = useAuthStore();
@@ -4414,118 +4476,147 @@ export const useFinanceStore = defineStore('finance', () => {
         : undefined;
     const resolvedFeeCatId = matchedAdminFeeCat?.id || 'su_cat_130';
 
-    if (canQueryFirestore) {
-      try {
-        if (!confirmedUserDocsInFirestore.has(uid)) {
-          await ensureUserDocExistsForSyncToken(uid);
-        }
-        const batch = writeBatch(db);
-        const firestoreTxData: Record<string, any> = {
+    const safeAttachments = sanitizeTransactionAttachments(payload.attachments);
+
+    const buildTxBatch = (includeAttachmentsInFirestore: boolean) => {
+      const batch = writeBatch(db);
+      const firestoreTxData: Record<string, any> = {
+        ownerId: uid,
+        walletId: wallet.id,
+        walletName: wallet.name,
+        fundOwnerId: sourceHolder?.id || 'default',
+        fundOwnerName: sourceHolder?.holderName || 'Pribadi',
+        type: payload.type,
+        category: safeCategory,
+        amount: numericAmount,
+        note: safeNote,
+        date: safeDate,
+        deleted: false,
+        deletedAt: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      if (resolvedCategoryId) {
+        firestoreTxData.categoryId = resolvedCategoryId;
+      }
+      if (payload.automationRuleId) {
+        firestoreTxData.automationRuleId = payload.automationRuleId;
+      }
+      if (includeAttachmentsInFirestore && safeAttachments.length > 0) {
+        firestoreTxData.attachments = safeAttachments;
+      }
+      if (payload.type === 'transfer' && numericAdminFee > 0) {
+        firestoreTxData.adminFee = numericAdminFee;
+      }
+      if (payload.type === 'transfer' && destWallet) {
+        firestoreTxData.toWalletId = destWallet.id;
+        firestoreTxData.toWalletName = destWallet.name;
+        firestoreTxData.toFundOwnerId = destHolder?.id || 'default';
+        firestoreTxData.toFundOwnerName = destHolder?.holderName || 'Pribadi';
+      }
+
+      batch.set(doc(db, 'transactions', id), firestoreTxData);
+
+      // If transfer includes an admin fee, record a separate Bea Admin expense transaction so it complies with live Firestore schema rules
+      if (payload.type === 'transfer' && numericAdminFee > 0) {
+        const feeData: Record<string, any> = {
           ownerId: uid,
           walletId: wallet.id,
           walletName: wallet.name,
           fundOwnerId: sourceHolder?.id || 'default',
           fundOwnerName: sourceHolder?.holderName || 'Pribadi',
-          type: payload.type,
-          category: safeCategory,
-          amount: numericAmount,
-          note: safeNote,
+          type: 'expense',
+          category: 'Biaya Admin',
+          amount: numericAdminFee,
+          note: feeNote,
           date: safeDate,
           deleted: false,
           deletedAt: null,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
-        if (resolvedCategoryId) {
-          firestoreTxData.categoryId = resolvedCategoryId;
+        if (resolvedFeeCatId) {
+          feeData.categoryId = resolvedFeeCatId;
         }
-        if (payload.automationRuleId) {
-          firestoreTxData.automationRuleId = payload.automationRuleId;
-        }
-        if (payload.type === 'transfer' && numericAdminFee > 0) {
-          firestoreTxData.adminFee = numericAdminFee;
-        }
-        if (payload.type === 'transfer' && destWallet) {
-          firestoreTxData.toWalletId = destWallet.id;
-          firestoreTxData.toWalletName = destWallet.name;
-          firestoreTxData.toFundOwnerId = destHolder?.id || 'default';
-          firestoreTxData.toFundOwnerName = destHolder?.holderName || 'Pribadi';
-        }
+        batch.set(doc(db, 'transactions', feeTxId), feeData);
+      }
 
-        batch.set(doc(db, 'transactions', id), firestoreTxData);
+      if (sourceHolder) {
+        batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
+          balance:
+            payload.type === 'income'
+              ? increment(numericAmount)
+              : payload.type === 'expense'
+                ? increment(-numericAmount)
+                : increment(-(numericAmount + numericAdminFee)),
+          updatedAt: serverTimestamp(),
+        });
+      }
 
-        // If transfer includes an admin fee, record a separate Bea Admin expense transaction so it complies with live Firestore schema rules
-        if (payload.type === 'transfer' && numericAdminFee > 0) {
-          const feeData: Record<string, any> = {
-            ownerId: uid,
-            walletId: wallet.id,
-            walletName: wallet.name,
-            fundOwnerId: sourceHolder?.id || 'default',
-            fundOwnerName: sourceHolder?.holderName || 'Pribadi',
-            type: 'expense',
-            category: 'Biaya Admin',
-            amount: numericAdminFee,
-            note: feeNote,
-            date: safeDate,
-            deleted: false,
-            deletedAt: null,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          };
-          if (resolvedFeeCatId) {
-            feeData.categoryId = resolvedFeeCatId;
-          }
-          batch.set(doc(db, 'transactions', feeTxId), feeData);
-        }
+      const sourceWalletIncrement =
+        payload.type === 'income'
+          ? increment(numericAmount)
+          : payload.type === 'expense'
+            ? increment(-numericAmount)
+            : destWallet && destWallet.id === wallet.id
+              ? increment(-numericAdminFee)
+              : increment(-(numericAmount + numericAdminFee));
 
-        if (sourceHolder) {
-          batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
-            balance:
-              payload.type === 'income'
-                ? increment(numericAmount)
-                : payload.type === 'expense'
-                  ? increment(-numericAmount)
-                  : increment(-(numericAmount + numericAdminFee)),
+      batch.update(doc(db, 'wallets', wallet.id), {
+        balance: sourceWalletIncrement,
+        updatedAt: serverTimestamp(),
+      });
+
+      if (payload.type === 'transfer' && destWallet) {
+        if (destHolder) {
+          batch.update(doc(db, 'wallet_owners', destHolder.id), {
+            balance: increment(numericAmount),
             updatedAt: serverTimestamp(),
           });
         }
+        if (destWallet.id !== wallet.id) {
+          batch.update(doc(db, 'wallets', destWallet.id), {
+            balance: increment(numericAmount),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
 
-        const sourceWalletIncrement =
-          payload.type === 'income'
-            ? increment(numericAmount)
-            : payload.type === 'expense'
-              ? increment(-numericAmount)
-              : destWallet && destWallet.id === wallet.id
-                ? increment(-numericAdminFee)
-                : increment(-(numericAmount + numericAdminFee));
+      touchUserSyncTokenInBatch(batch, uid);
+      return batch;
+    };
 
-        batch.update(doc(db, 'wallets', wallet.id), {
-          balance: sourceWalletIncrement,
-          updatedAt: serverTimestamp(),
-        });
-
-        if (payload.type === 'transfer' && destWallet) {
-          if (destHolder) {
-            batch.update(doc(db, 'wallet_owners', destHolder.id), {
-              balance: increment(numericAmount),
-              updatedAt: serverTimestamp(),
-            });
-          }
-          if (destWallet.id !== wallet.id) {
-            batch.update(doc(db, 'wallets', destWallet.id), {
-              balance: increment(numericAmount),
-              updatedAt: serverTimestamp(),
-            });
+    if (canQueryFirestore) {
+      try {
+        if (!confirmedUserDocsInFirestore.has(uid)) {
+          await ensureUserDocExistsForSyncToken(uid);
+        }
+        try {
+          await buildTxBatch(true).commit();
+        } catch (primaryErr: any) {
+          if (
+            safeAttachments.length > 0 &&
+            String(primaryErr?.code || primaryErr?.message || '').toLowerCase().includes('permission')
+          ) {
+            // Live Firestore rules may not yet include `attachments` -> commit transaction cleanly without it while keeping R2 index synced
+            await buildTxBatch(false).commit();
+          } else {
+            throw primaryErr;
           }
         }
-
-        touchUserSyncTokenInBatch(batch, uid);
-
-        // Commit write to Firestore (0 reads)
-        await batch.commit();
       } catch (err: any) {
         console.warn('[Finance] Direct Firestore batch commit error (persisting to local storage seamlessly):', err?.message || err);
       }
+    }
+
+    if (safeAttachments.length > 0) {
+      txAttachmentsIndexMap.value = {
+        ...txAttachmentsIndexMap.value,
+        [id]: safeAttachments,
+      };
+      void import('../services/attachments').then(({ saveTransactionAttachmentIndex }) =>
+        saveTransactionAttachmentIndex(id, safeAttachments, uid)
+      );
     }
 
     // Update local state optimistically (0 extra Firestore reads)
@@ -4540,6 +4631,7 @@ export const useFinanceStore = defineStore('finance', () => {
       category: safeCategory,
       categoryId: resolvedCategoryId,
       automationRuleId: payload.automationRuleId,
+      ...(safeAttachments.length > 0 ? { attachments: safeAttachments } : {}),
       amount: numericAmount,
       adminFee: payload.type === 'transfer' ? numericAdminFee : 0,
       note: safeNote,
@@ -4629,6 +4721,7 @@ export const useFinanceStore = defineStore('finance', () => {
       adminFee?: number;
       note: string;
       date: string;
+      attachments?: TransactionAttachment[];
       silentToast?: boolean;
     }
   ) {
@@ -4807,7 +4900,12 @@ export const useFinanceStore = defineStore('finance', () => {
       );
     const resolvedCategoryId = matchedCategory?.id || (payload as any).categoryId || oldTx.categoryId || undefined;
 
-    try {
+    const hasExplicitAttachments = payload.attachments !== undefined;
+    const safeAttachments = hasExplicitAttachments
+      ? sanitizeTransactionAttachments(payload.attachments)
+      : sanitizeTransactionAttachments(oldTx.attachments);
+
+    const buildUpdateTxBatch = (includeAttachmentsInFirestore: boolean) => {
       const batch = writeBatch(db);
       const updatePayload: Record<string, any> = {
         walletId: newWallet.id,
@@ -4826,6 +4924,9 @@ export const useFinanceStore = defineStore('finance', () => {
       }
       if (oldTx.automationRuleId) {
         updatePayload.automationRuleId = oldTx.automationRuleId;
+      }
+      if (includeAttachmentsInFirestore && (hasExplicitAttachments || safeAttachments.length > 0)) {
+        updatePayload.attachments = safeAttachments;
       }
       if (payload.type === 'transfer') {
         updatePayload.adminFee = numericAdminFee;
@@ -4858,12 +4959,38 @@ export const useFinanceStore = defineStore('finance', () => {
       }
 
       touchUserSyncTokenInBatch(batch, uid);
+      return batch;
+    };
 
-      // Commit update to Firestore (0 reads)
-      await batch.commit();
+    try {
+      try {
+        await buildUpdateTxBatch(true).commit();
+      } catch (primaryErr: any) {
+        if (
+          (hasExplicitAttachments || safeAttachments.length > 0) &&
+          String(primaryErr?.code || primaryErr?.message || '').toLowerCase().includes('permission')
+        ) {
+          await buildUpdateTxBatch(false).commit();
+        } else {
+          throw primaryErr;
+        }
+      }
     } catch (err) {
       useNotificationStore().notifyError('Gagal Memperbarui Transaksi', err);
       handleFirestoreError(err, OperationType.UPDATE, txPath);
+    }
+
+    if (hasExplicitAttachments || safeAttachments.length > 0) {
+      const nextMap = { ...txAttachmentsIndexMap.value };
+      if (safeAttachments.length > 0) {
+        nextMap[txId] = safeAttachments;
+      } else {
+        delete nextMap[txId];
+      }
+      txAttachmentsIndexMap.value = nextMap;
+      void import('../services/attachments').then(({ saveTransactionAttachmentIndex }) =>
+        saveTransactionAttachmentIndex(txId, safeAttachments, uid)
+      );
     }
 
     let updatedTx: TransactionItem | null = null;
@@ -4879,6 +5006,7 @@ export const useFinanceStore = defineStore('finance', () => {
         category: safeCategory,
         categoryId: resolvedCategoryId,
         automationRuleId: oldTx.automationRuleId,
+        attachments: safeAttachments.length > 0 ? safeAttachments : undefined,
         amount: numericAmount,
         adminFee: payload.type === 'transfer' ? numericAdminFee : 0,
         note: safeNote,

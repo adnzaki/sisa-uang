@@ -17,19 +17,24 @@ import {
   formatHolderName,
   formatPeriodLabel,
   MAX_STRICT_ANNUAL_REVISIONS,
+  type TransactionAttachment,
 } from '../stores/finance';
 import { useSavingsStore } from '../stores/savings';
 import { useThemeStore } from '../stores/theme';
 import { useNotificationStore } from '../stores/notification';
+import { useAuthStore } from '../stores/auth';
+import { deleteTransactionAttachmentFile } from '../services/attachments';
 import AppModal from './AppModal.vue';
 import CustomSelect, { type SelectOptionItem } from './CustomSelect.vue';
 import MaterialDatePicker from './MaterialDatePicker.vue';
+import TransactionAttachmentsField from './TransactionAttachmentsField.vue';
 
 const { t } = useI18n();
 const financeStore = useFinanceStore();
 const savingsStore = useSavingsStore();
 const themeStore = useThemeStore();
 const notificationStore = useNotificationStore();
+const authStore = useAuthStore();
 
 const txType = ref<'expense' | 'income' | 'transfer'>('expense');
 // Step 1: Pilih Sumber Dana (Wallet)
@@ -47,6 +52,8 @@ const adminFee = ref<number | ''>('');
 const category = ref<string>('');
 const note = ref<string>('');
 const date = ref<string>(new Date().toISOString().slice(0, 10));
+const attachments = ref<TransactionAttachment[]>([]);
+const sessionUploadedKeys = ref<string[]>([]);
 const errorMsg = ref<string | null>(null);
 const isSubmitting = ref(false);
 const isInitializing = ref(false);
@@ -344,11 +351,14 @@ watch(
   async ([isOpen, editingTx]) => {
     if (!isOpen) {
       resetShortfallFlow();
+      attachments.value = [];
+      sessionUploadedKeys.value = [];
       return;
     }
     isInitializing.value = true;
     errorMsg.value = null;
     resetShortfallFlow();
+    sessionUploadedKeys.value = [];
 
     if (editingTx) {
       txType.value = editingTx.type;
@@ -375,6 +385,9 @@ watch(
           : editingTx.category || categories.value[0] || 'Lainnya';
       note.value = editingTx.note || '';
       date.value = editingTx.date || new Date().toISOString().slice(0, 10);
+      attachments.value = Array.isArray(editingTx.attachments)
+        ? editingTx.attachments.map((att) => ({ ...att }))
+        : [];
     } else {
       txType.value = 'expense';
       walletId.value = '';
@@ -386,6 +399,7 @@ watch(
       note.value = '';
       date.value = new Date().toISOString().slice(0, 10);
       category.value = '';
+      attachments.value = [];
     }
 
     await nextTick();
@@ -425,7 +439,24 @@ watch(txType, () => {
   }
 });
 
-function closeModal() {
+function handleSessionUploaded(key: string) {
+  if (key && !sessionUploadedKeys.value.includes(key)) {
+    sessionUploadedKeys.value.push(key);
+  }
+}
+
+function closeModal(saved: boolean | Event = false) {
+  const isSaved = saved === true;
+  if (!isSaved && sessionUploadedKeys.value.length > 0) {
+    const activeUnsavedKeys = attachments.value
+      .map((a) => a.key)
+      .filter((k) => sessionUploadedKeys.value.includes(k));
+    for (const key of activeUnsavedKeys) {
+      void deleteTransactionAttachmentFile(key, authStore.user?.uid).catch(() => {});
+    }
+  }
+  sessionUploadedKeys.value = [];
+  attachments.value = [];
   resetShortfallFlow();
   financeStore.quickModalOpen = false;
   financeStore.editingTransaction = null;
@@ -663,7 +694,9 @@ async function handleConfirmShortfallAndSave() {
     amount.value = '';
     adminFee.value = '';
     note.value = '';
-    closeModal();
+    attachments.value = [];
+    sessionUploadedKeys.value = [];
+    closeModal(true);
   } catch (err: any) {
     errorMsg.value = err instanceof Error ? err.message : 'Gagal menggunakan saldo tabungan.';
   } finally {
@@ -721,6 +754,7 @@ async function handleSubmit() {
       note.value.trim() ||
       (txType.value === 'transfer' ? 'Transfer antar kepemilikan dana' : resolvedCategory),
     date: date.value,
+    attachments: attachments.value.map((att) => ({ ...att })),
   };
 
   // Intercept if operational balance (outside Tabungan) is insufficient for this expense/transfer
@@ -735,7 +769,9 @@ async function handleSubmit() {
     amount.value = '';
     adminFee.value = '';
     note.value = '';
-    closeModal();
+    attachments.value = [];
+    sessionUploadedKeys.value = [];
+    closeModal(true);
   } catch (err: any) {
     errorMsg.value = err instanceof Error ? err.message : 'Gagal menyimpan transaksi.';
   } finally {
@@ -960,6 +996,14 @@ async function handleSubmit() {
           />
         </div>
       </Transition>
+
+      <!-- 8. Bukti Pembelanjaan / Upload Invoice / Kwitansi (Urutan Terakhir Form) -->
+      <TransactionAttachmentsField
+        v-model="attachments"
+        :owner-uid="authStore.user?.uid"
+        :disabled="isSubmitting"
+        @session-uploaded="handleSessionUploaded"
+      />
 
       <p v-if="errorMsg" class="text-xs text-rose-600 dark:text-rose-400 font-medium px-1">
         {{ errorMsg }}
