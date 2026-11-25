@@ -429,6 +429,7 @@ service cloud.firestore {
           'note',
           'color',
           'relatedTransactionId',
+          'syncInitialTransaction',
           'reminderEnabled',
           'reminderDays',
           'reminderTime',
@@ -455,6 +456,7 @@ service cloud.firestore {
         (!('note' in data) || data.note == null || (data.note is string && data.note.size() <= 200)) &&
         (!('color' in data) || data.color == null || (data.color is string && data.color.size() <= 20)) &&
         (!('relatedTransactionId' in data) || data.relatedTransactionId == null || (data.relatedTransactionId is string && data.relatedTransactionId.size() <= 128)) &&
+        (!('syncInitialTransaction' in data) || data.syncInitialTransaction == null || data.syncInitialTransaction is bool) &&
         data.reminderEnabled is bool &&
         (!('reminderDays' in data) || data.reminderDays == null || (data.reminderDays is list && data.reminderDays.size() <= 31)) &&
         (!('reminderTime' in data) || data.reminderTime == null || (data.reminderTime is string && data.reminderTime.size() <= 10)) &&
@@ -1143,6 +1145,7 @@ service cloud.firestore {
               'note',
               'color',
               'relatedTransactionId',
+              'syncInitialTransaction',
               'reminderEnabled',
               'reminderDays',
               'reminderTime',

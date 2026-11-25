@@ -1325,6 +1325,7 @@ interface ServerDebtRecord {
   note?: string;
   color: string;
   relatedTransactionId?: string | null;
+  syncInitialTransaction?: boolean;
   reminderEnabled: boolean;
   reminderDays: number[];
   reminderTime: string;
@@ -4757,6 +4758,7 @@ async function startServer() {
       note: String(body.note !== undefined ? body.note : (existing?.note || '')).slice(0, 200),
       color: String(body.color || existing?.color || (body.type === 'receivable' ? 'emerald' : 'rose')).slice(0, 20),
       relatedTransactionId: body.relatedTransactionId !== undefined ? (body.relatedTransactionId ? String(body.relatedTransactionId).slice(0, 128) : null) : (existing?.relatedTransactionId || null),
+      syncInitialTransaction: body.syncInitialTransaction !== undefined ? Boolean(body.syncInitialTransaction) : (existing?.syncInitialTransaction ?? Boolean(body.relatedTransactionId ?? existing?.relatedTransactionId)),
       reminderEnabled: body.reminderEnabled !== undefined ? Boolean(body.reminderEnabled) : Boolean(existing?.reminderEnabled),
       reminderDays: Array.isArray(body.reminderDays)
         ? body.reminderDays.map((d: any) => Math.floor(Number(d))).filter((d: number) => d >= 1 && d <= 31)
@@ -4801,6 +4803,7 @@ async function startServer() {
     if (body.lastPushNotifiedDate !== undefined) existing.lastPushNotifiedDate = body.lastPushNotifiedDate;
     if (body.snoozedUntil !== undefined) existing.snoozedUntil = body.snoozedUntil;
     if (body.reminderEnabled !== undefined) existing.reminderEnabled = Boolean(body.reminderEnabled);
+    if (body.syncInitialTransaction !== undefined) existing.syncInitialTransaction = Boolean(body.syncInitialTransaction);
     if (body.deleted !== undefined) existing.deleted = Boolean(body.deleted);
     existing.updatedAt = nowIso();
 
@@ -4921,6 +4924,7 @@ async function startServer() {
           note: String(d.note || '').slice(0, 200),
           color: String(d.color || 'rose').slice(0, 20),
           relatedTransactionId: d.relatedTransactionId || null,
+          syncInitialTransaction: d.syncInitialTransaction !== undefined ? Boolean(d.syncInitialTransaction) : Boolean(d.relatedTransactionId),
           reminderEnabled: Boolean(d.reminderEnabled),
           reminderDays: Array.isArray(d.reminderDays) ? d.reminderDays : [1],
           reminderTime: String(d.reminderTime || '09:00').slice(0, 10),

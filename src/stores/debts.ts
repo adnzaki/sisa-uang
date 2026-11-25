@@ -409,6 +409,7 @@ export const useDebtsStore = defineStore('debts', () => {
     deadline?: string | null;
     note?: string;
     color?: string;
+    syncInitialTransaction?: boolean;
     reminderEnabled: boolean;
     reminderDays?: number[];
     reminderTime?: string;
@@ -483,7 +484,16 @@ export const useDebtsStore = defineStore('debts', () => {
       )
     ).sort((a, b) => a - b);
 
-    // Sync Initial Linked Transaction with Transaksi Feature
+    // Sync Initial Linked Transaction with Transaksi Feature (Optional, defaults to false / note-only)
+    const shouldSyncInitialTx =
+      payload.syncInitialTransaction !== undefined
+        ? Boolean(payload.syncInitialTransaction)
+        : isEdit
+          ? existing?.syncInitialTransaction !== undefined
+            ? Boolean(existing.syncInitialTransaction)
+            : Boolean(existing?.relatedTransactionId)
+          : false;
+
     let relatedTransactionId: string | null = existing?.relatedTransactionId || null;
     const txType = targetType === 'debt' ? 'income' : 'expense';
     const txCategory =
@@ -493,22 +503,9 @@ export const useDebtsStore = defineStore('debts', () => {
     const txNote = safeNote ? `${safeDescription} — ${safeNote}` : safeDescription;
 
     try {
-      if (!isEdit) {
-        const createdTx = await financeStore.addTransaction({
-          walletId: wallet.id,
-          fundOwnerId: resolvedHolderId,
-          type: txType,
-          category: txCategory,
-          amount: numericAmount,
-          note: txNote,
-          date: safeDate,
-          silentToast: true,
-        });
-        relatedTransactionId = createdTx?.id || null;
-      } else if (relatedTransactionId) {
-        const linkedTx = financeStore.transactions.find((t) => t.id === relatedTransactionId);
-        if (linkedTx) {
-          await financeStore.updateTransaction(linkedTx.id, {
+      if (shouldSyncInitialTx) {
+        if (!isEdit || !relatedTransactionId) {
+          const createdTx = await financeStore.addTransaction({
             walletId: wallet.id,
             fundOwnerId: resolvedHolderId,
             type: txType,
@@ -518,7 +515,41 @@ export const useDebtsStore = defineStore('debts', () => {
             date: safeDate,
             silentToast: true,
           });
+          relatedTransactionId = createdTx?.id || null;
+        } else {
+          const linkedTx = financeStore.transactions.find((t) => t.id === relatedTransactionId);
+          if (linkedTx) {
+            await financeStore.updateTransaction(linkedTx.id, {
+              walletId: wallet.id,
+              fundOwnerId: resolvedHolderId,
+              type: txType,
+              category: txCategory,
+              amount: numericAmount,
+              note: txNote,
+              date: safeDate,
+              silentToast: true,
+            });
+          } else {
+            const createdTx = await financeStore.addTransaction({
+              walletId: wallet.id,
+              fundOwnerId: resolvedHolderId,
+              type: txType,
+              category: txCategory,
+              amount: numericAmount,
+              note: txNote,
+              date: safeDate,
+              silentToast: true,
+            });
+            relatedTransactionId = createdTx?.id || null;
+          }
         }
+      } else {
+        if (isEdit && relatedTransactionId) {
+          await financeStore
+            .removeTransaction(relatedTransactionId, { skipConfirmation: true, silentToast: true })
+            .catch(() => false);
+        }
+        relatedTransactionId = null;
       }
     } catch (txErr: any) {
       notify.notifyError(
@@ -543,6 +574,7 @@ export const useDebtsStore = defineStore('debts', () => {
       note: safeNote,
       color: safeColor,
       relatedTransactionId,
+      syncInitialTransaction: shouldSyncInitialTx,
       reminderEnabled: Boolean(payload.reminderEnabled),
       reminderDays: cleanDays.length > 0 ? cleanDays : [1],
       reminderTime: safeTime,
@@ -599,6 +631,7 @@ export const useDebtsStore = defineStore('debts', () => {
         note: safeNote,
         color: safeColor,
         relatedTransactionId: relatedTransactionId || null,
+        syncInitialTransaction: shouldSyncInitialTx,
         reminderEnabled: Boolean(payload.reminderEnabled),
         reminderDays: debtItem.reminderDays,
         reminderTime: safeTime,
@@ -626,7 +659,9 @@ export const useDebtsStore = defineStore('debts', () => {
       isEdit ? `${typeLabel} Diperbarui` : `${typeLabel} Baru Dicatat`,
       isEdit
         ? `Catatan ${typeLabel.toLowerCase()} "${safeDescription}" berhasil diperbarui.`
-        : `"${safeDescription}" (Rp ${numericAmount.toLocaleString('id-ID')}) disimpan & otomatis dicatat sebagai ${txActionLabel}.`
+        : shouldSyncInitialTx
+          ? `"${safeDescription}" (Rp ${numericAmount.toLocaleString('id-ID')}) disimpan & otomatis dicatat sebagai ${txActionLabel}.`
+          : `"${safeDescription}" (Rp ${numericAmount.toLocaleString('id-ID')}) disimpan sebagai catatan tanpa mengubah saldo atau menambah transaksi awal.`
     );
     return debtItem;
   }

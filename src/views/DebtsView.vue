@@ -284,6 +284,7 @@ const hasDeadline = ref<boolean>(false);
 const debtDeadline = ref<string>('');
 const debtNote = ref<string>('');
 const debtColor = ref<string>('rose');
+const debtSyncInitialTx = ref<boolean>(false);
 const debtReminderEnabled = ref<boolean>(false);
 const debtScheduleMode = ref<'single' | 'multiple'>('single');
 const debtSingleDayStr = ref<string>('1');
@@ -432,6 +433,7 @@ function openCreateDebtModal() {
   debtDeadline.value = getTodayIsoDate();
   debtNote.value = '';
   debtColor.value = defaultType === 'receivable' ? 'emerald' : 'rose';
+  debtSyncInitialTx.value = false;
   debtReminderEnabled.value = false;
   debtScheduleMode.value = 'single';
   debtSingleDayStr.value = '1';
@@ -460,6 +462,10 @@ function openEditDebtModal(debt: DebtItem) {
   debtDeadline.value = debt.deadline || getTodayIsoDate();
   debtNote.value = debt.note || '';
   debtColor.value = debt.color || (debt.type === 'receivable' ? 'emerald' : 'rose');
+  debtSyncInitialTx.value =
+    debt.syncInitialTransaction !== undefined
+      ? Boolean(debt.syncInitialTransaction)
+      : Boolean(debt.relatedTransactionId);
   debtReminderEnabled.value = Boolean(debt.reminderEnabled);
   const days =
     debt.reminderDays && debt.reminderDays.length > 0 ? [...debt.reminderDays] : [1];
@@ -517,6 +523,7 @@ async function submitDebtForm() {
       deadline: hasDeadline.value ? debtDeadline.value || null : null,
       note: debtNote.value.trim(),
       color: debtColor.value,
+      syncInitialTransaction: debtSyncInitialTx.value,
       reminderEnabled: debtReminderEnabled.value,
       reminderDays: finalDays,
       reminderTime: debtReminderTime.value || '09:00',
@@ -716,7 +723,7 @@ watch(
           Hutang &amp; Piutang
         </h1>
         <p class="hidden sm:block text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-          Catat pinjaman &amp; piutang terintegrasi otomatis ke Transaksi lengkap dengan pengingat cicilan.
+          Catat hutang &amp; piutang lengkap dengan pengingat cicilan dan progres pelunasan otomatis ke Transaksi.
         </p>
       </div>
 
@@ -766,7 +773,7 @@ watch(
         </div>
 
         <p class="col-span-2 sm:hidden text-xs text-slate-500 dark:text-slate-400 -mt-1">
-          Catat pinjaman &amp; piutang terintegrasi otomatis ke Transaksi lengkap dengan pengingat cicilan.
+          Catat hutang &amp; piutang lengkap dengan pengingat cicilan dan progres pelunasan otomatis ke Transaksi.
         </p>
 
         <button
@@ -918,7 +925,7 @@ watch(
           Belum Ada Catatan Hutang atau Piutang
         </h3>
         <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
-          Catat hutang atau piutang Anda secara terstruktur. Pencatatan baru maupun pembayaran cicilan akan langsung tersinkronisasi dengan daftar Transaksi &amp; saldo dompet Anda.
+          Catat hutang atau piutang secara terstruktur (hanya catatan secara default, atau aktifkan sinkronisasi transaksi awal). Setiap pembayaran cicilan &amp; penerimaan piutang otomatis masuk ke daftar Transaksi &amp; saldo dompet Anda.
         </p>
       </div>
       <div>
@@ -1189,21 +1196,65 @@ watch(
           </button>
         </div>
 
-        <!-- Helper badge explaining auto-linked transaction category -->
-        <div
-          class="px-3.5 py-2 rounded-xl text-[11px] font-medium border"
-          :class="
-            debtType === 'debt'
-              ? 'bg-rose-50/80 dark:bg-rose-950/30 border-rose-200/80 dark:border-rose-900/50 text-rose-700 dark:text-rose-300'
-              : 'bg-emerald-50/80 dark:bg-emerald-950/30 border-emerald-200/80 dark:border-emerald-900/50 text-emerald-700 dark:text-emerald-300'
-          "
-        >
-          <span v-if="debtType === 'debt'">
-            Otomatis mencatat transaksi <strong>Income</strong> kategori <strong>{{ DEBT_TX_CATEGORIES.debtCreate }}</strong> ke sumber dana terpilih.
-          </span>
-          <span v-else>
-            Otomatis mencatat transaksi <strong>Expense</strong> kategori <strong>{{ DEBT_TX_CATEGORIES.receivableCreate }}</strong> dari sumber dana terpilih.
-          </span>
+        <!-- Mode Pencatatan Awal (Default: Hanya Catatan / Opsional: Otomatis Transaksi & Saldo) -->
+        <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60 p-3.5 space-y-2.5">
+          <div class="text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Opsi Pencatatan ke Transaksi &amp; Saldo
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              type="button"
+              class="min-h-[42px] px-3 py-2 rounded-xl text-xs font-semibold border transition-all text-left flex items-center justify-between gap-2 cursor-pointer"
+              :class="
+                !debtSyncInitialTx
+                  ? 'border-emerald-600 bg-emerald-600 text-white shadow-xs'
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:border-emerald-500/50'
+              "
+              @click="debtSyncInitialTx = false"
+            >
+              <span>Hanya Catatan (Default)</span>
+              <Check v-if="!debtSyncInitialTx" class="w-3.5 h-3.5 shrink-0" />
+            </button>
+            <button
+              type="button"
+              class="min-h-[42px] px-3 py-2 rounded-xl text-xs font-semibold border transition-all text-left flex items-center justify-between gap-2 cursor-pointer"
+              :class="
+                debtSyncInitialTx
+                  ? debtType === 'debt'
+                    ? 'border-rose-600 bg-rose-600 text-white shadow-xs'
+                    : 'border-emerald-600 bg-emerald-600 text-white shadow-xs'
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:border-emerald-500/50'
+              "
+              @click="debtSyncInitialTx = true"
+            >
+              <span>Otomatis ke {{ debtType === 'debt' ? 'Income' : 'Expense' }} &amp; Saldo</span>
+              <Check v-if="debtSyncInitialTx" class="w-3.5 h-3.5 shrink-0" />
+            </button>
+          </div>
+          <div
+            class="px-3 py-2 rounded-xl text-[11px] font-medium border leading-relaxed"
+            :class="
+              !debtSyncInitialTx
+                ? 'bg-white/90 dark:bg-slate-950/60 border-slate-200/80 dark:border-slate-800 text-slate-600 dark:text-slate-300'
+                : debtType === 'debt'
+                  ? 'bg-rose-50/80 dark:bg-rose-950/30 border-rose-200/80 dark:border-rose-900/50 text-rose-700 dark:text-rose-300'
+                  : 'bg-emerald-50/80 dark:bg-emerald-950/30 border-emerald-200/80 dark:border-emerald-900/50 text-emerald-700 dark:text-emerald-300'
+            "
+          >
+            <span v-if="!debtSyncInitialTx">
+              Hanya disimpan sebagai catatan tanpa menambah transaksi
+              <strong>{{ debtType === 'debt' ? 'Income' : 'Expense' }}</strong> dan tanpa mengubah saldo.
+              Saat Anda mencatat progress pelunasan (<strong>{{ debtType === 'debt' ? 'Cicil' : 'Terima' }}</strong>),
+              catatan tetap berkurang dan otomatis masuk ke transaksi
+              <strong>{{ debtType === 'debt' ? 'Pengeluaran' : 'Penerimaan' }}</strong>.
+            </span>
+            <span v-else-if="debtType === 'debt'">
+              Otomatis mencatat transaksi <strong>Income</strong> kategori <strong>{{ DEBT_TX_CATEGORIES.debtCreate }}</strong> &amp; menambah saldo sumber dana terpilih.
+            </span>
+            <span v-else>
+              Otomatis mencatat transaksi <strong>Expense</strong> kategori <strong>{{ DEBT_TX_CATEGORIES.receivableCreate }}</strong> &amp; mengurangi saldo sumber dana terpilih.
+            </span>
+          </div>
         </div>
 
         <!-- 3. Tanggal Transaksi -->

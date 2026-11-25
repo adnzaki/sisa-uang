@@ -15,6 +15,7 @@ export interface DebtItem {
   note?: string;
   color: string;
   relatedTransactionId?: string | null;
+  syncInitialTransaction?: boolean;
   reminderEnabled: boolean;
   reminderDays: number[]; // Day(s) of month: 1-31
   reminderTime: string; // HH:mm

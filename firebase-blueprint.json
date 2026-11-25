@@ -1115,6 +1115,10 @@
           "description": "ID transaksi awal (Penerimaan Hutang / Pemberian Utang) di koleksi transactions",
           "maxLength": 128
         },
+        "syncInitialTransaction": {
+          "type": "boolean",
+          "description": "Apakah pencatatan awal otomatis membuat transaksi Income/Expense dan memengaruhi saldo (false = hanya catatan)"
+        },
         "reminderEnabled": {
           "type": "boolean",
           "description": "Aktifkan pengingat cicilan/penagihan berjadwal"
