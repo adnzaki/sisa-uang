@@ -5,6 +5,8 @@ import {
   OperationType,
   handleFirestoreError,
   isFirestoreQuotaError,
+  isServerBridgeConfigError,
+  isSessionExpiredError,
   sanitizeId,
   sanitizeString,
   MAX_WALLET_NAME_LENGTH,
@@ -356,6 +358,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
   const isLoading = ref(false);
   const isSyncedWithFirestore = ref(false);
+  const serverBridgeConfigMissing = ref(false);
   const activeOwnerUid = ref<string>('');
   const quickModalOpen = ref(false);
   const editingTransaction = ref<TransactionItem | null>(null);
@@ -653,6 +656,7 @@ export const useFinanceStore = defineStore('finance', () => {
   }
 
   function cleanupListeners() {
+    serverBridgeConfigMissing.value = false;
     // Listeners are replaced with efficient on-demand/cached reads + optimistic local updates
   }
 
@@ -2113,6 +2117,16 @@ export const useFinanceStore = defineStore('finance', () => {
     // Clear stale pagination caches before loading fresh server state
     invalidateServerPaginationCaches(uid);
 
+    const rethrowCriticalFetchError = (err: unknown) => {
+      if (
+        isSessionExpiredError(err) ||
+        isServerBridgeConfigError(err) ||
+        isFirestoreQuotaError(err)
+      ) {
+        throw err;
+      }
+    };
+
     // Build bounded transaction query: ONLY fetch latest 25 transactions (strict server-side pagination)
     // Never load unbounded transactions collection at startup!
     let initialPage1Items: TransactionItem[] = [];
@@ -2123,9 +2137,10 @@ export const useFinanceStore = defineStore('finance', () => {
           orderBys: [{ field: 'date', dir: 'desc' as const }],
           limitCount: 25,
         };
-        const page1Snap = await fsGetDocs('transactions', recentSpec, uid, true).catch(() =>
-          fsGetDocs('transactions', recentSpec, uid, false)
-        );
+        const page1Snap = await fsGetDocs('transactions', recentSpec, uid, true).catch((err) => {
+          rethrowCriticalFetchError(err);
+          return fsGetDocs('transactions', recentSpec, uid, false);
+        });
 
         if (page1Snap.docs.length > 0) {
           const filterKey = `${uid}:all`;
@@ -2141,34 +2156,40 @@ export const useFinanceStore = defineStore('finance', () => {
             .filter((t: TransactionItem) => !t.deleted);
         }
         return page1Snap;
-      } catch {
+      } catch (err) {
+        rethrowCriticalFetchError(err);
         // Fallback if composite index on (ownerId, date) is not yet available
         const fallbackSpec = {
           wheres: [{ field: 'ownerId', op: '==' as const, value: uid }],
           limitCount: 25,
         };
-        const boundedSnap = await fsGetDocs('transactions', fallbackSpec, uid, true).catch(() =>
-          fsGetDocs('transactions', fallbackSpec, uid, false)
-        );
+        const boundedSnap = await fsGetDocs('transactions', fallbackSpec, uid, true).catch((innerErr) => {
+          rethrowCriticalFetchError(innerErr);
+          return fsGetDocs('transactions', fallbackSpec, uid, false);
+        });
         return boundedSnap;
       }
     };
 
     const ownerSpec = { wheres: [{ field: 'ownerId', op: '==' as const, value: uid }] };
     const queries: Promise<any>[] = [
-      fsGetDocs('wallets', ownerSpec, uid, true).catch(() =>
-        fsGetDocs('wallets', ownerSpec, uid, false)
-      ),
-      fsGetDocs('wallet_owners', ownerSpec, uid, true).catch(() =>
-        fsGetDocs('wallet_owners', ownerSpec, uid, false)
-      ),
-      fsGetDocs('categories', ownerSpec, uid, true).catch(() =>
-        fsGetDocs('categories', ownerSpec, uid, false)
-      ),
+      fsGetDocs('wallets', ownerSpec, uid, true).catch((err) => {
+        rethrowCriticalFetchError(err);
+        return fsGetDocs('wallets', ownerSpec, uid, false);
+      }),
+      fsGetDocs('wallet_owners', ownerSpec, uid, true).catch((err) => {
+        rethrowCriticalFetchError(err);
+        return fsGetDocs('wallet_owners', ownerSpec, uid, false);
+      }),
+      fsGetDocs('categories', ownerSpec, uid, true).catch((err) => {
+        rethrowCriticalFetchError(err);
+        return fsGetDocs('categories', ownerSpec, uid, false);
+      }),
       fetchInitialBoundedTransactions(),
-      fsGetDocs('budgets', ownerSpec, uid, true).catch(() =>
-        fsGetDocs('budgets', ownerSpec, uid, false)
-      ),
+      fsGetDocs('budgets', ownerSpec, uid, true).catch((err) => {
+        rethrowCriticalFetchError(err);
+        return fsGetDocs('budgets', ownerSpec, uid, false);
+      }),
     ];
 
     // Only fetch global default categories if not already cached in memory or localStorage
@@ -2307,6 +2328,7 @@ export const useFinanceStore = defineStore('finance', () => {
       }
     }
 
+    serverBridgeConfigMissing.value = false;
     isSyncedWithFirestore.value = true;
     saveLocalSnapshot(uid, true, effectiveSyncToken);
     void refreshTxAttachmentsIndex(uid);
@@ -2447,9 +2469,18 @@ export const useFinanceStore = defineStore('finance', () => {
     }
   }
 
+  let inFlightInitPromise: Promise<void> | null = null;
+  let inFlightInitUid = '';
+
   async function initFinanceData(uidInput: string, forceRefresh = false) {
     cleanupListeners();
     const uid = sanitizeId(uidInput);
+    const authStore = useAuthStore();
+    if (!uid || uid === 'guest' || !authStore.isAuthenticated) {
+      isLoading.value = false;
+      return;
+    }
+
     purgeForeignLocalStorage(uid);
 
     // If already loaded in memory for this user and not forced to refresh, return immediately (0 Firestore reads!)
@@ -2461,6 +2492,13 @@ export const useFinanceStore = defineStore('finance', () => {
     ) {
       return;
     }
+
+    if (!forceRefresh && inFlightInitPromise && inFlightInitUid === uid) {
+      return inFlightInitPromise;
+    }
+
+    inFlightInitUid = uid;
+    inFlightInitPromise = (async () => {
 
     activeOwnerUid.value = uid;
     isLoading.value = true;
@@ -2626,16 +2664,23 @@ export const useFinanceStore = defineStore('finance', () => {
 
     const canQueryFirestore = await ensureFirestoreSessionForUser(uid);
 
-    if (canQueryFirestore) {
+    if (canQueryFirestore && useAuthStore().isAuthenticated) {
       try {
         let remoteSyncToken = 0;
         lastTokenCheckAt = Date.now();
         const authStore = useAuthStore();
 
         try {
-          const userSnap = await fsGetDoc('users', uid, uid, true).catch(() =>
-            fsGetDoc('users', uid, uid)
-          );
+          const userSnap = await fsGetDoc('users', uid, uid, true).catch((err) => {
+            if (
+              isSessionExpiredError(err) ||
+              isServerBridgeConfigError(err) ||
+              isFirestoreQuotaError(err)
+            ) {
+              throw err;
+            }
+            return fsGetDoc('users', uid, uid);
+          });
           if (userSnap.exists()) {
             confirmedUserDocsInFirestore.add(uid);
             const uData = userSnap.data();
@@ -2667,6 +2712,13 @@ export const useFinanceStore = defineStore('finance', () => {
             }
           }
         } catch (tokenErr) {
+          if (
+            isSessionExpiredError(tokenErr) ||
+            isServerBridgeConfigError(tokenErr) ||
+            isFirestoreQuotaError(tokenErr)
+          ) {
+            throw tokenErr;
+          }
           console.warn('[Finance] userDoc check notice:', tokenErr);
         }
 
@@ -2695,14 +2747,47 @@ export const useFinanceStore = defineStore('finance', () => {
         isLoading.value = false;
       } catch (err) {
         isLoading.value = false;
+        if (isSessionExpiredError(err) || !useAuthStore().isAuthenticated) {
+          return;
+        }
         if (isFirestoreQuotaError(err)) {
           useNotificationStore().notifyQuotaExceeded();
+          return;
+        }
+        if (isServerBridgeConfigError(err)) {
+          serverBridgeConfigMissing.value = true;
+          const notify = useNotificationStore();
+          const alreadyShown = notify.banners.some(
+            (b) => b.errorCode === 'SERVER_BRIDGE_CONFIG_MISSING'
+          );
+          if (!alreadyShown) {
+            const msg = useAuthStore().isSuperAdmin
+              ? 'Konfigurasi SUPER_ADMIN_FIREBASE_PASSWORD belum tersedia di server. Aktifkan worker server atau tambahkan secret di Settings -> Secrets.'
+              : 'Layanan sinkronisasi server untuk akun legacy belum diaktifkan oleh Administrator. Hubungi administrator atau gunakan Login Google.';
+            notify.showPopup({
+              type: 'error',
+              title: 'Sinkronisasi Server Belum Siap',
+              message: msg,
+              errorCode: 'SERVER_BRIDGE_CONFIG_MISSING',
+              durationMs: 12000,
+            });
+          }
           return;
         }
         handleFirestoreError(err, OperationType.LIST, 'finance_collections');
       }
     } else {
       isLoading.value = false;
+    }
+    })();
+
+    try {
+      await inFlightInitPromise;
+    } finally {
+      if (inFlightInitUid === uid) {
+        inFlightInitPromise = null;
+        inFlightInitUid = '';
+      }
     }
   }
 
@@ -6448,6 +6533,7 @@ export const useFinanceStore = defineStore('finance', () => {
     ownershipSummary,
     isLoading,
     isSyncedWithFirestore,
+    serverBridgeConfigMissing,
     quickModalOpen,
     editingTransaction,
     openAddTransactionModal,

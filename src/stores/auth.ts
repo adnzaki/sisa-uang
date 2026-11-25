@@ -823,11 +823,6 @@ export const useAuthStore = defineStore('auth', () => {
       isFirebaseBacked: true,
     };
 
-    user.value = nextUser;
-    localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextUser));
-    purgeForeignLocalStorage(nextUser.uid);
-
     const isTargetSuperAdmin =
       nextUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
       nextUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL;
@@ -847,32 +842,42 @@ export const useAuthStore = defineStore('auth', () => {
       return false;
     }
 
-    user.value = nextUser;
+    if (
+      auth.currentUser &&
+      auth.currentUser.email?.toLowerCase() !== nextUser.email.toLowerCase()
+    ) {
+      await firebaseSignOut(auth).catch(() => {});
+    }
+
+    const nextOtpVerified = isTargetSuperAdmin
+      ? Boolean(targetEntry.otpVerified && targetEntry.adminToken)
+      : Boolean(targetEntry.otpVerified);
+    let nextRequiresOtp = isTargetSuperAdmin;
+    if (isTargetSuperAdmin && nextOtpVerified) {
+      nextUser.role = 'admin';
+      nextRequiresOtp = false;
+    } else if (isTargetSuperAdmin) {
+      nextUser.role = 'user';
+    }
+
     localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextUser));
     purgeForeignLocalStorage(nextUser.uid);
-
-    requiresOtp.value = isTargetSuperAdmin;
-    otpVerified.value = isTargetSuperAdmin
-      ? Boolean(targetEntry.otpVerified && targetEntry.adminToken)
-      : Boolean(targetEntry.otpVerified);
-    if (isTargetSuperAdmin && otpVerified.value) {
-      nextUser.role = 'admin';
-      requiresOtp.value = false;
-    } else if (isTargetSuperAdmin) {
-      nextUser.role = 'user';
-      // Reuse any non-expired dispatch info for this email from sessionStorage; never auto-send without explicit user action
-      otpDispatchInfo.value = loadOtpDispatchFromSessionStorage(nextUser.email);
-    } else {
-      otpDispatchInfo.value = null;
-    }
-    localStorage.setItem(OTP_VERIFIED_KEY, otpVerified.value ? 'true' : 'false');
-
+    localStorage.setItem(OTP_VERIFIED_KEY, nextOtpVerified ? 'true' : 'false');
     setApiUserToken(effectiveUserToken);
     setApiAdminContext(nextUser.email, effectiveToken);
 
-    upsertSavedAccount(nextUser, effectiveToken, effectiveUserToken);
+    requiresOtp.value = nextRequiresOtp;
+    otpVerified.value = nextOtpVerified;
+    otpDispatchInfo.value =
+      isTargetSuperAdmin && !nextOtpVerified
+        ? loadOtpDispatchFromSessionStorage(nextUser.email)
+        : null;
     primaryDeviceOtpPending.value = null;
+
+    // Assign user.value LAST so watchers see finalized tokens & OTP flags
+    user.value = nextUser;
+    upsertSavedAccount(nextUser, effectiveToken, effectiveUserToken);
 
     await syncSubscriptionFromFirestoreForUser(nextUser.uid, nextUser.email);
     await registerCurrentDeviceSession(nextUser, true);
@@ -1388,6 +1393,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   let isAuthListenerBound = false;
+  let isSuperAdminGoogleLoginPending = false;
+  let pendingSuperAdminClientPassword: string | null = null;
 
   function initAuth() {
     if (needsFirebaseSignOutOnBoot) {
@@ -1504,6 +1511,10 @@ export const useAuthStore = defineStore('auth', () => {
 
         // Strict guard: never leave an ambient Firebase Auth Super Admin session active without verified 2FA OTP & token
         if (isFbSuperAdmin && (!storedToken || !storedOtp)) {
+          if (isSuperAdminGoogleLoginPending || (requiresOtp.value && !otpVerified.value)) {
+            isReady.value = true;
+            return;
+          }
           try {
             await firebaseSignOut(auth);
           } catch {
@@ -1571,10 +1582,17 @@ export const useAuthStore = defineStore('auth', () => {
     identifierInput: string,
     passwordInput: string
   ): Promise<{ requiresOtp: boolean }> {
+    const cleanIdentifier = identifierInput.trim().toLowerCase();
+    if (!cleanIdentifier || !passwordInput) {
+      const msg = 'Email / Username dan kata sandi wajib diisi.';
+      error.value = msg;
+      useNotificationStore().notifyError('Validasi Masuk Gagal', msg);
+      throw new Error(msg);
+    }
+
     localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
     isLoading.value = true;
     error.value = null;
-    const cleanIdentifier = identifierInput.trim().toLowerCase();
 
     try {
       // Step A: Express backend login verifies password against in-memory registry, Cloud Firestore, or Firebase Auth
@@ -1590,13 +1608,6 @@ export const useAuthStore = defineStore('auth', () => {
         resolvedEmail === SUPER_ADMIN_EMAIL ||
         resolvedEmail === WORKSPACE_ADMIN_EMAIL;
 
-      // Step B: Store userToken cleanly & set active user state before touching Firebase Auth
-      if (isLoggedSuperAdmin) {
-        setApiUserToken(null);
-      } else if (backendData.userToken) {
-        setApiUserToken(backendData.userToken);
-      }
-
       const loggedInUser: AppUser = {
         ...backendData.user,
         username:
@@ -1609,40 +1620,27 @@ export const useAuthStore = defineStore('auth', () => {
           resolvedEmail.split('@')[0],
         isFirebaseBacked: true,
       };
-      localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
-      user.value = loggedInUser;
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(loggedInUser));
-      purgeForeignLocalStorage(loggedInUser.uid);
-
-      // Step C: Isolate Firebase Auth session strictly to this user (never reuse a foreign/admin Firebase session)
-      if (!isLoggedSuperAdmin) {
-        if (auth.currentUser && auth.currentUser.email?.toLowerCase() !== resolvedEmail) {
-          await firebaseSignOut(auth).catch(() => {});
-        }
-        if (resolvedEmail && resolvedEmail.includes('@')) {
-          try {
-            await signInWithEmailAndPassword(auth, resolvedEmail, passwordInput);
-          } catch {
-            // Hybrid / migrated users use backend userToken + /api/user-db bridge seamlessly
-          }
-        }
-      }
-
-      await syncSubscriptionFromFirestoreForUser(loggedInUser.uid, loggedInUser.email);
-      if (user.value) {
-        Object.assign(loggedInUser, user.value);
-      }
 
       if (isLoggedSuperAdmin) {
-        // Strict: Super Admin MUST complete 2FA OTP verification. No token is granted yet.
+        // Strict: Super Admin MUST complete 2FA OTP verification before becoming authenticated.
+        // Set requiresOtp=true & clear all active tokens BEFORE setting user.value so watchers never treat session as active.
+        pendingSuperAdminClientPassword = passwordInput;
         loggedInUser.role = 'admin';
-        user.value = loggedInUser;
-        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(loggedInUser));
+        setApiUserToken(null);
+        localStorage.removeItem('sisa_uang_admin_token');
+        localStorage.setItem(OTP_VERIFIED_KEY, 'false');
+        setApiAdminContext(null, null);
         requiresOtp.value = true;
         otpVerified.value = false;
-        localStorage.setItem(OTP_VERIFIED_KEY, 'false');
-        localStorage.removeItem('sisa_uang_admin_token');
-        setApiAdminContext(null, null);
+
+        if (auth.currentUser) {
+          await firebaseSignOut(auth).catch(() => {});
+        }
+
+        localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(loggedInUser));
+        purgeForeignLocalStorage(loggedInUser.uid);
+        user.value = loggedInUser;
 
         if (!backendData.otpDispatch) {
           try {
@@ -1678,12 +1676,39 @@ export const useAuthStore = defineStore('auth', () => {
         return { requiresOtp: true };
       }
 
+      // Regular user: Prepare ALL tokens & Firebase Auth session BEFORE assigning user.value
+      pendingSuperAdminClientPassword = null;
+      localStorage.removeItem('sisa_uang_admin_token');
+      localStorage.setItem(OTP_VERIFIED_KEY, 'false');
       requiresOtp.value = false;
       otpVerified.value = false;
+      setApiUserToken(backendData.userToken || null);
       setApiAdminContext(loggedInUser.email, null);
-      upsertSavedAccount(loggedInUser, null, backendData.userToken || getApiUserToken());
-      await registerCurrentDeviceSession(loggedInUser, true);
-      startUserStatusMonitor(loggedInUser);
+
+      if (auth.currentUser && auth.currentUser.email?.toLowerCase() !== resolvedEmail) {
+        await firebaseSignOut(auth).catch(() => {});
+      }
+      if (resolvedEmail && resolvedEmail.includes('@')) {
+        try {
+          await signInWithEmailAndPassword(auth, resolvedEmail, passwordInput);
+        } catch {
+          // Hybrid / migrated users use backend userToken + /api/user-db bridge seamlessly
+        }
+      }
+
+      localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(loggedInUser));
+      purgeForeignLocalStorage(loggedInUser.uid);
+      user.value = loggedInUser;
+
+      await syncSubscriptionFromFirestoreForUser(loggedInUser.uid, loggedInUser.email);
+      upsertSavedAccount(
+        (user.value as AppUser) || loggedInUser,
+        null,
+        backendData.userToken || getApiUserToken()
+      );
+      await registerCurrentDeviceSession((user.value as AppUser) || loggedInUser, true);
+      startUserStatusMonitor((user.value as AppUser) || loggedInUser);
 
       useNotificationStore().notifySuccess(
         'Berhasil Masuk',
@@ -1703,6 +1728,10 @@ export const useAuthStore = defineStore('auth', () => {
           const cred = await signInWithEmailAndPassword(auth, cleanIdentifier, passwordInput);
           const idToken = await cred.user.getIdToken();
           const { data: fsData } = await apiClient.post('/auth/firebase-session', { idToken });
+          requiresOtp.value = false;
+          otpVerified.value = false;
+          localStorage.removeItem('sisa_uang_admin_token');
+          localStorage.setItem(OTP_VERIFIED_KEY, 'false');
           if (fsData?.userToken) {
             setApiUserToken(fsData.userToken);
           }
@@ -1710,11 +1739,11 @@ export const useAuthStore = defineStore('auth', () => {
             ? ({ ...fsData.user, isFirebaseBacked: true } as AppUser)
             : await ensureFirestoreUserDocument(cred.user);
           localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
-          user.value = profile;
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
           purgeForeignLocalStorage(profile.uid);
           setApiAdminContext(profile.email, null);
-          upsertSavedAccount(profile, null, fsData?.userToken || null);
+          user.value = profile;
+          upsertSavedAccount(profile, null, fsData?.userToken || getApiUserToken());
           await registerCurrentDeviceSession(profile, true);
           startUserStatusMonitor(profile);
 
@@ -1858,19 +1887,21 @@ export const useAuthStore = defineStore('auth', () => {
         displayName: data.user.displayName || cleanName,
         isFirebaseBacked: isFbAuthenticated,
       };
+      const needsOtp = Boolean(data.requiresOtp);
+      requiresOtp.value = needsOtp;
+      otpVerified.value = false;
       localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
-      user.value = registeredUser;
+      localStorage.removeItem('sisa_uang_admin_token');
+      localStorage.setItem(OTP_VERIFIED_KEY, 'false');
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(registeredUser));
       purgeForeignLocalStorage(registeredUser.uid);
       setApiAdminContext(registeredUser.email, null);
+      user.value = registeredUser;
       upsertSavedAccount(registeredUser, null, data.userToken || getApiUserToken());
       await registerCurrentDeviceSession(registeredUser, true);
       startUserStatusMonitor(registeredUser);
 
-      if (data.requiresOtp) {
-        requiresOtp.value = true;
-        otpVerified.value = false;
-        localStorage.setItem(OTP_VERIFIED_KEY, 'false');
+      if (needsOtp) {
         otpDispatchInfo.value = data.otpDispatch || null;
         useNotificationStore().notifySuccess(
           'Kode Verifikasi OTP Dikirim',
@@ -1879,8 +1910,6 @@ export const useAuthStore = defineStore('auth', () => {
         return { requiresOtp: true };
       }
 
-      requiresOtp.value = false;
-      otpVerified.value = false;
       useNotificationStore().notifySuccess(
         'Pendaftaran Akun Berhasil',
         `Akun ${registeredUser.displayName} (@${registeredUser.username}) berhasil dibuat.`
@@ -2105,6 +2134,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
     isLoading.value = true;
     error.value = null;
+    isSuperAdminGoogleLoginPending = true;
 
     try {
       const cred = await signInWithPopup(auth, googleProvider);
@@ -2131,19 +2161,19 @@ export const useAuthStore = defineStore('auth', () => {
         throw new Error(error.value);
       }
 
-      localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
-      user.value = profile;
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
-      purgeForeignLocalStorage(profile.uid);
-      setApiAdminContext(profile.email, null);
-
       if (isGoogleSuperAdmin) {
         profile.role = 'admin';
-        user.value = profile;
-        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
+        setApiUserToken(null);
         localStorage.removeItem('sisa_uang_admin_token');
         localStorage.setItem(OTP_VERIFIED_KEY, 'false');
         setApiAdminContext(null, null);
+        requiresOtp.value = true;
+        otpVerified.value = false;
+        localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
+        purgeForeignLocalStorage(profile.uid);
+        user.value = profile;
+
         const otpRes = await requestSuperAdminOtp();
         if (otpRes.autoVerified || !requiresOtp.value) {
           useNotificationStore().notifySuccess(
@@ -2154,6 +2184,16 @@ export const useAuthStore = defineStore('auth', () => {
         }
         return { requiresOtp: true };
       }
+
+      requiresOtp.value = false;
+      otpVerified.value = false;
+      localStorage.removeItem('sisa_uang_admin_token');
+      localStorage.setItem(OTP_VERIFIED_KEY, 'false');
+      localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
+      purgeForeignLocalStorage(profile.uid);
+      setApiAdminContext(profile.email, null);
+      user.value = profile;
 
       upsertSavedAccount(profile, null, fsData?.userToken || getApiUserToken());
       await registerCurrentDeviceSession(profile, true);
@@ -2178,6 +2218,7 @@ export const useAuthStore = defineStore('auth', () => {
       useNotificationStore().notifyError('Autentikasi Google Gagal', err, msg);
       throw new Error(msg);
     } finally {
+      isSuperAdminGoogleLoginPending = false;
       isLoading.value = false;
     }
   }
@@ -2291,10 +2332,27 @@ export const useAuthStore = defineStore('auth', () => {
           ...user.value,
           role: 'admin',
         };
-        user.value = promotedUser;
-        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(promotedUser));
-        otpVerified.value = true;
-        requiresOtp.value = false;
+        if (
+          auth.currentUser &&
+          auth.currentUser.email?.toLowerCase() !== promotedUser.email.toLowerCase()
+        ) {
+          await firebaseSignOut(auth).catch(() => {});
+        }
+        const pwForClient = pendingSuperAdminClientPassword;
+        pendingSuperAdminClientPassword = null;
+        if (
+          pwForClient &&
+          (!auth.currentUser ||
+            auth.currentUser.email?.toLowerCase() !== promotedUser.email.toLowerCase())
+        ) {
+          try {
+            await signInWithEmailAndPassword(auth, promotedUser.email, pwForClient);
+          } catch {
+            // App password may differ from Firebase Auth password; bridge handles fallback
+          }
+        }
+
+        // Write all tokens & verification flags to storage BEFORE updating reactive otpVerified/requiresOtp/user
         otpDispatchInfo.value = null;
         saveOtpDispatchToSessionStorage(null);
         localStorage.setItem(OTP_VERIFIED_KEY, 'true');
@@ -2302,13 +2360,16 @@ export const useAuthStore = defineStore('auth', () => {
           setApiUserToken(data.userToken);
         }
         setApiAdminContext(promotedUser.email, data.adminToken);
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(promotedUser));
         upsertSavedAccount(promotedUser, data.adminToken, data.userToken || getApiUserToken());
-        if (
-          auth.currentUser &&
-          auth.currentUser.email?.toLowerCase() !== promotedUser.email.toLowerCase()
-        ) {
-          await firebaseSignOut(auth).catch(() => {});
-        }
+
+        otpVerified.value = true;
+        requiresOtp.value = false;
+        user.value = promotedUser;
+
+        void registerCurrentDeviceSession(promotedUser, true);
+        startUserStatusMonitor(promotedUser);
+
         useNotificationStore().notifySuccess(
           'Verifikasi Super Admin Berhasil',
           'Akses penuh ke Control Panel Super Admin telah dibuka.'
@@ -2328,6 +2389,8 @@ export const useAuthStore = defineStore('auth', () => {
 
   // 7. Logout
   async function logout(isRevokedByRemote = false) {
+    isSuperAdminGoogleLoginPending = false;
+    pendingSuperAdminClientPassword = null;
     if (user.value && !isRevokedByRemote) {
       await recordAuditLog('user_logout', `Pengguna ${user.value.email} keluar dari sesi.`, 'info');
     }
@@ -2423,21 +2486,46 @@ export const useAuthStore = defineStore('auth', () => {
     });
   }
 
+  let isHandlingUserExpiry = false;
   if (typeof window !== 'undefined' && !(window as any).__sisauang_user_expired_listener_bound) {
     (window as any).__sisauang_user_expired_listener_bound = true;
-    window.addEventListener('sisauang:user-session-expired', () => {
-      if (!user.value) return;
-      void logout(true).then(async () => {
-        try {
-          const currentPath = window.location?.pathname || '';
-          if (currentPath && currentPath !== '/' && currentPath !== '/auth') {
-            const { router } = await import('../router');
-            await router.replace('/auth');
+    window.addEventListener('sisauang:user-session-expired', (e: any) => {
+      if (isHandlingUserExpiry) return;
+      if (!user.value && !localStorage.getItem(SESSION_STORAGE_KEY)) return;
+      isHandlingUserExpiry = true;
+      const detailMsg =
+        e?.detail?.message || 'Sesi login Anda telah kedaluwarsa. Silakan masuk kembali.';
+      try {
+        useNotificationStore().notifyWarning('Sesi Login Berakhir', detailMsg);
+      } catch {
+        // Ignore if notification store is not ready
+      }
+      void logout(true)
+        .then(async () => {
+          try {
+            const currentPath = window.location?.pathname || '';
+            const publicPaths = new Set([
+              '/',
+              '/auth',
+              '/pricing',
+              '/terms',
+              '/refund-policy',
+              '/privacy',
+              '/contact',
+            ]);
+            if (currentPath && !publicPaths.has(currentPath)) {
+              const { router } = await import('../router');
+              await router.replace('/auth');
+            }
+          } catch {
+            // Ignore router navigation error
           }
-        } catch {
-          // Ignore router navigation error
-        }
-      });
+        })
+        .finally(() => {
+          setTimeout(() => {
+            isHandlingUserExpiry = false;
+          }, 1500);
+        });
     });
   }
 

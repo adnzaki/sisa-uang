@@ -6,6 +6,8 @@ import {
   sanitizeString,
   isFirestoreOfflineError,
   isFirestoreQuotaError,
+  isServerBridgeConfigError,
+  isSessionExpiredError,
 } from '../firebase';
 import { getUserAuthHeaders } from '../services/api';
 import {
@@ -314,7 +316,12 @@ export const useDebtsStore = defineStore('debts', () => {
           .filter((e) => !e.deleted && !delEntries.has(e.id) && !delDebts.has(e.debtId));
         fsSuccess = true;
       } catch (err: any) {
-        if (!isFirestoreOfflineError(err) && !isFirestoreQuotaError(err)) {
+        if (
+          !isFirestoreOfflineError(err) &&
+          !isFirestoreQuotaError(err) &&
+          !isServerBridgeConfigError(err) &&
+          !isSessionExpiredError(err)
+        ) {
           console.warn('Firestore loadDebts notice:', err?.message || err);
         }
       }

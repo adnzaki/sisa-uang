@@ -6,6 +6,8 @@ import {
   sanitizeString,
   isFirestoreOfflineError,
   isFirestoreQuotaError,
+  isServerBridgeConfigError,
+  isSessionExpiredError,
 } from '../firebase';
 import { getUserAuthHeaders } from '../services/api';
 import {
@@ -432,7 +434,12 @@ export const useAutomationStore = defineStore('automation', () => {
           .filter((item) => !item.deleted && !deletedIds.has(item.id));
         firestoreFetchSuccess = true;
       } catch (err: any) {
-        if (!isFirestoreOfflineError(err) && !isFirestoreQuotaError(err)) {
+        if (
+          !isFirestoreOfflineError(err) &&
+          !isFirestoreQuotaError(err) &&
+          !isServerBridgeConfigError(err) &&
+          !isSessionExpiredError(err)
+        ) {
           console.warn('Firestore loadAutomations notice:', err?.message || err);
         }
       }

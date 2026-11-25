@@ -98,6 +98,42 @@ export function isFirestoreQuotaError(error: unknown): boolean {
   );
 }
 
+export function isServerBridgeConfigError(error: unknown): boolean {
+  const anyErr = error as any;
+  const code = String(anyErr?.code || '').toUpperCase();
+  const msg = String(anyErr?.message || error || '').toLowerCase();
+  const respErr = String(anyErr?.response?.data?.error || '').toLowerCase();
+  return (
+    code === 'SERVER_FIREBASE_PASSWORD_MISSING' ||
+    msg.includes('super_admin_firebase_password') ||
+    respErr.includes('super_admin_firebase_password')
+  );
+}
+
+export function isSessionExpiredError(error: unknown): boolean {
+  const anyErr = error as any;
+  const status = Number(anyErr?.status || anyErr?.response?.status || 0);
+  const code = String(anyErr?.code || anyErr?.response?.data?.code || '').toUpperCase();
+  const msg = String(anyErr?.message || error || '').toLowerCase();
+  const respErr = String(anyErr?.response?.data?.error || '').toLowerCase();
+  return (
+    anyErr?.isSessionExpired === true ||
+    status === 401 ||
+    code === 'SESSION_EXPIRED' ||
+    msg.includes('sesi login tidak valid') ||
+    msg.includes('sesi autentikasi diperlukan') ||
+    msg.includes('token autentikasi tidak valid') ||
+    msg.includes('telah kedaluwarsa') ||
+    msg.includes('sudah kedaluwarsa') ||
+    msg.includes('missing authenticated session token') ||
+    respErr.includes('sesi login tidak valid') ||
+    respErr.includes('sesi autentikasi diperlukan') ||
+    respErr.includes('token autentikasi tidak valid') ||
+    respErr.includes('telah kedaluwarsa') ||
+    respErr.includes('sudah kedaluwarsa')
+  );
+}
+
 export enum OperationType {
   CREATE = 'create',
   UPDATE = 'update',

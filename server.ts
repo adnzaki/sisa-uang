@@ -93,6 +93,24 @@ try {
   console.warn('[Server Firebase Init Notice]', e?.message || e);
 }
 
+class ServerFirebaseConfigError extends Error {
+  readonly code = 'SERVER_FIREBASE_PASSWORD_MISSING';
+  readonly statusCode = 503;
+  constructor(message: string) {
+    super(message);
+    this.name = 'ServerFirebaseConfigError';
+  }
+}
+
+function isServerFirebaseBridgeReady(): boolean {
+  if (!serverDb || !serverAuth) return false;
+  const currentEmail = String(serverAuth.currentUser?.email || '').trim().toLowerCase();
+  if (serverAuth.currentUser && currentEmail === SUPER_ADMIN_EMAIL) {
+    return true;
+  }
+  return Boolean(getServerFirebasePassword());
+}
+
 async function ensureServerFirebaseSignedIn(): Promise<void> {
   if (!serverDb || !serverAuth) {
     throw new Error('Koneksi database server belum diinisialisasi.');
@@ -103,7 +121,7 @@ async function ensureServerFirebaseSignedIn(): Promise<void> {
   }
   const serverPw = getServerFirebasePassword();
   if (!serverPw) {
-    throw new Error(
+    throw new ServerFirebaseConfigError(
       'Konfigurasi SUPER_ADMIN_FIREBASE_PASSWORD belum tersedia di server. Hubungi administrator.'
     );
   }
@@ -1634,7 +1652,7 @@ async function startServer() {
     expectedOwnerUid?: string
   ): Promise<
     | { ok: true; uid: string; email: string; isAdmin: boolean }
-    | { ok: false; status: number; error: string }
+    | { ok: false; status: number; code?: string; error: string }
   > {
     const adminSession = validateVerifiedAdminToken(
       req.headers['x-admin-token'] as string | undefined
@@ -1648,32 +1666,32 @@ async function startServer() {
       };
     }
 
+    let rejectedUserToken = false;
     const userToken = String(req.headers['x-user-token'] || '').trim();
     if (userToken) {
       const payload = verifyUserSessionToken(userToken);
-      if (!payload) {
+      if (payload) {
+        if (expectedOwnerUid) {
+          const owns = await doesCallerOwnTargetUid(payload.uid, payload.email, expectedOwnerUid);
+          if (!owns) {
+            return {
+              ok: false,
+              status: 403,
+              code: 'FORBIDDEN_OWNER',
+              error: 'Akses ditolak: Anda tidak berwenang mengakses data pengguna ini.',
+            };
+          }
+        }
         return {
-          ok: false,
-          status: 401,
-          error: 'Sesi login tidak valid atau telah kedaluwarsa. Silakan masuk kembali.',
+          ok: true,
+          uid: expectedOwnerUid ? expectedOwnerUid.trim() : payload.uid,
+          email: payload.email,
+          isAdmin: false,
         };
       }
-      if (expectedOwnerUid) {
-        const owns = await doesCallerOwnTargetUid(payload.uid, payload.email, expectedOwnerUid);
-        if (!owns) {
-          return {
-            ok: false,
-            status: 403,
-            error: 'Akses ditolak: Anda tidak berwenang mengakses data pengguna ini.',
-          };
-        }
-      }
-      return {
-        ok: true,
-        uid: expectedOwnerUid ? expectedOwnerUid.trim() : payload.uid,
-        email: payload.email,
-        isAdmin: false,
-      };
+      // Do not immediately reject with 401 when userToken fails HMAC (e.g. server restarted);
+      // allow fallback to Authorization: Bearer Firebase ID token below.
+      rejectedUserToken = true;
     }
 
     const authHeader = String(req.headers.authorization || '').trim();
@@ -1684,6 +1702,7 @@ async function startServer() {
         return {
           ok: false,
           status: 401,
+          code: 'SESSION_EXPIRED',
           error: 'Token autentikasi tidak valid atau sudah kedaluwarsa.',
         };
       }
@@ -1693,6 +1712,7 @@ async function startServer() {
         return {
           ok: false,
           status: 403,
+          code: 'ADMIN_2FA_REQUIRED',
           error: 'Verifikasi 2FA Super Admin diperlukan sebelum mengakses sumber daya.',
         };
       }
@@ -1701,6 +1721,7 @@ async function startServer() {
         return {
           ok: false,
           status: 403,
+          code: 'ACCOUNT_BLOCKED',
           error: 'Akses akun Anda sedang diblokir oleh Administrator.',
         };
       }
@@ -1710,6 +1731,7 @@ async function startServer() {
           return {
             ok: false,
             status: 403,
+            code: 'FORBIDDEN_OWNER',
             error: 'Akses ditolak: Anda tidak berwenang mengakses data pengguna ini.',
           };
         }
@@ -1725,7 +1747,10 @@ async function startServer() {
     return {
       ok: false,
       status: 401,
-      error: 'Sesi autentikasi diperlukan. Silakan masuk terlebih dahulu.',
+      code: 'SESSION_EXPIRED',
+      error: rejectedUserToken
+        ? 'Sesi login tidak valid atau telah kedaluwarsa. Silakan masuk kembali.'
+        : 'Sesi autentikasi diperlukan. Silakan masuk terlebih dahulu.',
     };
   }
 
@@ -1734,7 +1759,7 @@ async function startServer() {
     targetUid?: string
   ): Promise<
     | { ok: true; uid: string; email: string; isAdmin: boolean; isPeer: boolean }
-    | { ok: false; status: number; error: string }
+    | { ok: false; status: number; code?: string; error: string }
   > {
     if (targetUid && isAuthorizedPeerRequest(req, targetUid)) {
       return { ok: true, uid: targetUid, email: '', isAdmin: false, isPeer: true };
@@ -1987,8 +2012,14 @@ async function startServer() {
         return;
       }
 
-      runtimeServerFbPassword = password;
-      void ensureServerFirebaseSignedIn().catch(() => {});
+      if (!getServerFirebasePassword() && targetEmailForOtp === SUPER_ADMIN_EMAIL && serverAuth) {
+        try {
+          await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, password);
+          runtimeServerFbPassword = password;
+        } catch {
+          // Do not cache an unverified app password as Firebase Auth password
+        }
+      }
 
       failedLoginTracker.delete(targetEmailForOtp);
       const fallbackAdmin = usersStore.get('admin_vuedevo_01')!;
@@ -2106,12 +2137,95 @@ async function startServer() {
       return;
     }
 
-    // Normal or CI4 Shield migrated user login
-    const isPasswordValid = matchedUser
+    // Normal or Firebase Auth or CI4 Shield migrated user login
+    let isPasswordValid = matchedUser
       ? matchedUser.passwordHash
         ? verifyPasswordAgainstStoredHash(password, matchedUser.passwordHash)
         : false
       : false;
+
+    if (!isPasswordValid && identifierRaw.includes('@')) {
+      try {
+        const signInRes = await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(firebaseServerConfig.apiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: identifierRaw,
+              password,
+              returnSecureToken: true,
+            }),
+            signal: AbortSignal.timeout(8000),
+          }
+        );
+        if (signInRes.ok) {
+          const signInData = (await signInRes.json().catch(() => null)) as {
+            localId?: string;
+            email?: string;
+            displayName?: string;
+            idToken?: string;
+          } | null;
+          if (signInData?.localId && signInData?.idToken) {
+            const fbUid = String(signInData.localId).trim();
+            const fbEmail = String(signInData.email || identifierRaw).trim().toLowerCase();
+            if (!matchedUser) {
+              let fsDocData: Record<string, any> | null = null;
+              try {
+                const restSnap = await firestoreRestGetDocRaw(signInData.idToken, 'users', fbUid);
+                if (restSnap.exists && restSnap.fields) {
+                  fsDocData = decodeFirestoreRestFields(restSnap.fields);
+                }
+              } catch {
+                // Ignore REST profile lookup error; construct from token profile
+              }
+              const isDeactivated = Boolean(fsDocData?.isExplicitlyDeactivated === true);
+              const isPro =
+                !isDeactivated &&
+                (fsDocData?.isPro === true || fsDocData?.subscriptionStatus === 'pro') &&
+                isUserSubscriptionActive({
+                  isPro: true,
+                  subscriptionStatus: 'pro',
+                  subscriptionExpiresAt: fsDocData?.subscriptionExpiresAt,
+                  isExplicitlyDeactivated: isDeactivated,
+                });
+              const isPending = !isDeactivated && !isPro && fsDocData?.subscriptionStatus === 'pending';
+              const fallbackUsername = (fbEmail.split('@')[0] || fbUid.slice(0, 8)).toLowerCase();
+              matchedUser = {
+                uid: fbUid,
+                username: String(fsDocData?.username || fallbackUsername).toLowerCase(),
+                email: fbEmail,
+                displayName: String(
+                  fsDocData?.displayName || signInData.displayName || fsDocData?.username || fallbackUsername
+                ).slice(0, 80),
+                role: 'user',
+                status: fsDocData?.status === 'blocked' ? 'blocked' : 'active',
+                authProvider: 'password',
+                currency: fsDocData?.currency === 'USD' ? 'USD' : 'IDR',
+                subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
+                isPro,
+                isExplicitlyDeactivated: isDeactivated,
+                subscriptionPlan:
+                  isPro || isPending ? (fsDocData?.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly') : null,
+                subscriptionExpiresAt: isPro ? fsDocData?.subscriptionExpiresAt || null : null,
+                passwordHash: incomingHash,
+                createdAt: tsToIsoValue(fsDocData?.createdAt || nowIso()),
+                updatedAt: nowIso(),
+              };
+              usersStore.set(matchedUser.uid, matchedUser);
+              savePersistedUsersCache();
+            } else {
+              matchedUser.passwordHash = incomingHash;
+              matchedUser.updatedAt = nowIso();
+              savePersistedUsersCache();
+            }
+            isPasswordValid = true;
+          }
+        }
+      } catch {
+        // Ignore Firebase REST verify failure and proceed to standard 401
+      }
+    }
 
     if (!matchedUser || !isPasswordValid) {
       const fails = (failedLoginTracker.get(identifierRaw) || 0) + 1;
@@ -2713,7 +2827,7 @@ async function startServer() {
 
     const caller = await verifyCallerAuth(req, uid);
     if (!caller.ok) {
-      res.status(caller.status).json({ error: caller.error });
+      res.status(caller.status).json({ code: caller.code, error: caller.error });
       return;
     }
 
@@ -2832,7 +2946,7 @@ async function startServer() {
       ? await authorizeUserOrPeer(req, rawUid)
       : await verifyCallerAuth(req, rawUid);
     if (!authRes.ok) {
-      res.status(authRes.status).json({ error: authRes.error });
+      res.status(authRes.status).json({ code: authRes.code, error: authRes.error });
       return;
     }
     (req as any).verifiedCaller = authRes;
@@ -6497,6 +6611,14 @@ async function startServer() {
         backupData,
       });
     } catch (err: any) {
+      if (err instanceof ServerFirebaseConfigError) {
+        res.status(err.statusCode).json({
+          success: false,
+          code: err.code,
+          error: err.message,
+        });
+        return;
+      }
       console.error('[Admin Database Export Server Error]', err);
       res.status(500).json({
         error: `Gagal mengekspor database dari server: ${err?.message || err}`,
@@ -6557,6 +6679,14 @@ async function startServer() {
         docs,
       });
     } catch (err: any) {
+      if (err instanceof ServerFirebaseConfigError) {
+        res.status(err.statusCode).json({
+          success: false,
+          code: err.code,
+          error: err.message,
+        });
+        return;
+      }
       res.status(500).json({ error: err?.message || 'Gagal membaca dokumen dari server.' });
     }
   });
@@ -6703,6 +6833,195 @@ async function startServer() {
     });
   }
 
+  function fsRestDocsRoot(): string {
+    return `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseServerConfig.projectId)}/databases/${encodeURIComponent(firebaseServerConfig.firestoreDatabaseId)}/documents`;
+  }
+
+  function fsRestDocResourcePath(colName: string, docId: string): string {
+    return `projects/${firebaseServerConfig.projectId}/databases/${firebaseServerConfig.firestoreDatabaseId}/documents/${colName}/${docId}`;
+  }
+
+  function decodeFirestoreRestValue(val: any): any {
+    if (!val || typeof val !== 'object') return null;
+    if ('nullValue' in val) return null;
+    if ('booleanValue' in val) return Boolean(val.booleanValue);
+    if ('integerValue' in val) return Number(val.integerValue);
+    if ('doubleValue' in val) return Number(val.doubleValue);
+    if ('stringValue' in val) return String(val.stringValue);
+    if ('timestampValue' in val) return String(val.timestampValue);
+    if ('referenceValue' in val) return String(val.referenceValue);
+    if ('arrayValue' in val) {
+      const vals = Array.isArray(val.arrayValue?.values) ? val.arrayValue.values : [];
+      return vals.map((item: any) => decodeFirestoreRestValue(item));
+    }
+    if ('mapValue' in val) {
+      const fields = val.mapValue?.fields || {};
+      const out: Record<string, any> = {};
+      for (const [k, v] of Object.entries(fields)) {
+        out[k] = decodeFirestoreRestValue(v);
+      }
+      return out;
+    }
+    return null;
+  }
+
+  function decodeFirestoreRestFields(fields?: Record<string, any>): Record<string, any> {
+    const out: Record<string, any> = {};
+    if (!fields || typeof fields !== 'object') return out;
+    for (const [k, v] of Object.entries(fields)) {
+      out[k] = decodeFirestoreRestValue(v);
+    }
+    return out;
+  }
+
+  function encodeFirestoreRestValue(val: any): any {
+    if (val === null || val === undefined) return { nullValue: null };
+    if (typeof val === 'boolean') return { booleanValue: val };
+    if (typeof val === 'number') {
+      if (!Number.isFinite(val)) return { doubleValue: 0 };
+      return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
+    }
+    if (typeof val === 'string') return { stringValue: val };
+    if (val instanceof Date) return { timestampValue: val.toISOString() };
+    if (Array.isArray(val)) {
+      return {
+        arrayValue: {
+          values: val
+            .filter((item) => item !== undefined)
+            .map((item) => encodeFirestoreRestValue(item)),
+        },
+      };
+    }
+    if (typeof val === 'object') {
+      const fields: Record<string, any> = {};
+      for (const [k, v] of Object.entries(val)) {
+        if (v !== undefined) {
+          fields[k] = encodeFirestoreRestValue(v);
+        }
+      }
+      return { mapValue: { fields } };
+    }
+    return { stringValue: String(val) };
+  }
+
+  function buildRestStructuredWhere(wheres: any[]): any | undefined {
+    const filters: any[] = [];
+    const opMap: Record<string, string> = {
+      '==': 'EQUAL',
+      '!=': 'NOT_EQUAL',
+      '<': 'LESS_THAN',
+      '<=': 'LESS_THAN_OR_EQUAL',
+      '>': 'GREATER_THAN',
+      '>=': 'GREATER_THAN_OR_EQUAL',
+      in: 'IN',
+      'not-in': 'NOT_IN',
+      'array-contains': 'ARRAY_CONTAINS',
+      'array-contains-any': 'ARRAY_CONTAINS_ANY',
+    };
+    for (const w of wheres) {
+      if (!w || typeof w.field !== 'string' || typeof w.op !== 'string') continue;
+      if (w.value === null && w.op === '==') {
+        filters.push({ unaryFilter: { field: { fieldPath: w.field }, op: 'IS_NULL' } });
+        continue;
+      }
+      if (w.value === null && w.op === '!=') {
+        filters.push({ unaryFilter: { field: { fieldPath: w.field }, op: 'IS_NOT_NULL' } });
+        continue;
+      }
+      const mappedOp = opMap[w.op];
+      if (!mappedOp) continue;
+      filters.push({
+        fieldFilter: {
+          field: { fieldPath: w.field },
+          op: mappedOp,
+          value: encodeFirestoreRestValue(w.value),
+        },
+      });
+    }
+    if (filters.length === 0) return undefined;
+    if (filters.length === 1) return filters[0];
+    return { compositeFilter: { op: 'AND', filters } };
+  }
+
+  async function firestoreRestGetDocRaw(
+    idToken: string,
+    colName: string,
+    docId: string
+  ): Promise<{ exists: boolean; name?: string; fields?: Record<string, any> }> {
+    const url = `${fsRestDocsRoot()}/${encodeURIComponent(colName)}/${encodeURIComponent(docId)}`;
+    const r = await fetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${idToken}` },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (r.status === 404) {
+      return { exists: false };
+    }
+    const body = (await r.json().catch(() => null)) as any;
+    if (!r.ok) {
+      throw new Error(body?.error?.message || `Firestore REST GET failed (${r.status})`);
+    }
+    return { exists: true, name: body?.name, fields: body?.fields || {} };
+  }
+
+  async function resolveCallerFirestoreRestToken(
+    req: Request,
+    caller: { ok: true; uid: string; email: string; isAdmin: boolean },
+    targetOwnerUid: string,
+    colName?: string
+  ): Promise<string | null> {
+    const authHeader = String(req.headers.authorization || '').trim();
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    const idToken = match?.[1]?.trim();
+    if (!idToken) return null;
+    const fbUser = await verifyFirebaseIdToken(idToken);
+    if (!fbUser) return null;
+    const isFbAdmin =
+      fbUser.email === SUPER_ADMIN_EMAIL || fbUser.email === WORKSPACE_ADMIN_EMAIL;
+    if (caller.isAdmin && isFbAdmin) {
+      return idToken;
+    }
+    if (fbUser.uid === targetOwnerUid || (colName === 'categories' && fbUser.uid === caller.uid)) {
+      return idToken;
+    }
+    return null;
+  }
+
+  app.get('/api/system/firebase-bridge-status', (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      configured: isServerFirebaseBridgeReady(),
+      hasEnvPassword: Boolean((process.env.SUPER_ADMIN_FIREBASE_PASSWORD || '').trim()),
+      serverSignedIn: Boolean(serverAuth?.currentUser),
+    });
+  });
+
+  app.post('/api/admin/database/activate-worker', requireAdminMiddleware, async (req: Request, res: Response) => {
+    const password = String(req.body?.password || '').trim();
+    if (!password) {
+      res.status(400).json({ success: false, error: 'Kata sandi Firebase Super Admin wajib diisi.' });
+      return;
+    }
+    if (!serverDb || !serverAuth) {
+      res.status(500).json({ success: false, error: 'Koneksi database server belum diinisialisasi.' });
+      return;
+    }
+    try {
+      await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, password);
+      runtimeServerFbPassword = password;
+      void syncUsersFromFirestore(true).catch(() => {});
+      res.json({
+        success: true,
+        configured: true,
+      });
+    } catch {
+      res.status(401).json({
+        success: false,
+        error: 'Kata sandi Firebase Auth untuk vuedevo@gmail.com tidak valid.',
+      });
+    }
+  });
+
   app.post('/api/user-db/doc', async (req: Request, res: Response) => {
     const colName = String(req.body?.collection || '').trim();
     const docId = String(req.body?.docId || '').trim();
@@ -6717,7 +7036,7 @@ async function startServer() {
 
     const caller = await verifyCallerAuth(req, rawOwner || undefined);
     if (!caller.ok) {
-      res.status(caller.status).json({ success: false, error: caller.error });
+      res.status(caller.status).json({ success: false, code: caller.code, error: caller.error });
       return;
     }
     const targetOwnerUid = rawOwner || caller.uid;
@@ -6731,6 +7050,38 @@ async function startServer() {
     }
 
     try {
+      if (!isServerFirebaseBridgeReady()) {
+        const restToken = await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid, colName);
+        if (restToken) {
+          const restSnap = await firestoreRestGetDocRaw(restToken, colName, docId);
+          if (!restSnap.exists) {
+            res.json({ success: true, exists: false, id: docId, data: null });
+            return;
+          }
+          const rawData = decodeFirestoreRestFields(restSnap.fields);
+          const docOwner = String(rawData.ownerId || '').trim();
+          const allowedNonUser =
+            caller.isAdmin ||
+            docOwner === targetOwnerUid ||
+            docOwner === caller.uid ||
+            (colName === 'categories' && SHARED_CATEGORY_OWNER_IDS.has(docOwner)) ||
+            (colName === 'report_settings' && docId === targetOwnerUid);
+
+          if (colName !== 'users' && !allowedNonUser) {
+            res.status(403).json({ success: false, error: 'Dokumen bukan milik akun Anda.' });
+            return;
+          }
+
+          res.json({
+            success: true,
+            exists: true,
+            id: docId,
+            data: stripSensitiveUserFields(colName, rawData),
+          });
+          return;
+        }
+      }
+
       await ensureServerFirebaseSignedIn();
       const snap = await serverFsGetDoc(serverFsDoc(serverDb, colName, docId));
       if (!snap.exists()) {
@@ -6759,6 +7110,14 @@ async function startServer() {
         data: serialized,
       });
     } catch (err: any) {
+      if (err instanceof ServerFirebaseConfigError) {
+        res.status(err.statusCode).json({
+          success: false,
+          code: err.code,
+          error: err.message,
+        });
+        return;
+      }
       res.status(500).json({
         success: false,
         error: err?.message || 'Gagal membaca dokumen Firestore dari server.',
@@ -6781,7 +7140,7 @@ async function startServer() {
 
     const caller = await verifyCallerAuth(req, rawOwner || undefined);
     if (!caller.ok) {
-      res.status(caller.status).json({ success: false, error: caller.error });
+      res.status(caller.status).json({ success: false, code: caller.code, error: caller.error });
       return;
     }
     const targetOwnerUid = rawOwner || caller.uid;
@@ -6802,6 +7161,77 @@ async function startServer() {
     }
 
     try {
+      if (!isServerFirebaseBridgeReady()) {
+        const restToken = await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid, colName);
+        if (restToken) {
+          const structuredQuery: Record<string, any> = {
+            from: [{ collectionId: colName }],
+          };
+          const restWhere = buildRestStructuredWhere(wheres);
+          if (restWhere) structuredQuery.where = restWhere;
+
+          const normalizedOrders: Array<{ field: { fieldPath: string }; direction: 'ASCENDING' | 'DESCENDING' }> =
+            orderBys
+              .filter((o: any) => o && typeof o.field === 'string')
+              .map((o: any) => ({
+                field: { fieldPath: String(o.field) },
+                direction: o.dir === 'desc' ? 'DESCENDING' : 'ASCENDING',
+              }));
+
+          if (startAfterDocId) {
+            const cursorDoc = await firestoreRestGetDocRaw(restToken, colName, startAfterDocId);
+            if (cursorDoc.exists && cursorDoc.name) {
+              const startValues = normalizedOrders.map(
+                (o) => cursorDoc.fields?.[o.field.fieldPath] ?? { nullValue: null }
+              );
+              const lastDir =
+                normalizedOrders.length > 0
+                  ? normalizedOrders[normalizedOrders.length - 1].direction
+                  : 'ASCENDING';
+              if (!normalizedOrders.some((o) => o.field.fieldPath === '__name__')) {
+                normalizedOrders.push({ field: { fieldPath: '__name__' }, direction: lastDir });
+              }
+              startValues.push({ referenceValue: cursorDoc.name });
+              structuredQuery.startAt = { values: startValues, before: false };
+            }
+          }
+
+          if (normalizedOrders.length > 0) {
+            structuredQuery.orderBy = normalizedOrders;
+          }
+          if (limitCount) {
+            structuredQuery.limit = limitCount;
+          }
+
+          const restRes = await fetch(`${fsRestDocsRoot()}:runQuery`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${restToken}`,
+            },
+            body: JSON.stringify({ structuredQuery }),
+            signal: AbortSignal.timeout(15000),
+          });
+          const restBody = (await restRes.json().catch(() => null)) as any;
+          if (!restRes.ok) {
+            throw new Error(restBody?.error?.message || `Firestore REST query failed (${restRes.status})`);
+          }
+          const rows = Array.isArray(restBody) ? restBody : [];
+          const docs = rows
+            .filter((row: any) => row?.document?.name)
+            .map((row: any) => {
+              const docPath = String(row.document.name);
+              const docIdPart = docPath.split('/').pop() || '';
+              return {
+                id: docIdPart,
+                data: stripSensitiveUserFields(colName, decodeFirestoreRestFields(row.document.fields)),
+              };
+            });
+          res.json({ success: true, docs });
+          return;
+        }
+      }
+
       await ensureServerFirebaseSignedIn();
       const constraints: any[] = [];
       for (const w of wheres) {
@@ -6833,6 +7263,14 @@ async function startServer() {
 
       res.json({ success: true, docs });
     } catch (err: any) {
+      if (err instanceof ServerFirebaseConfigError) {
+        res.status(err.statusCode).json({
+          success: false,
+          code: err.code,
+          error: err.message,
+        });
+        return;
+      }
       res.status(500).json({
         success: false,
         error: err?.message || 'Gagal menjalankan query Firestore dari server.',
@@ -6852,7 +7290,7 @@ async function startServer() {
 
     const caller = await verifyCallerAuth(req, rawOwner || undefined);
     if (!caller.ok) {
-      res.status(caller.status).json({ success: false, error: caller.error });
+      res.status(caller.status).json({ success: false, code: caller.code, error: caller.error });
       return;
     }
     const targetOwnerUid = rawOwner || caller.uid;
@@ -6863,6 +7301,40 @@ async function startServer() {
     }
 
     try {
+      if (!isServerFirebaseBridgeReady()) {
+        const restToken = await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid, colName);
+        if (restToken) {
+          const structuredQuery: Record<string, any> = {
+            from: [{ collectionId: colName }],
+          };
+          const restWhere = buildRestStructuredWhere(wheres);
+          if (restWhere) structuredQuery.where = restWhere;
+
+          const restRes = await fetch(`${fsRestDocsRoot()}:runAggregationQuery`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${restToken}`,
+            },
+            body: JSON.stringify({
+              structuredAggregationQuery: {
+                structuredQuery,
+                aggregations: [{ alias: 'count', count: {} }],
+              },
+            }),
+            signal: AbortSignal.timeout(12000),
+          });
+          const restBody = (await restRes.json().catch(() => null)) as any;
+          if (!restRes.ok) {
+            throw new Error(restBody?.error?.message || `Firestore REST count failed (${restRes.status})`);
+          }
+          const rows = Array.isArray(restBody) ? restBody : [];
+          const countVal = Number(rows?.[0]?.result?.aggregateFields?.count?.integerValue || 0);
+          res.json({ success: true, count: countVal });
+          return;
+        }
+      }
+
       await ensureServerFirebaseSignedIn();
       const constraints: any[] = [];
       for (const w of wheres) {
@@ -6874,6 +7346,14 @@ async function startServer() {
       const snap = await serverFsGetCountFromServer(q);
       res.json({ success: true, count: Number(snap.data().count || 0) });
     } catch (err: any) {
+      if (err instanceof ServerFirebaseConfigError) {
+        res.status(err.statusCode).json({
+          success: false,
+          code: err.code,
+          error: err.message,
+        });
+        return;
+      }
       res.status(500).json({
         success: false,
         error: err?.message || 'Gagal menghitung dokumen Firestore dari server.',
@@ -6892,12 +7372,148 @@ async function startServer() {
 
     const caller = await verifyCallerAuth(req, rawOwner || undefined);
     if (!caller.ok) {
-      res.status(caller.status).json({ success: false, error: caller.error });
+      res.status(caller.status).json({ success: false, code: caller.code, error: caller.error });
       return;
     }
     const targetOwnerUid = rawOwner || caller.uid;
 
     try {
+      const restToken = !isServerFirebaseBridgeReady()
+        ? await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid)
+        : null;
+
+      if (restToken) {
+        const writes: any[] = [];
+        for (const item of ops) {
+          const opType = item?.op;
+          const colName = String(item?.collection || '').trim();
+          const docId = String(item?.docId || '').trim();
+
+          if (!ALLOWED_USER_DB_COLLECTIONS.has(colName) || !docId || docId.includes('/')) {
+            res.status(400).json({ success: false, error: `Operasi pada ${colName}/${docId} tidak valid.` });
+            return;
+          }
+
+          const docPath = fsRestDocResourcePath(colName, docId);
+          if (opType === 'delete') {
+            if (!caller.isAdmin) {
+              if (colName === 'users') {
+                res.status(403).json({ success: false, error: 'Tidak dapat menghapus dokumen users.' });
+                return;
+              }
+              const existingSnap = await firestoreRestGetDocRaw(restToken, colName, docId);
+              if (existingSnap.exists) {
+                const existingOwner = String(decodeFirestoreRestFields(existingSnap.fields).ownerId || '').trim();
+                if (existingOwner !== targetOwnerUid && existingOwner !== caller.uid) {
+                  res.status(403).json({ success: false, error: 'Tidak berwenang menghapus dokumen pengguna lain.' });
+                  return;
+                }
+              }
+            }
+            writes.push({ delete: docPath });
+            continue;
+          }
+
+          if (opType !== 'set' && opType !== 'update') {
+            res.status(400).json({ success: false, error: 'Jenis operasi database tidak dikenal.' });
+            return;
+          }
+
+          const rawPayload = item?.data && typeof item.data === 'object' ? { ...item.data } : {};
+          if (!caller.isAdmin) {
+            if (colName === 'users') {
+              const ownsUserDoc = await doesCallerOwnTargetUid(caller.uid, caller.email, docId);
+              if (!ownsUserDoc) {
+                res.status(403).json({ success: false, error: 'Tidak berwenang mengubah profil pengguna lain.' });
+                return;
+              }
+              for (const f of USER_SENSITIVE_FIELDS) {
+                delete rawPayload[f];
+              }
+              if (
+                rawPayload.subscriptionStatus !== undefined &&
+                rawPayload.subscriptionStatus !== 'free' &&
+                rawPayload.subscriptionStatus !== 'pending'
+              ) {
+                delete rawPayload.subscriptionStatus;
+              }
+            } else {
+              if (
+                rawPayload.ownerId !== undefined &&
+                String(rawPayload.ownerId || '').trim() !== targetOwnerUid &&
+                String(rawPayload.ownerId || '').trim() !== caller.uid
+              ) {
+                res.status(403).json({ success: false, error: 'ownerId dokumen harus sesuai akun yang sedang masuk.' });
+                return;
+              }
+              if (opType === 'update') {
+                const existingSnap = await firestoreRestGetDocRaw(restToken, colName, docId);
+                if (existingSnap.exists) {
+                  const existingOwner = String(decodeFirestoreRestFields(existingSnap.fields).ownerId || '').trim();
+                  const isOwnReport = colName === 'report_settings' && docId === targetOwnerUid;
+                  if (!isOwnReport && existingOwner !== targetOwnerUid && existingOwner !== caller.uid) {
+                    res.status(403).json({ success: false, error: 'Tidak berwenang memperbarui dokumen pengguna lain.' });
+                    return;
+                  }
+                }
+              } else if (!rawPayload.ownerId) {
+                rawPayload.ownerId = targetOwnerUid;
+              }
+            }
+          }
+
+          const fields: Record<string, any> = {};
+          const fieldPaths: string[] = [];
+          const transforms: any[] = [];
+          for (const [k, v] of Object.entries(rawPayload)) {
+            if (v === undefined) continue;
+            const sentinel = v as { __fsType?: string; delta?: number } | null;
+            if (sentinel && typeof sentinel === 'object' && sentinel.__fsType === 'serverTimestamp') {
+              transforms.push({ fieldPath: k, setToServerValue: 'REQUEST_TIME' });
+            } else if (sentinel && typeof sentinel === 'object' && sentinel.__fsType === 'increment') {
+              const delta = Number(sentinel.delta || 0);
+              transforms.push({
+                fieldPath: k,
+                increment: Number.isInteger(delta) ? { integerValue: String(delta) } : { doubleValue: delta },
+              });
+            } else {
+              fields[k] = encodeFirestoreRestValue(v);
+              fieldPaths.push(k);
+            }
+          }
+
+          const writeObj: Record<string, any> = {
+            update: { name: docPath, fields },
+          };
+          if (opType === 'update' || item?.merge) {
+            writeObj.updateMask = { fieldPaths };
+          }
+          if (opType === 'update') {
+            writeObj.currentDocument = { exists: true };
+          }
+          if (transforms.length > 0) {
+            writeObj.updateTransforms = transforms;
+          }
+          writes.push(writeObj);
+        }
+
+        const commitRes = await fetch(`${fsRestDocsRoot()}:commit`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${restToken}`,
+          },
+          body: JSON.stringify({ writes }),
+          signal: AbortSignal.timeout(15000),
+        });
+        const commitBody = (await commitRes.json().catch(() => null)) as any;
+        if (!commitRes.ok) {
+          throw new Error(commitBody?.error?.message || `Firestore REST commit failed (${commitRes.status})`);
+        }
+        res.json({ success: true });
+        return;
+      }
+
       await ensureServerFirebaseSignedIn();
       const batch = serverFsWriteBatch(serverDb);
 
@@ -6996,6 +7612,14 @@ async function startServer() {
       await batch.commit();
       res.json({ success: true });
     } catch (err: any) {
+      if (err instanceof ServerFirebaseConfigError) {
+        res.status(err.statusCode).json({
+          success: false,
+          code: err.code,
+          error: err.message,
+        });
+        return;
+      }
       res.status(500).json({
         success: false,
         error: err?.message || 'Gagal menyimpan perubahan Firestore melalui server.',

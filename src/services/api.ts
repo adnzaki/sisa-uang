@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { auth } from '../firebase';
 
 const ADMIN_TOKEN_KEY = 'sisa_uang_admin_token';
 const ACTOR_EMAIL_KEY = 'sisa_uang_actor_email';
@@ -56,7 +57,44 @@ export function getUserAuthHeaders(): Record<string, string> {
   return headers;
 }
 
-apiClient.interceptors.request.use((config) => {
+let inFlightUserTokenRefresh: Promise<boolean> | null = null;
+
+export async function refreshFirebaseBackedUserToken(): Promise<boolean> {
+  if (inFlightUserTokenRefresh) {
+    return inFlightUserTokenRefresh;
+  }
+  const fbUser = auth.currentUser;
+  if (!fbUser || fbUser.isAnonymous) {
+    return false;
+  }
+
+  inFlightUserTokenRefresh = (async () => {
+    try {
+      const idToken = await fbUser.getIdToken(true);
+      if (!idToken) return false;
+      const res = await fetch('/api/auth/firebase-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json().catch(() => null);
+      if (data?.userToken && !data?.requiresOtp) {
+        setApiUserToken(data.userToken);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      inFlightUserTokenRefresh = null;
+    }
+  })();
+
+  return inFlightUserTokenRefresh;
+}
+
+apiClient.interceptors.request.use(async (config) => {
   const adminToken = localStorage.getItem(ADMIN_TOKEN_KEY);
   const userToken = localStorage.getItem(USER_TOKEN_KEY);
   let actorEmail = localStorage.getItem(ACTOR_EMAIL_KEY);
@@ -82,12 +120,22 @@ apiClient.interceptors.request.use((config) => {
   if (actorEmail && config.headers) {
     config.headers['x-actor-email'] = actorEmail;
   }
+  if (config.headers && !config.headers.Authorization && auth.currentUser && !auth.currentUser.isAnonymous) {
+    try {
+      const idToken = await auth.currentUser.getIdToken();
+      if (idToken) {
+        config.headers.Authorization = `Bearer ${idToken}`;
+      }
+    } catch {
+      // Ignore Firebase ID token fetch failure when offline
+    }
+  }
   return config;
 });
 
 apiClient.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     const status = error.response?.status;
     const errorMsg = String(error.response?.data?.error || '').toLowerCase();
     const url = String(error.config?.url || '');
@@ -102,7 +150,8 @@ apiClient.interceptors.response.use(
             errorMsg.includes('token') ||
             errorMsg.includes('sesi super admin') ||
             errorMsg.includes('kedaluwarsa') ||
-            errorMsg.includes('dicabut'))));
+            errorMsg.includes('dicabut') ||
+            errorMsg.includes('2fa'))));
 
     if (isAdminTokenError && typeof window !== 'undefined') {
       const currentToken = localStorage.getItem(ADMIN_TOKEN_KEY);
@@ -127,6 +176,28 @@ apiClient.interceptors.response.use(
       !url.includes('/auth/') &&
       typeof window !== 'undefined'
     ) {
+      if (error.config && !error.config._retriedSessionRefresh) {
+        error.config._retriedSessionRefresh = true;
+        const refreshed = await refreshFirebaseBackedUserToken();
+        if (refreshed) {
+          const updatedToken = getApiUserToken();
+          if (updatedToken && error.config.headers) {
+            error.config.headers['x-user-token'] = updatedToken;
+          }
+          if (auth.currentUser && !auth.currentUser.isAnonymous && error.config.headers) {
+            try {
+              const freshIdToken = await auth.currentUser.getIdToken();
+              if (freshIdToken) {
+                error.config.headers.Authorization = `Bearer ${freshIdToken}`;
+              }
+            } catch {
+              // Ignore
+            }
+          }
+          return apiClient.request(error.config);
+        }
+      }
+
       localStorage.removeItem(USER_TOKEN_KEY);
       window.dispatchEvent(
         new CustomEvent('sisauang:user-session-expired', {

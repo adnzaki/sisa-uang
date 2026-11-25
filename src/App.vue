@@ -50,6 +50,7 @@ import { useThemeStore, ThemeMode } from './stores/theme';
 import { useFinanceStore } from './stores/finance';
 import { useAdminStore } from './stores/admin';
 import { auth } from './firebase';
+import { apiClient } from './services/api';
 import { useNotificationStore } from './stores/notification';
 import { useAutomationStore } from './stores/automation';
 import { useSavingsStore } from './stores/savings';
@@ -85,6 +86,38 @@ const accountMenuOpen = ref(false);
 const desktopAccountMenuRef = ref<HTMLElement | null>(null);
 const mobileAccountMenuRef = ref<HTMLElement | null>(null);
 const deniedBannerVisible = ref(false);
+const bridgeWorkerPassword = ref('');
+const isActivatingBridge = ref(false);
+const bridgeBannerDismissed = ref(false);
+
+async function handleActivateServerBridge() {
+  const pw = bridgeWorkerPassword.value.trim();
+  if (!pw || isActivatingBridge.value) return;
+  isActivatingBridge.value = true;
+  try {
+    await apiClient.post('/admin/database/activate-worker', { password: pw });
+    bridgeWorkerPassword.value = '';
+    bridgeBannerDismissed.value = false;
+    financeStore.serverBridgeConfigMissing = false;
+    notificationStore.notifySuccess(
+      'Worker Database Server Aktif',
+      'Koneksi worker server berhasil diaktifkan. Memuat ulang data...'
+    );
+    await Promise.all([
+      financeStore.refreshData(true),
+      adminStore.fetchUsers(true),
+    ]);
+  } catch (err: any) {
+    notificationStore.notifyError(
+      'Gagal Mengaktifkan Worker Server',
+      err,
+      'Kata sandi Firebase Auth Super Admin tidak sesuai.'
+    );
+  } finally {
+    isActivatingBridge.value = false;
+  }
+}
+
 const mainScrollContainer = ref<HTMLElement | null>(null);
 const publicScrollContainer = ref<HTMLElement | null>(null);
 const pageTransitionName = ref<'page' | 'page-slide-left' | 'page-slide-right'>('page');
@@ -1124,6 +1157,51 @@ async function handleSubmitProPayment() {
       >
         Mengerti
       </button>
+    </div>
+
+    <!-- Server Database Bridge Worker Activation Notice (Super Admin only) -->
+    <div
+      v-if="
+        authStore.isAuthenticated &&
+        authStore.isSuperAdmin &&
+        authStore.canAccessControlPanel &&
+        financeStore.serverBridgeConfigMissing &&
+        !bridgeBannerDismissed
+      "
+      class="shrink-0 border-b border-amber-500/30 bg-amber-950/90 text-amber-100 px-4 py-2.5 text-xs z-40"
+    >
+      <div class="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div class="flex items-start sm:items-center gap-2 min-w-0">
+          <AlertTriangle class="w-4 h-4 text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
+          <p class="leading-snug">
+            Worker database server untuk akun legacy belum aktif (<code class="font-mono text-amber-300">SUPER_ADMIN_FIREBASE_PASSWORD</code> belum diatur). Aktifkan sementara di sini atau tambahkan di <strong>Settings &rarr; Secrets</strong>.
+          </p>
+        </div>
+        <form class="flex items-center gap-2 shrink-0" @submit.prevent="handleActivateServerBridge">
+          <input
+            v-model="bridgeWorkerPassword"
+            type="password"
+            autocomplete="current-password"
+            placeholder="Kata sandi Firebase Super Admin"
+            class="h-8 px-2.5 rounded-lg bg-slate-900/90 border border-amber-500/40 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-amber-400 w-52"
+          />
+          <button
+            type="submit"
+            :disabled="isActivatingBridge || !bridgeWorkerPassword.trim()"
+            class="h-8 px-3 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-semibold text-xs whitespace-nowrap transition-colors"
+          >
+            {{ isActivatingBridge ? 'Mengaktifkan...' : 'Aktifkan Worker' }}
+          </button>
+          <button
+            type="button"
+            class="p-1 rounded-lg text-amber-300 hover:text-white hover:bg-white/10"
+            title="Tutup"
+            @click="bridgeBannerDismissed = true"
+          >
+            <X class="w-4 h-4" />
+          </button>
+        </form>
+      </div>
     </div>
 
     <!-- Blocked Account Fullscreen Interception -->

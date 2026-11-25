@@ -20,8 +20,15 @@ import {
   type QueryConstraint,
   type WhereFilterOp,
 } from 'firebase/firestore';
-import { auth, db } from '../firebase';
-import { getApiUserToken, getUserAuthHeaders } from './api';
+import { auth, db, isServerBridgeConfigError, isSessionExpiredError } from '../firebase';
+import {
+  getApiUserToken,
+  getUserAuthHeaders,
+  setApiUserToken,
+  refreshFirebaseBackedUserToken,
+} from './api';
+
+export { isServerBridgeConfigError, isSessionExpiredError };
 
 export interface FsSentinel {
   __fsType: 'serverTimestamp' | 'increment';
@@ -151,7 +158,10 @@ function translateSentinelsToSdk(value: any): any {
   return value;
 }
 
-async function buildBridgeHeaders(ownerUid?: string): Promise<Record<string, string>> {
+async function buildBridgeHeaders(
+  ownerUid?: string,
+  forceRefreshIdToken = false
+): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...getUserAuthHeaders(),
@@ -162,7 +172,7 @@ async function buildBridgeHeaders(ownerUid?: string): Promise<Record<string, str
   }
   if (auth.currentUser && !auth.currentUser.isAnonymous) {
     try {
-      const idToken = await auth.currentUser.getIdToken();
+      const idToken = await auth.currentUser.getIdToken(forceRefreshIdToken);
       if (idToken) {
         headers.Authorization = `Bearer ${idToken}`;
       }
@@ -173,20 +183,101 @@ async function buildBridgeHeaders(ownerUid?: string): Promise<Record<string, str
   return headers;
 }
 
+function emitUserSessionExpired(message: string, status = 401) {
+  setApiUserToken(null);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('sisauang:user-session-expired', {
+        detail: { message, status },
+      })
+    );
+  }
+}
+
+function emitAdminSessionExpired(message: string, status = 403) {
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem('sisa_uang_admin_token');
+      localStorage.setItem('sisa_uang_otp_verified', 'false');
+    } catch {
+      // Ignore
+    }
+    window.dispatchEvent(
+      new CustomEvent('sisauang:admin-session-expired', {
+        detail: { message, status },
+      })
+    );
+  }
+}
+
 async function callUserDbApi<T = any>(path: string, body: Record<string, any>, ownerUid?: string): Promise<T> {
-  const headers = await buildBridgeHeaders(ownerUid);
+  let headers = await buildBridgeHeaders(ownerUid, false);
   if (!headers['x-user-token'] && !headers['x-admin-token'] && !headers.Authorization) {
-    throw new Error('Missing authenticated session token for Firestore access');
+    const refreshed = await refreshFirebaseBackedUserToken();
+    if (refreshed) {
+      headers = await buildBridgeHeaders(ownerUid, false);
+    }
   }
 
-  const res = await fetch(`/api/user-db/${path}`, {
+  if (!headers['x-user-token'] && !headers['x-admin-token'] && !headers.Authorization) {
+    const expiredMsg = 'Sesi login Anda tidak ditemukan atau telah kedaluwarsa. Silakan masuk kembali.';
+    emitUserSessionExpired(expiredMsg, 401);
+    const missingErr: any = new Error(expiredMsg);
+    missingErr.code = 'SESSION_EXPIRED';
+    missingErr.status = 401;
+    missingErr.isSessionExpired = true;
+    throw missingErr;
+  }
+
+  let res = await fetch(`/api/user-db/${path}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
   });
+
+  if (res.status === 401) {
+    const refreshed = await refreshFirebaseBackedUserToken();
+    if (refreshed) {
+      headers = await buildBridgeHeaders(ownerUid, false);
+      res = await fetch(`/api/user-db/${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+    }
+  }
+
   const data = await res.json().catch(() => null);
   if (!res.ok || !data?.success) {
-    throw new Error(data?.error || `Firestore bridge request failed (${res.status})`);
+    const errMsg = data?.error || `Firestore bridge request failed (${res.status})`;
+    const errCode = String(data?.code || '').toUpperCase();
+    const isAdmin2FAErr =
+      Boolean(headers['x-admin-token']) &&
+      res.status === 403 &&
+      (errCode === 'ADMIN_2FA_REQUIRED' ||
+        errMsg.toLowerCase().includes('2fa') ||
+        errMsg.toLowerCase().includes('super admin'));
+
+    if (isAdmin2FAErr) {
+      emitAdminSessionExpired(errMsg, res.status);
+    }
+
+    const isSessionErr = res.status === 401 || errCode === 'SESSION_EXPIRED';
+    if (isSessionErr) {
+      emitUserSessionExpired(errMsg, res.status);
+    }
+
+    const bridgeErr: any = new Error(errMsg);
+    if (data?.code) {
+      bridgeErr.code = data.code;
+    } else if (isSessionErr) {
+      bridgeErr.code = 'SESSION_EXPIRED';
+    }
+    bridgeErr.status = res.status;
+    if (isSessionErr) {
+      bridgeErr.isSessionExpired = true;
+    }
+    throw bridgeErr;
   }
   return data as T;
 }
