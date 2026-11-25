@@ -20,7 +20,7 @@ import {
   type QueryConstraint,
   type WhereFilterOp,
 } from 'firebase/firestore';
-import { auth, db, isServerBridgeConfigError, isSessionExpiredError } from '../firebase';
+import { auth, db, isFirestoreOfflineError, isServerBridgeConfigError, isSessionExpiredError } from '../firebase';
 import {
   getApiUserToken,
   getUserAuthHeaders,
@@ -135,6 +135,34 @@ export function hasActiveFirestoreAccess(ownerUid?: string): boolean {
   return Boolean(auth.currentUser && !auth.currentUser.isAnonymous);
 }
 
+function shouldFallbackDirectSdkToBridge(err: unknown): boolean {
+  const anyErr = err as any;
+  const code = String(anyErr?.code || '').toLowerCase();
+  const msg = String(anyErr?.message || err || '').toLowerCase();
+  if (
+    code.includes('permission-denied') ||
+    code.includes('resource-exhausted') ||
+    code.includes('unauthenticated') ||
+    isSessionExpiredError(err)
+  ) {
+    return false;
+  }
+  const hasBridgeAuth = Boolean(
+    getApiUserToken() || isVerifiedAdminSessionActive() || (auth.currentUser && !auth.currentUser.isAnonymous)
+  );
+  if (!hasBridgeAuth) return false;
+  return (
+    isFirestoreOfflineError(err) ||
+    code.includes('internal') ||
+    code.includes('unknown') ||
+    code.includes('deadline-exceeded') ||
+    code.includes('aborted') ||
+    msg.includes('network') ||
+    msg.includes('fetch') ||
+    msg.includes('timeout')
+  );
+}
+
 function translateSentinelsToSdk(value: any): any {
   if (value === null || value === undefined) return value;
   if (Array.isArray(value)) {
@@ -210,6 +238,21 @@ function emitAdminSessionExpired(message: string, status = 403) {
   }
 }
 
+function tryParseJsonObject(rawText: string): Record<string, any> | null {
+  const trimmed = rawText.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, any>) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function callUserDbApi<T = any>(path: string, body: Record<string, any>, ownerUid?: string): Promise<T> {
   let headers = await buildBridgeHeaders(ownerUid, false);
   if (!headers['x-user-token'] && !headers['x-admin-token'] && !headers.Authorization) {
@@ -229,27 +272,53 @@ async function callUserDbApi<T = any>(path: string, body: Record<string, any>, o
     throw missingErr;
   }
 
-  let res = await fetch(`/api/user-db/${path}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
+  const MAX_TRANSIENT_RETRIES = 2;
+  let res!: Response;
+  let rawText = '';
+  let data: Record<string, any> | null = null;
 
-  if (res.status === 401) {
-    const refreshed = await refreshFirebaseBackedUserToken();
-    if (refreshed) {
-      headers = await buildBridgeHeaders(ownerUid, false);
-      res = await fetch(`/api/user-db/${path}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      });
+  for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
+    res = await fetch(`/api/user-db/${path}`, {
+      method: 'POST',
+      headers,
+      cache: 'no-store',
+      body: JSON.stringify(body),
+    });
+
+    if (res.status === 401) {
+      const refreshed = await refreshFirebaseBackedUserToken();
+      if (refreshed) {
+        headers = await buildBridgeHeaders(ownerUid, false);
+        res = await fetch(`/api/user-db/${path}`, {
+          method: 'POST',
+          headers,
+          cache: 'no-store',
+          body: JSON.stringify(body),
+        });
+      }
     }
+
+    rawText = await res.text().catch(() => '');
+    data = tryParseJsonObject(rawText);
+
+    const isNonJson200 = res.ok && !data;
+    const isTransientGateway = res.status === 502 || res.status === 504;
+    if ((isNonJson200 || isTransientGateway) && attempt < MAX_TRANSIENT_RETRIES) {
+      await waitMs(650 * (attempt + 1));
+      continue;
+    }
+    break;
   }
 
-  const data = await res.json().catch(() => null);
   if (!res.ok || !data?.success) {
-    const errMsg = data?.error || `Firestore bridge request failed (${res.status})`;
+    const isHtmlResponse = rawText.trim().startsWith('<');
+    const errMsg =
+      data?.error ||
+      (res.ok && !data
+        ? isHtmlResponse
+          ? 'Server mengembalikan halaman HTML alih-alih data JSON (kemungkinan server sedang restart atau proxy cache belum diperbarui). Silakan muat ulang halaman.'
+          : 'Respons data dari server kosong atau bukan format JSON yang valid. Silakan coba muat ulang.'
+        : `Permintaan sinkronisasi database gagal (${res.status}).`);
     const errCode = String(data?.code || '').toUpperCase();
     const isAdmin2FAErr =
       Boolean(headers['x-admin-token']) &&
@@ -312,14 +381,20 @@ export async function fsGetDoc(
 ): Promise<FsDocSnapshot> {
   const effectiveOwner = ownerUid || (collectionName === 'users' ? docId : getActiveStoredUserUid());
   if (isDirectFirestoreAuthorized(effectiveOwner)) {
-    const ref = doc(db, collectionName, docId);
-    const snap = fromServer ? await getDocFromServer(ref) : await getDoc(ref);
-    return {
-      id: snap.id,
-      exists: () => snap.exists(),
-      data: () => snap.data() as Record<string, any> | undefined,
-      _rawSnap: snap,
-    };
+    try {
+      const ref = doc(db, collectionName, docId);
+      const snap = fromServer ? await getDocFromServer(ref) : await getDoc(ref);
+      return {
+        id: snap.id,
+        exists: () => snap.exists(),
+        data: () => snap.data() as Record<string, any> | undefined,
+        _rawSnap: snap,
+      };
+    } catch (sdkErr) {
+      if (!shouldFallbackDirectSdkToBridge(sdkErr)) {
+        throw sdkErr;
+      }
+    }
   }
 
   const res = await callUserDbApi<{
@@ -352,18 +427,24 @@ export async function fsGetDocs(
 ): Promise<FsQuerySnapshot> {
   const effectiveOwner = ownerUid || getActiveStoredUserUid();
   if (isDirectFirestoreAuthorized(effectiveOwner)) {
-    const constraints = buildSdkConstraints(spec);
-    const q = query(collection(db, collectionName), ...constraints);
-    const snap = fromServer ? await getDocsFromServer(q) : await getDocs(q);
-    return {
-      empty: snap.empty,
-      size: snap.size,
-      docs: snap.docs.map((d) => ({
-        id: d.id,
-        data: () => d.data() as Record<string, any>,
-        _rawSnap: d,
-      })),
-    };
+    try {
+      const constraints = buildSdkConstraints(spec);
+      const q = query(collection(db, collectionName), ...constraints);
+      const snap = fromServer ? await getDocsFromServer(q) : await getDocs(q);
+      return {
+        empty: snap.empty,
+        size: snap.size,
+        docs: snap.docs.map((d) => ({
+          id: d.id,
+          data: () => d.data() as Record<string, any>,
+          _rawSnap: d,
+        })),
+      };
+    } catch (sdkErr) {
+      if (!shouldFallbackDirectSdkToBridge(sdkErr)) {
+        throw sdkErr;
+      }
+    }
   }
 
   const startAfterDocId =
@@ -406,10 +487,16 @@ export async function fsGetCount(
 ): Promise<number> {
   const effectiveOwner = ownerUid || getActiveStoredUserUid();
   if (isDirectFirestoreAuthorized(effectiveOwner)) {
-    const constraints = buildSdkConstraints(spec);
-    const q = query(collection(db, collectionName), ...constraints);
-    const snap = await getCountFromServer(q);
-    return Number(snap.data().count || 0);
+    try {
+      const constraints = buildSdkConstraints(spec);
+      const q = query(collection(db, collectionName), ...constraints);
+      const snap = await getCountFromServer(q);
+      return Number(snap.data().count || 0);
+    } catch (sdkErr) {
+      if (!shouldFallbackDirectSdkToBridge(sdkErr)) {
+        throw sdkErr;
+      }
+    }
   }
 
   const res = await callUserDbApi<{

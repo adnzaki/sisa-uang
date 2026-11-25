@@ -189,6 +189,33 @@ function getDateBadge(dateStr: string) {
       </div>
     </div>
 
+    <!-- Inline Firestore Connection Error Banner -->
+    <div
+      v-if="financeStore.lastLoadError && financeStore.wallets.length === 0"
+      class="rounded-2xl border border-rose-200 dark:border-rose-900/70 bg-rose-50/90 dark:bg-rose-950/40 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+    >
+      <div class="flex items-start gap-2.5 min-w-0">
+        <ShieldAlert class="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+        <div class="min-w-0 space-y-0.5">
+          <p class="text-sm font-semibold text-rose-900 dark:text-rose-100">
+            Gagal Terhubung ke Database Firestore
+          </p>
+          <p class="text-xs text-rose-700 dark:text-rose-300 break-words">
+            {{ financeStore.lastLoadError }}
+          </p>
+        </div>
+      </div>
+      <button
+        type="button"
+        :disabled="isRefreshing"
+        class="h-10 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-semibold flex items-center justify-center gap-1.5 shrink-0 cursor-pointer transition-colors"
+        @click="handleManualRefresh"
+      >
+        <RotateCcw class="w-3.5 h-3.5" :class="{ 'animate-spin': isRefreshing }" />
+        <span>Coba Muat Ulang</span>
+      </button>
+    </div>
+
     <!-- Primary Focal Anchor: Sisa Uang Aktif & Cashflow Summary -->
     <section
       class="rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-7"

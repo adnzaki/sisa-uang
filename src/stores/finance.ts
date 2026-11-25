@@ -6,6 +6,7 @@ import {
   handleFirestoreError,
   isFirestoreQuotaError,
   isServerBridgeConfigError,
+  isServerFirebaseRateLimitError,
   isSessionExpiredError,
   sanitizeId,
   sanitizeString,
@@ -359,6 +360,7 @@ export const useFinanceStore = defineStore('finance', () => {
   const isLoading = ref(false);
   const isSyncedWithFirestore = ref(false);
   const serverBridgeConfigMissing = ref(false);
+  const lastLoadError = ref<string | null>(null);
   const activeOwnerUid = ref<string>('');
   const quickModalOpen = ref(false);
   const editingTransaction = ref<TransactionItem | null>(null);
@@ -657,6 +659,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
   function cleanupListeners() {
     serverBridgeConfigMissing.value = false;
+    lastLoadError.value = null;
     // Listeners are replaced with efficient on-demand/cached reads + optimistic local updates
   }
 
@@ -2121,6 +2124,7 @@ export const useFinanceStore = defineStore('finance', () => {
       if (
         isSessionExpiredError(err) ||
         isServerBridgeConfigError(err) ||
+        isServerFirebaseRateLimitError(err) ||
         isFirestoreQuotaError(err)
       ) {
         throw err;
@@ -2329,6 +2333,7 @@ export const useFinanceStore = defineStore('finance', () => {
     }
 
     serverBridgeConfigMissing.value = false;
+    lastLoadError.value = null;
     isSyncedWithFirestore.value = true;
     saveLocalSnapshot(uid, true, effectiveSyncToken);
     void refreshTxAttachmentsIndex(uid);
@@ -2675,6 +2680,7 @@ export const useFinanceStore = defineStore('finance', () => {
             if (
               isSessionExpiredError(err) ||
               isServerBridgeConfigError(err) ||
+              isServerFirebaseRateLimitError(err) ||
               isFirestoreQuotaError(err)
             ) {
               throw err;
@@ -2715,6 +2721,7 @@ export const useFinanceStore = defineStore('finance', () => {
           if (
             isSessionExpiredError(tokenErr) ||
             isServerBridgeConfigError(tokenErr) ||
+            isServerFirebaseRateLimitError(tokenErr) ||
             isFirestoreQuotaError(tokenErr)
           ) {
             throw tokenErr;
@@ -2745,7 +2752,7 @@ export const useFinanceStore = defineStore('finance', () => {
         saveUserSyncToken(uid, effectiveRemoteToken);
         await fetchAllCollectionsFromFirestore(uid, effectiveRemoteToken);
         isLoading.value = false;
-      } catch (err) {
+      } catch (err: any) {
         isLoading.value = false;
         if (isSessionExpiredError(err) || !useAuthStore().isAuthenticated) {
           return;
@@ -2756,25 +2763,56 @@ export const useFinanceStore = defineStore('finance', () => {
         }
         if (isServerBridgeConfigError(err)) {
           serverBridgeConfigMissing.value = true;
+          const errCode = String(err?.code || '').toUpperCase();
+          const isInvalidPw = errCode === 'SERVER_FIREBASE_PASSWORD_INVALID';
+          const adminMsg = isInvalidPw
+            ? 'Kata sandi SUPER_ADMIN_FIREBASE_PASSWORD pada server ditolak oleh Firebase Auth. Periksa kembali .env (gunakan tanda kutip jika ada karakter #) atau aktifkan ulang worker server.'
+            : 'Konfigurasi SUPER_ADMIN_FIREBASE_PASSWORD belum tersedia di server. Aktifkan worker server atau tambahkan secret di .env.';
+          const userMsg =
+            'Koneksi sinkronisasi Firebase di server belum siap. Hubungi administrator server untuk memeriksa konfigurasi worker Firebase.';
+          const resolvedMsg = useAuthStore().isSuperAdmin ? adminMsg : userMsg;
+          lastLoadError.value = resolvedMsg;
           const notify = useNotificationStore();
           const alreadyShown = notify.banners.some(
             (b) => b.errorCode === 'SERVER_BRIDGE_CONFIG_MISSING'
           );
           if (!alreadyShown) {
-            const msg = useAuthStore().isSuperAdmin
-              ? 'Konfigurasi SUPER_ADMIN_FIREBASE_PASSWORD belum tersedia di server. Aktifkan worker server atau tambahkan secret di Settings -> Secrets.'
-              : 'Layanan sinkronisasi server untuk akun legacy belum diaktifkan oleh Administrator. Hubungi administrator atau gunakan Login Google.';
             notify.showPopup({
               type: 'error',
-              title: 'Sinkronisasi Server Belum Siap',
-              message: msg,
+              title: 'Koneksi Server Firebase Belum Siap',
+              message: resolvedMsg,
               errorCode: 'SERVER_BRIDGE_CONFIG_MISSING',
               durationMs: 12000,
             });
           }
           return;
         }
-        handleFirestoreError(err, OperationType.LIST, 'finance_collections');
+        if (isServerFirebaseRateLimitError(err)) {
+          const rateMsg =
+            'Layanan autentikasi Firebase server sedang membatasi permintaan sementara karena terlalu banyak percobaan login berturut-turut. Tunggu 1–3 menit lalu klik Coba Muat Ulang, atau masuk menggunakan akun Google Anda.';
+          lastLoadError.value = rateMsg;
+          const notify = useNotificationStore();
+          const alreadyShown = notify.banners.some(
+            (b) => b.errorCode === 'SERVER_FIREBASE_RATE_LIMITED'
+          );
+          if (!alreadyShown) {
+            notify.showPopup({
+              type: 'warning',
+              title: 'Koneksi Database Sedang Dibatasi Sementara',
+              message: rateMsg,
+              errorCode: 'SERVER_FIREBASE_RATE_LIMITED',
+              durationMs: 12000,
+            });
+          }
+          return;
+        }
+        const rawMsg =
+          err instanceof Error && err.message
+            ? err.message
+            : 'Tidak dapat terhubung ke database Firestore. Periksa koneksi internet atau konfigurasi server.';
+        lastLoadError.value = rawMsg;
+        useNotificationStore().notifyError('Gagal Memuat Data Firestore', err, rawMsg);
+        console.error('[Finance Init Error]', err);
       }
     } else {
       isLoading.value = false;
@@ -6534,6 +6572,7 @@ export const useFinanceStore = defineStore('finance', () => {
     isLoading,
     isSyncedWithFirestore,
     serverBridgeConfigMissing,
+    lastLoadError,
     quickModalOpen,
     editingTransaction,
     openAddTransactionModal,

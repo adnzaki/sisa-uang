@@ -105,8 +105,25 @@ export function isServerBridgeConfigError(error: unknown): boolean {
   const respErr = String(anyErr?.response?.data?.error || '').toLowerCase();
   return (
     code === 'SERVER_FIREBASE_PASSWORD_MISSING' ||
+    code === 'SERVER_FIREBASE_PASSWORD_INVALID' ||
     msg.includes('super_admin_firebase_password') ||
     respErr.includes('super_admin_firebase_password')
+  );
+}
+
+export function isServerFirebaseRateLimitError(error: unknown): boolean {
+  const anyErr = error as any;
+  const code = String(anyErr?.code || anyErr?.response?.data?.code || '').toUpperCase();
+  const msg = String(anyErr?.message || error || '').toLowerCase();
+  const respErr = String(anyErr?.response?.data?.error || '').toLowerCase();
+  return (
+    code === 'SERVER_FIREBASE_RATE_LIMITED' ||
+    code.includes('TOO_MANY_ATTEMPTS') ||
+    code.includes('TOO-MANY-REQUESTS') ||
+    msg.includes('too_many_attempts_try_later') ||
+    msg.includes('too-many-requests') ||
+    msg.includes('membatasi sementara percobaan login worker server') ||
+    respErr.includes('too_many_attempts_try_later')
   );
 }
 

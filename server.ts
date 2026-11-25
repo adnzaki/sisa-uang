@@ -13,7 +13,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { initializeApp as initServerFirebaseApp } from 'firebase/app';
 import {
-  getFirestore as getServerFirestore,
+  initializeFirestore as initializeServerFirestore,
   doc as serverFsDoc,
   getDoc as serverFsGetDoc,
   updateDoc as serverFsUpdateDoc,
@@ -40,6 +40,45 @@ import { getPrerenderDataForPath, injectPrerenderedHtml } from './src/prerender/
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Restore unquoted .env values where dotenv stripped attached '#' characters (e.g. passwords ending in ##)
+// while still respecting whitespace-preceded inline comments ('val # comment').
+function restoreUnquotedEnvHashValues() {
+  try {
+    const candidates = [
+      path.resolve(process.cwd(), '.env'),
+      path.resolve(__dirname, '.env'),
+    ];
+    const seen = new Set<string>();
+    for (const envPath of candidates) {
+      if (seen.has(envPath) || !fs.existsSync(envPath)) continue;
+      seen.add(envPath);
+      const raw = fs.readFileSync(envPath, 'utf8');
+      for (const rawLine of raw.split(/\r?\n/)) {
+        const trimmedLine = rawLine.trim();
+        if (!trimmedLine || trimmedLine.startsWith('#')) continue;
+        const m = rawLine.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+        if (!m) continue;
+        const key = m[1];
+        const valPart = m[2].replace(/\r$/, '').trim();
+        if (!valPart || valPart.startsWith('"') || valPart.startsWith("'")) continue;
+        const withoutInlineComment = valPart.replace(/\s+#.*$/, '').trim();
+        if (!withoutInlineComment.includes('#')) continue;
+        const current = process.env[key];
+        if (
+          typeof current === 'string' &&
+          withoutInlineComment.length > current.length &&
+          withoutInlineComment.startsWith(current)
+        ) {
+          process.env[key] = withoutInlineComment;
+        }
+      }
+    }
+  } catch {
+    // Ignore .env restoration read errors
+  }
+}
+restoreUnquotedEnvHashValues();
 
 const SUPER_ADMIN_EMAIL = 'vuedevo@gmail.com';
 const SUPER_ADMIN_USERNAME = 'vuedevo';
@@ -82,33 +121,245 @@ function tsToIsoValue(val: any): any {
   return val;
 }
 
-// Initialize server-side Firebase connection for authenticated server worker operations
+// Initialize server-side Firebase connection with forced long-polling for Node.js VPS reliability
 let serverDb: any = null;
 let serverAuth: any = null;
 try {
   const serverFirebaseApp = initServerFirebaseApp(firebaseServerConfig, 'server_admin_worker');
-  serverDb = getServerFirestore(serverFirebaseApp, firebaseServerConfig.firestoreDatabaseId);
+  serverDb = initializeServerFirestore(
+    serverFirebaseApp,
+    { experimentalForceLongPolling: true },
+    firebaseServerConfig.firestoreDatabaseId
+  );
   serverAuth = getServerAuth(serverFirebaseApp);
 } catch (e: any) {
   console.warn('[Server Firebase Init Notice]', e?.message || e);
 }
 
+type ServerFirebaseConfigCode =
+  | 'SERVER_FIREBASE_PASSWORD_MISSING'
+  | 'SERVER_FIREBASE_PASSWORD_INVALID'
+  | 'SERVER_FIREBASE_RATE_LIMITED';
+
 class ServerFirebaseConfigError extends Error {
-  readonly code = 'SERVER_FIREBASE_PASSWORD_MISSING';
-  readonly statusCode = 503;
-  constructor(message: string) {
+  readonly code: ServerFirebaseConfigCode;
+  readonly statusCode: number;
+  constructor(
+    message: string,
+    code: ServerFirebaseConfigCode = 'SERVER_FIREBASE_PASSWORD_MISSING',
+    statusCode = 503
+  ) {
     super(message);
     this.name = 'ServerFirebaseConfigError';
+    this.code = code;
+    this.statusCode = statusCode;
+  }
+}
+
+let serverWorkerRestSession: {
+  idToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  passwordDigest: string;
+} | null = null;
+let lastServerFirebaseAuthError: { code: string; message: string; passwordDigest: string } | null = null;
+let serverFirebaseSignInPromise: Promise<void> | null = null;
+let serverWorkerRestSignInPromise: Promise<string | null> | null = null;
+let serverFirebaseRateLimitedUntil = 0;
+const FIREBASE_RATE_LIMIT_COOLDOWN_MS = 3 * 60 * 1000;
+
+function isFirebaseInvalidCredentialError(err: any): boolean {
+  const msg = String(err?.code || err?.message || err || '').toUpperCase();
+  return (
+    msg.includes('INVALID-CREDENTIAL') ||
+    msg.includes('INVALID_LOGIN_CREDENTIALS') ||
+    msg.includes('WRONG-PASSWORD') ||
+    msg.includes('INVALID_PASSWORD') ||
+    msg.includes('USER_NOT_FOUND') ||
+    msg.includes('USER_DISABLED')
+  );
+}
+
+function isFirebaseTooManyAttemptsError(err: any): boolean {
+  const msg = String(err?.code || err?.message || err || '').toUpperCase();
+  return (
+    msg.includes('TOO_MANY_ATTEMPTS_TRY_LATER') ||
+    msg.includes('TOO-MANY-REQUESTS') ||
+    msg.includes('TOO_MANY_REQUESTS')
+  );
+}
+
+function buildServerRateLimitError(pwDigest: string): ServerFirebaseConfigError {
+  const remainingSec = Math.max(15, Math.ceil((serverFirebaseRateLimitedUntil - Date.now()) / 1000));
+  const remainingMin = Math.max(1, Math.ceil(remainingSec / 60));
+  const msg = `Firebase Auth membatasi sementara percobaan login worker server (tunggu ~${remainingMin} menit lalu muat ulang, atau masuk dengan akun Google).`;
+  lastServerFirebaseAuthError = {
+    code: 'SERVER_FIREBASE_RATE_LIMITED',
+    message: msg,
+    passwordDigest: pwDigest,
+  };
+  return new ServerFirebaseConfigError(msg, 'SERVER_FIREBASE_RATE_LIMITED', 503);
+}
+
+function hasWarmServerWorkerSession(): boolean {
+  const currentEmail = String(serverAuth?.currentUser?.email || '').trim().toLowerCase();
+  if (serverAuth?.currentUser && currentEmail === SUPER_ADMIN_EMAIL) {
+    return true;
+  }
+  if (serverWorkerRestSession && Date.now() < serverWorkerRestSession.expiresAt - 60_000) {
+    return true;
+  }
+  return false;
+}
+
+async function signInServerWorkerViaRest(password: string): Promise<string | null> {
+  const pwDigest = crypto.createHash('sha256').update(password).digest('hex');
+  if (
+    serverWorkerRestSession &&
+    serverWorkerRestSession.passwordDigest === pwDigest &&
+    Date.now() < serverWorkerRestSession.expiresAt - 120_000
+  ) {
+    return serverWorkerRestSession.idToken;
+  }
+
+  if (serverWorkerRestSignInPromise) {
+    return serverWorkerRestSignInPromise;
+  }
+
+  serverWorkerRestSignInPromise = (async (): Promise<string | null> => {
+    if (serverWorkerRestSession && serverWorkerRestSession.passwordDigest === pwDigest && serverWorkerRestSession.refreshToken) {
+      try {
+        const refreshRes = await fetch(
+          `https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(firebaseServerConfig.apiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(serverWorkerRestSession.refreshToken)}`,
+            signal: AbortSignal.timeout(10000),
+          }
+        );
+        if (refreshRes.ok) {
+          const refreshData = (await refreshRes.json().catch(() => null)) as any;
+          if (refreshData?.id_token) {
+            serverWorkerRestSession = {
+              idToken: String(refreshData.id_token),
+              refreshToken: String(refreshData.refresh_token || serverWorkerRestSession.refreshToken),
+              expiresAt: Date.now() + (Number(refreshData.expires_in) || 3600) * 1000,
+              passwordDigest: pwDigest,
+            };
+            lastServerFirebaseAuthError = null;
+            serverFirebaseRateLimitedUntil = 0;
+            return serverWorkerRestSession.idToken;
+          }
+        }
+      } catch {
+        // Fall through to password sign-in only if not rate-limited
+      }
+    }
+
+    if (Date.now() < serverFirebaseRateLimitedUntil) {
+      throw buildServerRateLimitError(pwDigest);
+    }
+
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(firebaseServerConfig.apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: SUPER_ADMIN_EMAIL,
+          password,
+          returnSecureToken: true,
+        }),
+        signal: AbortSignal.timeout(10000),
+      }
+    );
+    const data = (await res.json().catch(() => null)) as any;
+    if (!res.ok || !data?.idToken) {
+      const errText = String(data?.error?.message || `Firebase REST Auth failed (${res.status})`);
+      const err: any = new Error(errText);
+      err.code = errText;
+      if (isFirebaseTooManyAttemptsError(err)) {
+        serverFirebaseRateLimitedUntil = Date.now() + FIREBASE_RATE_LIMIT_COOLDOWN_MS;
+        throw buildServerRateLimitError(pwDigest);
+      }
+      throw err;
+    }
+
+    serverWorkerRestSession = {
+      idToken: String(data.idToken),
+      refreshToken: String(data.refreshToken || ''),
+      expiresAt: Date.now() + (Number(data.expiresIn) || 3600) * 1000,
+      passwordDigest: pwDigest,
+    };
+    lastServerFirebaseAuthError = null;
+    serverFirebaseRateLimitedUntil = 0;
+    return serverWorkerRestSession.idToken;
+  })();
+
+  try {
+    return await serverWorkerRestSignInPromise;
+  } finally {
+    serverWorkerRestSignInPromise = null;
+  }
+}
+
+async function getServerWorkerRestToken(): Promise<string | null> {
+  if (serverAuth?.currentUser) {
+    const currentEmail = String(serverAuth.currentUser.email || '').trim().toLowerCase();
+    if (currentEmail === SUPER_ADMIN_EMAIL) {
+      try {
+        const sdkToken = await serverAuth.currentUser.getIdToken();
+        if (sdkToken) return sdkToken;
+      } catch {
+        // Fall through to REST worker session
+      }
+    }
+  }
+  const serverPw = getServerFirebasePassword();
+  if (!serverPw) return null;
+  const pwDigest = crypto.createHash('sha256').update(serverPw).digest('hex');
+  if (
+    serverWorkerRestSession &&
+    serverWorkerRestSession.passwordDigest === pwDigest &&
+    Date.now() < serverWorkerRestSession.expiresAt - 60_000
+  ) {
+    return serverWorkerRestSession.idToken;
+  }
+  if (Date.now() < serverFirebaseRateLimitedUntil) {
+    return null;
+  }
+  if (
+    lastServerFirebaseAuthError?.code === 'SERVER_FIREBASE_PASSWORD_INVALID' &&
+    lastServerFirebaseAuthError.passwordDigest === pwDigest
+  ) {
+    return null;
+  }
+  try {
+    return await signInServerWorkerViaRest(serverPw);
+  } catch {
+    return null;
   }
 }
 
 function isServerFirebaseBridgeReady(): boolean {
   if (!serverDb || !serverAuth) return false;
-  const currentEmail = String(serverAuth.currentUser?.email || '').trim().toLowerCase();
-  if (serverAuth.currentUser && currentEmail === SUPER_ADMIN_EMAIL) {
+  if (hasWarmServerWorkerSession()) {
     return true;
   }
-  return Boolean(getServerFirebasePassword());
+  if (Date.now() < serverFirebaseRateLimitedUntil) {
+    return false;
+  }
+  const pw = getServerFirebasePassword();
+  if (!pw) return false;
+  const pwDigest = crypto.createHash('sha256').update(pw).digest('hex');
+  if (
+    lastServerFirebaseAuthError?.code === 'SERVER_FIREBASE_PASSWORD_INVALID' &&
+    lastServerFirebaseAuthError.passwordDigest === pwDigest
+  ) {
+    return false;
+  }
+  return true;
 }
 
 async function ensureServerFirebaseSignedIn(): Promise<void> {
@@ -117,15 +368,130 @@ async function ensureServerFirebaseSignedIn(): Promise<void> {
   }
   const currentEmail = String(serverAuth.currentUser?.email || '').trim().toLowerCase();
   if (serverAuth.currentUser && currentEmail === SUPER_ADMIN_EMAIL) {
+    lastServerFirebaseAuthError = null;
+    serverFirebaseRateLimitedUntil = 0;
     return;
   }
   const serverPw = getServerFirebasePassword();
   if (!serverPw) {
     throw new ServerFirebaseConfigError(
-      'Konfigurasi SUPER_ADMIN_FIREBASE_PASSWORD belum tersedia di server. Hubungi administrator.'
+      'Konfigurasi SUPER_ADMIN_FIREBASE_PASSWORD belum tersedia di server. Hubungi administrator.',
+      'SERVER_FIREBASE_PASSWORD_MISSING'
     );
   }
-  await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, serverPw);
+  const pwDigest = crypto.createHash('sha256').update(serverPw).digest('hex');
+
+  if (
+    serverWorkerRestSession &&
+    serverWorkerRestSession.passwordDigest === pwDigest &&
+    Date.now() < serverWorkerRestSession.expiresAt - 120_000
+  ) {
+    lastServerFirebaseAuthError = null;
+    return;
+  }
+
+  if (
+    lastServerFirebaseAuthError?.code === 'SERVER_FIREBASE_PASSWORD_INVALID' &&
+    lastServerFirebaseAuthError.passwordDigest === pwDigest
+  ) {
+    throw new ServerFirebaseConfigError(
+      lastServerFirebaseAuthError.message,
+      'SERVER_FIREBASE_PASSWORD_INVALID'
+    );
+  }
+
+  if (Date.now() < serverFirebaseRateLimitedUntil) {
+    throw buildServerRateLimitError(pwDigest);
+  }
+
+  if (serverFirebaseSignInPromise) {
+    return serverFirebaseSignInPromise;
+  }
+
+  serverFirebaseSignInPromise = (async () => {
+    // Re-check inside lock
+    const lockEmail = String(serverAuth.currentUser?.email || '').trim().toLowerCase();
+    if (serverAuth.currentUser && lockEmail === SUPER_ADMIN_EMAIL) {
+      lastServerFirebaseAuthError = null;
+      return;
+    }
+    if (
+      serverWorkerRestSession &&
+      serverWorkerRestSession.passwordDigest === pwDigest &&
+      Date.now() < serverWorkerRestSession.expiresAt - 120_000
+    ) {
+      lastServerFirebaseAuthError = null;
+      return;
+    }
+    if (Date.now() < serverFirebaseRateLimitedUntil) {
+      throw buildServerRateLimitError(pwDigest);
+    }
+
+    let sdkErr: any = null;
+    try {
+      await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, serverPw);
+      lastServerFirebaseAuthError = null;
+      serverFirebaseRateLimitedUntil = 0;
+      return;
+    } catch (err: any) {
+      sdkErr = err;
+    }
+
+    if (isFirebaseInvalidCredentialError(sdkErr)) {
+      lastServerFirebaseAuthError = {
+        code: 'SERVER_FIREBASE_PASSWORD_INVALID',
+        message:
+          'Kata sandi Firebase Super Admin (SUPER_ADMIN_FIREBASE_PASSWORD) ditolak oleh Firebase Auth. Periksa kembali .env (gunakan tanda kutip jika mengandung karakter #).',
+        passwordDigest: pwDigest,
+      };
+      throw new ServerFirebaseConfigError(
+        lastServerFirebaseAuthError.message,
+        'SERVER_FIREBASE_PASSWORD_INVALID'
+      );
+    }
+
+    if (isFirebaseTooManyAttemptsError(sdkErr)) {
+      serverFirebaseRateLimitedUntil = Date.now() + FIREBASE_RATE_LIMIT_COOLDOWN_MS;
+      throw buildServerRateLimitError(pwDigest);
+    }
+
+    // Only if SDK sign-in hit a network/transport error, try direct HTTPS REST sign-in once
+    try {
+      const restToken = await signInServerWorkerViaRest(serverPw);
+      if (restToken) {
+        return;
+      }
+    } catch (restErr: any) {
+      if (restErr instanceof ServerFirebaseConfigError) {
+        throw restErr;
+      }
+      if (isFirebaseInvalidCredentialError(restErr)) {
+        lastServerFirebaseAuthError = {
+          code: 'SERVER_FIREBASE_PASSWORD_INVALID',
+          message:
+            'Kata sandi Firebase Super Admin (SUPER_ADMIN_FIREBASE_PASSWORD) ditolak oleh Firebase Auth. Periksa kembali .env (gunakan tanda kutip jika mengandung karakter #).',
+          passwordDigest: pwDigest,
+        };
+        throw new ServerFirebaseConfigError(
+          lastServerFirebaseAuthError.message,
+          'SERVER_FIREBASE_PASSWORD_INVALID'
+        );
+      }
+      if (isFirebaseTooManyAttemptsError(restErr)) {
+        serverFirebaseRateLimitedUntil = Date.now() + FIREBASE_RATE_LIMIT_COOLDOWN_MS;
+        throw buildServerRateLimitError(pwDigest);
+      }
+      throw restErr;
+    }
+
+    throw sdkErr;
+  })();
+
+  try {
+    await serverFirebaseSignInPromise;
+  } finally {
+    serverFirebaseSignInPromise = null;
+  }
 }
 
 async function activateProUserInFirestore(
@@ -388,9 +754,47 @@ async function syncUsersFromFirestore(force = false): Promise<number> {
       return usersStore.size;
     }
     await ensureServerFirebaseSignedIn();
-    const snap = await serverFsGetDocs(serverFsCollection(serverDb, 'users'));
+
+    let rows: Array<{ id: string; data: Record<string, any> }> = [];
+    try {
+      const snap = await serverFsGetDocs(serverFsCollection(serverDb, 'users'));
+      rows = snap.docs.map((d) => ({ id: d.id, data: (d.data() || {}) as Record<string, any> }));
+    } catch (sdkReadErr: any) {
+      const restToken = await getServerWorkerRestToken();
+      if (!restToken) throw sdkReadErr;
+      const projectRoot = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseServerConfig.projectId)}/databases/${encodeURIComponent(firebaseServerConfig.firestoreDatabaseId)}/documents`;
+      const restRes = await fetch(`${projectRoot}:runQuery`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${restToken}`,
+        },
+        body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'users' }] } }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!restRes.ok) throw sdkReadErr;
+      const body = (await restRes.json().catch(() => [])) as any[];
+      rows = (Array.isArray(body) ? body : [])
+        .filter((r: any) => r?.document?.name)
+        .map((r: any) => {
+          const id = String(r.document.name).split('/').pop() || '';
+          const fields = r.document.fields || {};
+          const decoded: Record<string, any> = {};
+          for (const [k, v] of Object.entries(fields)) {
+            const valObj = v as any;
+            if ('stringValue' in valObj) decoded[k] = valObj.stringValue;
+            else if ('booleanValue' in valObj) decoded[k] = valObj.booleanValue;
+            else if ('integerValue' in valObj) decoded[k] = Number(valObj.integerValue);
+            else if ('doubleValue' in valObj) decoded[k] = Number(valObj.doubleValue);
+            else if ('timestampValue' in valObj) decoded[k] = valObj.timestampValue;
+            else if ('nullValue' in valObj) decoded[k] = null;
+          }
+          return { id, data: decoded };
+        });
+    }
+
     hasInitialUsersSyncCompleted = true;
-    if (!snap || snap.empty) return usersStore.size;
+    if (rows.length === 0) return usersStore.size;
 
     const tsToIso = (val: any): string => {
       if (!val) return new Date().toISOString();
@@ -401,9 +805,9 @@ async function syncUsersFromFirestore(force = false): Promise<number> {
     };
 
     let importedCount = 0;
-    for (const d of snap.docs) {
-      const data = d.data() as Record<string, any>;
-      const uid = d.id;
+    for (const row of rows) {
+      const data = row.data;
+      const uid = row.id;
       const email = String(data.email || '').trim().toLowerCase();
       if (!uid) continue;
 
@@ -1472,17 +1876,22 @@ async function sendProSubscriptionPaymentEmail(payload: {
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
+  const isExplicitDevPortMode = process.env.NODE_ENV === 'development' || process.env.npm_lifecycle_event === 'dev';
   let selectedPort = 3000;
   const portArgIdx = process.argv.indexOf('--port');
   if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
     selectedPort = Number(process.argv[portArgIdx + 1]) || 3000;
-  } else if (process.env.NODE_ENV === 'production' && process.env.PORT) {
-    selectedPort = Number(process.env.PORT) || 3000;
+  } else if (!isExplicitDevPortMode && process.env.PORT) {
+    selectedPort = Number(String(process.env.PORT).trim()) || 3000;
   }
   const PORT = selectedPort;
 
   app.use(express.json({ limit: '100mb' }));
   app.use(express.urlencoded({ limit: '100mb', extended: true }));
+  app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    next();
+  });
 
   // =========================================================================
   // Signed User Session Tokens & Server-Side Identity Verification Helpers
@@ -1633,15 +2042,31 @@ async function startServer() {
     if (serverDb) {
       try {
         await ensureServerFirebaseSignedIn();
-        const snap = await serverFsGetDoc(serverFsDoc(serverDb, 'users', cleanTargetUid));
-        if (snap.exists()) {
-          const fsEmail = String(snap.data()?.email || '').trim().toLowerCase();
-          if (fsEmail && fsEmail === normEmail) {
-            return true;
+        if (serverAuth?.currentUser) {
+          const snap = await serverFsGetDoc(serverFsDoc(serverDb, 'users', cleanTargetUid));
+          if (snap.exists()) {
+            const fsEmail = String(snap.data()?.email || '').trim().toLowerCase();
+            if (fsEmail && fsEmail === normEmail) {
+              return true;
+            }
           }
         }
       } catch {
-        // Ignore Firestore lookup fallback failure
+        // Ignore Firestore SDK lookup failure and try REST fallback below
+      }
+      try {
+        const restToken = await getServerWorkerRestToken();
+        if (restToken) {
+          const restSnap = await firestoreRestGetDocRaw(restToken, 'users', cleanTargetUid);
+          if (restSnap.exists) {
+            const fsEmail = String(decodeFirestoreRestFields(restSnap.fields).email || '').trim().toLowerCase();
+            if (fsEmail && fsEmail === normEmail) {
+              return true;
+            }
+          }
+        }
+      } catch {
+        // Ignore Firestore REST lookup fallback failure
       }
     }
     return false;
@@ -1853,29 +2278,17 @@ async function startServer() {
     });
   });
 
-  // Helper to resolve a user by email or username via server Firestore when absent from local store
-  async function findUserInServerFirestore(identifierRaw: string): Promise<ServerUserRecord | undefined> {
+  // Helper to resolve a user by email or username via server Firestore (with REST fallback)
+  async function findUserInServerFirestore(
+    identifierRaw: string,
+    callerIdToken?: string
+  ): Promise<ServerUserRecord | undefined> {
     if (!serverDb) return undefined;
     const clean = identifierRaw.trim().toLowerCase().replace(/^@+/, '');
     const normalized = clean.replace(/\s+/g, '_');
     if (!clean) return undefined;
-    try {
-      await ensureServerFirebaseSignedIn();
-      const colRef = serverFsCollection(serverDb, 'users');
-      let snap: any = null;
-      if (clean.includes('@')) {
-        snap = await serverFsGetDocs(serverFsQuery(colRef, serverFsWhere('email', '==', clean), serverFsLimit(1)));
-      }
-      if (!snap || snap.empty) {
-        snap = await serverFsGetDocs(serverFsQuery(colRef, serverFsWhere('username', '==', clean), serverFsLimit(1)));
-      }
-      if ((!snap || snap.empty) && normalized !== clean) {
-        snap = await serverFsGetDocs(serverFsQuery(colRef, serverFsWhere('username', '==', normalized), serverFsLimit(1)));
-      }
-      if (!snap || snap.empty) return undefined;
-      const d = snap.docs[0];
-      const data = d.data() as Record<string, any>;
-      const uid = d.id;
+
+    const toUserRecord = (uid: string, data: Record<string, any>): ServerUserRecord | undefined => {
       const email = String(data.email || '').trim().toLowerCase();
       if (!uid || !email) return undefined;
       const isSuper = email === SUPER_ADMIN_EMAIL || email === WORKSPACE_ADMIN_EMAIL || uid === 'admin_vuedevo_01';
@@ -1912,9 +2325,64 @@ async function startServer() {
       usersStore.set(uid, record);
       savePersistedUsersCache();
       return record;
+    };
+
+    try {
+      await ensureServerFirebaseSignedIn();
+      const colRef = serverFsCollection(serverDb, 'users');
+      let snap: any = null;
+      if (clean.includes('@')) {
+        snap = await serverFsGetDocs(serverFsQuery(colRef, serverFsWhere('email', '==', clean), serverFsLimit(1)));
+      }
+      if (!snap || snap.empty) {
+        snap = await serverFsGetDocs(serverFsQuery(colRef, serverFsWhere('username', '==', clean), serverFsLimit(1)));
+      }
+      if ((!snap || snap.empty) && normalized !== clean) {
+        snap = await serverFsGetDocs(serverFsQuery(colRef, serverFsWhere('username', '==', normalized), serverFsLimit(1)));
+      }
+      if (snap && !snap.empty) {
+        const d = snap.docs[0];
+        return toUserRecord(d.id, d.data() as Record<string, any>);
+      }
     } catch {
-      return undefined;
+      // Fall through to REST lookup below
     }
+
+    const restToken = (await getServerWorkerRestToken()) || (callerIdToken ? String(callerIdToken).trim() : '');
+    if (!restToken) return undefined;
+    try {
+      if (clean.includes('@')) {
+        const rows = await firestoreRestRunQuery(
+          restToken,
+          'users',
+          [{ field: 'email', op: '==', value: clean }],
+          [],
+          1
+        );
+        if (rows.length > 0) return toUserRecord(rows[0].id, rows[0].data);
+      }
+      const uRows = await firestoreRestRunQuery(
+        restToken,
+        'users',
+        [{ field: 'username', op: '==', value: clean }],
+        [],
+        1
+      );
+      if (uRows.length > 0) return toUserRecord(uRows[0].id, uRows[0].data);
+      if (normalized !== clean) {
+        const nRows = await firestoreRestRunQuery(
+          restToken,
+          'users',
+          [{ field: 'username', op: '==', value: normalized }],
+          [],
+          1
+        );
+        if (nRows.length > 0) return toUserRecord(nRows[0].id, nRows[0].data);
+      }
+    } catch {
+      // Ignore REST lookup error
+    }
+    return undefined;
   }
 
   // Authenticate with Email or Username & Password
@@ -2012,11 +2480,21 @@ async function startServer() {
         return;
       }
 
-      if (!getServerFirebasePassword() && targetEmailForOtp === SUPER_ADMIN_EMAIL && serverAuth) {
+      if (
+        !getServerFirebasePassword() &&
+        targetEmailForOtp === SUPER_ADMIN_EMAIL &&
+        serverAuth &&
+        Date.now() >= serverFirebaseRateLimitedUntil
+      ) {
         try {
           await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, password);
           runtimeServerFbPassword = password;
-        } catch {
+          lastServerFirebaseAuthError = null;
+          serverFirebaseRateLimitedUntil = 0;
+        } catch (err: any) {
+          if (isFirebaseTooManyAttemptsError(err)) {
+            serverFirebaseRateLimitedUntil = Date.now() + FIREBASE_RATE_LIMIT_COOLDOWN_MS;
+          }
           // Do not cache an unverified app password as Firebase Auth password
         }
       }
@@ -2170,6 +2648,9 @@ async function startServer() {
             const fbUid = String(signInData.localId).trim();
             const fbEmail = String(signInData.email || identifierRaw).trim().toLowerCase();
             if (!matchedUser) {
+              matchedUser = await findUserInServerFirestore(fbEmail, signInData.idToken);
+            }
+            if (!matchedUser) {
               let fsDocData: Record<string, any> | null = null;
               try {
                 const restSnap = await firestoreRestGetDocRaw(signInData.idToken, 'users', fbUid);
@@ -2313,7 +2794,7 @@ async function startServer() {
       }
     }
     if (!matchedUser) {
-      matchedUser = await findUserInServerFirestore(fbEmail);
+      matchedUser = await findUserInServerFirestore(fbEmail, idToken);
     }
 
     if (isSuperAdminEmail) {
@@ -6987,12 +7468,129 @@ async function startServer() {
     return null;
   }
 
+  async function firestoreRestRunQuery(
+    idToken: string,
+    colName: string,
+    wheres: any[],
+    orderBys: any[],
+    limitCount?: number,
+    startAfterDocId?: string
+  ): Promise<Array<{ id: string; data: Record<string, any> }>> {
+    const structuredQuery: Record<string, any> = {
+      from: [{ collectionId: colName }],
+    };
+    const restWhere = buildRestStructuredWhere(wheres);
+    if (restWhere) structuredQuery.where = restWhere;
+
+    const normalizedOrders: Array<{ field: { fieldPath: string }; direction: 'ASCENDING' | 'DESCENDING' }> =
+      orderBys
+        .filter((o: any) => o && typeof o.field === 'string')
+        .map((o: any) => ({
+          field: { fieldPath: String(o.field) },
+          direction: o.dir === 'desc' ? 'DESCENDING' : 'ASCENDING',
+        }));
+
+    if (startAfterDocId) {
+      const cursorDoc = await firestoreRestGetDocRaw(idToken, colName, startAfterDocId);
+      if (cursorDoc.exists && cursorDoc.name) {
+        const startValues = normalizedOrders.map(
+          (o) => cursorDoc.fields?.[o.field.fieldPath] ?? { nullValue: null }
+        );
+        const lastDir =
+          normalizedOrders.length > 0
+            ? normalizedOrders[normalizedOrders.length - 1].direction
+            : 'ASCENDING';
+        if (!normalizedOrders.some((o) => o.field.fieldPath === '__name__')) {
+          normalizedOrders.push({ field: { fieldPath: '__name__' }, direction: lastDir });
+        }
+        startValues.push({ referenceValue: cursorDoc.name });
+        structuredQuery.startAt = { values: startValues, before: false };
+      }
+    }
+
+    if (normalizedOrders.length > 0) {
+      structuredQuery.orderBy = normalizedOrders;
+    }
+    if (limitCount) {
+      structuredQuery.limit = limitCount;
+    }
+
+    const restRes = await fetch(`${fsRestDocsRoot()}:runQuery`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({ structuredQuery }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const restBody = (await restRes.json().catch(() => null)) as any;
+    if (!restRes.ok) {
+      throw new Error(restBody?.error?.message || `Firestore REST query failed (${restRes.status})`);
+    }
+    const rows = Array.isArray(restBody) ? restBody : [];
+    return rows
+      .filter((row: any) => row?.document?.name)
+      .map((row: any) => {
+        const docPath = String(row.document.name);
+        const docIdPart = docPath.split('/').pop() || '';
+        return {
+          id: docIdPart,
+          data: stripSensitiveUserFields(colName, decodeFirestoreRestFields(row.document.fields)),
+        };
+      });
+  }
+
+  async function firestoreRestRunCount(
+    idToken: string,
+    colName: string,
+    wheres: any[]
+  ): Promise<number> {
+    const structuredQuery: Record<string, any> = {
+      from: [{ collectionId: colName }],
+    };
+    const restWhere = buildRestStructuredWhere(wheres);
+    if (restWhere) structuredQuery.where = restWhere;
+
+    const restRes = await fetch(`${fsRestDocsRoot()}:runAggregationQuery`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({
+        structuredAggregationQuery: {
+          structuredQuery,
+          aggregations: [{ alias: 'count', count: {} }],
+        },
+      }),
+      signal: AbortSignal.timeout(12000),
+    });
+    const restBody = (await restRes.json().catch(() => null)) as any;
+    if (!restRes.ok) {
+      throw new Error(restBody?.error?.message || `Firestore REST count failed (${restRes.status})`);
+    }
+    const rows = Array.isArray(restBody) ? restBody : [];
+    return Number(rows?.[0]?.result?.aggregateFields?.count?.integerValue || 0);
+  }
+
   app.get('/api/system/firebase-bridge-status', (_req: Request, res: Response) => {
+    if (
+      lastServerFirebaseAuthError?.code === 'SERVER_FIREBASE_RATE_LIMITED' &&
+      Date.now() >= serverFirebaseRateLimitedUntil
+    ) {
+      lastServerFirebaseAuthError = null;
+    }
     res.json({
       success: true,
       configured: isServerFirebaseBridgeReady(),
-      hasEnvPassword: Boolean((process.env.SUPER_ADMIN_FIREBASE_PASSWORD || '').trim()),
-      serverSignedIn: Boolean(serverAuth?.currentUser),
+      hasEnvPassword: Boolean(getServerFirebasePassword()),
+      serverSignedIn: Boolean(serverAuth?.currentUser || serverWorkerRestSession),
+      rateLimitedUntil:
+        Date.now() < serverFirebaseRateLimitedUntil ? serverFirebaseRateLimitedUntil : null,
+      lastError: lastServerFirebaseAuthError
+        ? { code: lastServerFirebaseAuthError.code, message: lastServerFirebaseAuthError.message }
+        : null,
     });
   });
 
@@ -7009,12 +7607,48 @@ async function startServer() {
     try {
       await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, password);
       runtimeServerFbPassword = password;
+      lastServerFirebaseAuthError = null;
+      serverFirebaseRateLimitedUntil = 0;
       void syncUsersFromFirestore(true).catch(() => {});
       res.json({
         success: true,
         configured: true,
       });
-    } catch {
+    } catch (sdkErr: any) {
+      if (isFirebaseTooManyAttemptsError(sdkErr)) {
+        serverFirebaseRateLimitedUntil = Date.now() + FIREBASE_RATE_LIMIT_COOLDOWN_MS;
+        const rateErr = buildServerRateLimitError(
+          crypto.createHash('sha256').update(password).digest('hex')
+        );
+        res.status(429).json({
+          success: false,
+          code: rateErr.code,
+          error: rateErr.message,
+        });
+        return;
+      }
+      if (!isFirebaseInvalidCredentialError(sdkErr)) {
+        try {
+          const restToken = await signInServerWorkerViaRest(password);
+          if (restToken) {
+            runtimeServerFbPassword = password;
+            lastServerFirebaseAuthError = null;
+            serverFirebaseRateLimitedUntil = 0;
+            void syncUsersFromFirestore(true).catch(() => {});
+            res.json({ success: true, configured: true });
+            return;
+          }
+        } catch (restErr: any) {
+          if (restErr instanceof ServerFirebaseConfigError && restErr.code === 'SERVER_FIREBASE_RATE_LIMITED') {
+            res.status(429).json({
+              success: false,
+              code: restErr.code,
+              error: restErr.message,
+            });
+            return;
+          }
+        }
+      }
       res.status(401).json({
         success: false,
         error: 'Kata sandi Firebase Auth untuk vuedevo@gmail.com tidak valid.',
@@ -7049,46 +7683,13 @@ async function startServer() {
       }
     }
 
-    try {
-      if (!isServerFirebaseBridgeReady()) {
-        const restToken = await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid, colName);
-        if (restToken) {
-          const restSnap = await firestoreRestGetDocRaw(restToken, colName, docId);
-          if (!restSnap.exists) {
-            res.json({ success: true, exists: false, id: docId, data: null });
-            return;
-          }
-          const rawData = decodeFirestoreRestFields(restSnap.fields);
-          const docOwner = String(rawData.ownerId || '').trim();
-          const allowedNonUser =
-            caller.isAdmin ||
-            docOwner === targetOwnerUid ||
-            docOwner === caller.uid ||
-            (colName === 'categories' && SHARED_CATEGORY_OWNER_IDS.has(docOwner)) ||
-            (colName === 'report_settings' && docId === targetOwnerUid);
-
-          if (colName !== 'users' && !allowedNonUser) {
-            res.status(403).json({ success: false, error: 'Dokumen bukan milik akun Anda.' });
-            return;
-          }
-
-          res.json({
-            success: true,
-            exists: true,
-            id: docId,
-            data: stripSensitiveUserFields(colName, rawData),
-          });
-          return;
-        }
-      }
-
-      await ensureServerFirebaseSignedIn();
-      const snap = await serverFsGetDoc(serverFsDoc(serverDb, colName, docId));
-      if (!snap.exists()) {
+    const handleDocViaRest = async (restToken: string) => {
+      const restSnap = await firestoreRestGetDocRaw(restToken, colName, docId);
+      if (!restSnap.exists) {
         res.json({ success: true, exists: false, id: docId, data: null });
         return;
       }
-      const rawData = (snap.data() || {}) as Record<string, any>;
+      const rawData = decodeFirestoreRestFields(restSnap.fields);
       const docOwner = String(rawData.ownerId || '').trim();
       const allowedNonUser =
         caller.isAdmin ||
@@ -7102,13 +7703,70 @@ async function startServer() {
         return;
       }
 
-      const serialized = stripSensitiveUserFields(colName, tsToIsoValue(rawData));
       res.json({
         success: true,
         exists: true,
-        id: snap.id,
-        data: serialized,
+        id: docId,
+        data: stripSensitiveUserFields(colName, rawData),
       });
+    };
+
+    try {
+      if (!hasWarmServerWorkerSession()) {
+        const restToken = await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid, colName);
+        if (restToken) {
+          await handleDocViaRest(restToken);
+          return;
+        }
+      }
+
+      try {
+        await ensureServerFirebaseSignedIn();
+        if (!serverAuth?.currentUser) {
+          const workerRestToken = await getServerWorkerRestToken();
+          if (workerRestToken) {
+            await handleDocViaRest(workerRestToken);
+            return;
+          }
+        }
+        const snap = await serverFsGetDoc(serverFsDoc(serverDb, colName, docId));
+        if (!snap.exists()) {
+          res.json({ success: true, exists: false, id: docId, data: null });
+          return;
+        }
+        const rawData = (snap.data() || {}) as Record<string, any>;
+        const docOwner = String(rawData.ownerId || '').trim();
+        const allowedNonUser =
+          caller.isAdmin ||
+          docOwner === targetOwnerUid ||
+          docOwner === caller.uid ||
+          (colName === 'categories' && SHARED_CATEGORY_OWNER_IDS.has(docOwner)) ||
+          (colName === 'report_settings' && docId === targetOwnerUid);
+
+        if (colName !== 'users' && !allowedNonUser) {
+          res.status(403).json({ success: false, error: 'Dokumen bukan milik akun Anda.' });
+          return;
+        }
+
+        const serialized = stripSensitiveUserFields(colName, tsToIsoValue(rawData));
+        res.json({
+          success: true,
+          exists: true,
+          id: snap.id,
+          data: serialized,
+        });
+        return;
+      } catch (sdkErr: any) {
+        const canTryWorkerRest = !(sdkErr instanceof ServerFirebaseConfigError);
+        const fallbackRestToken =
+          (canTryWorkerRest ? await getServerWorkerRestToken() : null) ||
+          (await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid, colName));
+        if (fallbackRestToken) {
+          await handleDocViaRest(fallbackRestToken);
+          return;
+        }
+        throw sdkErr;
+      }
     } catch (err: any) {
       if (err instanceof ServerFirebaseConfigError) {
         res.status(err.statusCode).json({
@@ -7161,107 +7819,81 @@ async function startServer() {
     }
 
     try {
-      if (!isServerFirebaseBridgeReady()) {
+      if (!hasWarmServerWorkerSession()) {
         const restToken = await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid, colName);
         if (restToken) {
-          const structuredQuery: Record<string, any> = {
-            from: [{ collectionId: colName }],
-          };
-          const restWhere = buildRestStructuredWhere(wheres);
-          if (restWhere) structuredQuery.where = restWhere;
-
-          const normalizedOrders: Array<{ field: { fieldPath: string }; direction: 'ASCENDING' | 'DESCENDING' }> =
-            orderBys
-              .filter((o: any) => o && typeof o.field === 'string')
-              .map((o: any) => ({
-                field: { fieldPath: String(o.field) },
-                direction: o.dir === 'desc' ? 'DESCENDING' : 'ASCENDING',
-              }));
-
-          if (startAfterDocId) {
-            const cursorDoc = await firestoreRestGetDocRaw(restToken, colName, startAfterDocId);
-            if (cursorDoc.exists && cursorDoc.name) {
-              const startValues = normalizedOrders.map(
-                (o) => cursorDoc.fields?.[o.field.fieldPath] ?? { nullValue: null }
-              );
-              const lastDir =
-                normalizedOrders.length > 0
-                  ? normalizedOrders[normalizedOrders.length - 1].direction
-                  : 'ASCENDING';
-              if (!normalizedOrders.some((o) => o.field.fieldPath === '__name__')) {
-                normalizedOrders.push({ field: { fieldPath: '__name__' }, direction: lastDir });
-              }
-              startValues.push({ referenceValue: cursorDoc.name });
-              structuredQuery.startAt = { values: startValues, before: false };
-            }
-          }
-
-          if (normalizedOrders.length > 0) {
-            structuredQuery.orderBy = normalizedOrders;
-          }
-          if (limitCount) {
-            structuredQuery.limit = limitCount;
-          }
-
-          const restRes = await fetch(`${fsRestDocsRoot()}:runQuery`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${restToken}`,
-            },
-            body: JSON.stringify({ structuredQuery }),
-            signal: AbortSignal.timeout(15000),
-          });
-          const restBody = (await restRes.json().catch(() => null)) as any;
-          if (!restRes.ok) {
-            throw new Error(restBody?.error?.message || `Firestore REST query failed (${restRes.status})`);
-          }
-          const rows = Array.isArray(restBody) ? restBody : [];
-          const docs = rows
-            .filter((row: any) => row?.document?.name)
-            .map((row: any) => {
-              const docPath = String(row.document.name);
-              const docIdPart = docPath.split('/').pop() || '';
-              return {
-                id: docIdPart,
-                data: stripSensitiveUserFields(colName, decodeFirestoreRestFields(row.document.fields)),
-              };
-            });
+          const docs = await firestoreRestRunQuery(restToken, colName, wheres, orderBys, limitCount, startAfterDocId);
           res.json({ success: true, docs });
           return;
         }
       }
 
-      await ensureServerFirebaseSignedIn();
-      const constraints: any[] = [];
-      for (const w of wheres) {
-        if (w && typeof w.field === 'string' && typeof w.op === 'string') {
-          constraints.push(serverFsWhere(w.field, w.op as any, w.value));
+      try {
+        await ensureServerFirebaseSignedIn();
+        if (!serverAuth?.currentUser) {
+          const workerRestToken = await getServerWorkerRestToken();
+          if (workerRestToken) {
+            const docs = await firestoreRestRunQuery(
+              workerRestToken,
+              colName,
+              wheres,
+              orderBys,
+              limitCount,
+              startAfterDocId
+            );
+            res.json({ success: true, docs });
+            return;
+          }
         }
-      }
-      for (const o of orderBys) {
-        if (o && typeof o.field === 'string') {
-          constraints.push(serverFsOrderBy(o.field, o.dir === 'desc' ? 'desc' : 'asc'));
+        const constraints: any[] = [];
+        for (const w of wheres) {
+          if (w && typeof w.field === 'string' && typeof w.op === 'string') {
+            constraints.push(serverFsWhere(w.field, w.op as any, w.value));
+          }
         }
-      }
-      if (startAfterDocId) {
-        const cursorSnap = await serverFsGetDoc(serverFsDoc(serverDb, colName, startAfterDocId));
-        if (cursorSnap.exists()) {
-          constraints.push(serverFsStartAfter(cursorSnap));
+        for (const o of orderBys) {
+          if (o && typeof o.field === 'string') {
+            constraints.push(serverFsOrderBy(o.field, o.dir === 'desc' ? 'desc' : 'asc'));
+          }
         }
-      }
-      if (limitCount) {
-        constraints.push(serverFsLimit(limitCount));
-      }
+        if (startAfterDocId) {
+          const cursorSnap = await serverFsGetDoc(serverFsDoc(serverDb, colName, startAfterDocId));
+          if (cursorSnap.exists()) {
+            constraints.push(serverFsStartAfter(cursorSnap));
+          }
+        }
+        if (limitCount) {
+          constraints.push(serverFsLimit(limitCount));
+        }
 
-      const q = serverFsQuery(serverFsCollection(serverDb, colName), ...constraints);
-      const snap = await serverFsGetDocs(q);
-      const docs = snap.docs.map((d) => ({
-        id: d.id,
-        data: stripSensitiveUserFields(colName, tsToIsoValue(d.data() || {})),
-      }));
+        const q = serverFsQuery(serverFsCollection(serverDb, colName), ...constraints);
+        const snap = await serverFsGetDocs(q);
+        const docs = snap.docs.map((d) => ({
+          id: d.id,
+          data: stripSensitiveUserFields(colName, tsToIsoValue(d.data() || {})),
+        }));
 
-      res.json({ success: true, docs });
+        res.json({ success: true, docs });
+        return;
+      } catch (sdkErr: any) {
+        const canTryWorkerRest = !(sdkErr instanceof ServerFirebaseConfigError);
+        const fallbackRestToken =
+          (canTryWorkerRest ? await getServerWorkerRestToken() : null) ||
+          (await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid, colName));
+        if (fallbackRestToken) {
+          const docs = await firestoreRestRunQuery(
+            fallbackRestToken,
+            colName,
+            wheres,
+            orderBys,
+            limitCount,
+            startAfterDocId
+          );
+          res.json({ success: true, docs });
+          return;
+        }
+        throw sdkErr;
+      }
     } catch (err: any) {
       if (err instanceof ServerFirebaseConfigError) {
         res.status(err.statusCode).json({
@@ -7301,50 +7933,47 @@ async function startServer() {
     }
 
     try {
-      if (!isServerFirebaseBridgeReady()) {
+      if (!hasWarmServerWorkerSession()) {
         const restToken = await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid, colName);
         if (restToken) {
-          const structuredQuery: Record<string, any> = {
-            from: [{ collectionId: colName }],
-          };
-          const restWhere = buildRestStructuredWhere(wheres);
-          if (restWhere) structuredQuery.where = restWhere;
-
-          const restRes = await fetch(`${fsRestDocsRoot()}:runAggregationQuery`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${restToken}`,
-            },
-            body: JSON.stringify({
-              structuredAggregationQuery: {
-                structuredQuery,
-                aggregations: [{ alias: 'count', count: {} }],
-              },
-            }),
-            signal: AbortSignal.timeout(12000),
-          });
-          const restBody = (await restRes.json().catch(() => null)) as any;
-          if (!restRes.ok) {
-            throw new Error(restBody?.error?.message || `Firestore REST count failed (${restRes.status})`);
-          }
-          const rows = Array.isArray(restBody) ? restBody : [];
-          const countVal = Number(rows?.[0]?.result?.aggregateFields?.count?.integerValue || 0);
+          const countVal = await firestoreRestRunCount(restToken, colName, wheres);
           res.json({ success: true, count: countVal });
           return;
         }
       }
 
-      await ensureServerFirebaseSignedIn();
-      const constraints: any[] = [];
-      for (const w of wheres) {
-        if (w && typeof w.field === 'string' && typeof w.op === 'string') {
-          constraints.push(serverFsWhere(w.field, w.op as any, w.value));
+      try {
+        await ensureServerFirebaseSignedIn();
+        if (!serverAuth?.currentUser) {
+          const workerRestToken = await getServerWorkerRestToken();
+          if (workerRestToken) {
+            const countVal = await firestoreRestRunCount(workerRestToken, colName, wheres);
+            res.json({ success: true, count: countVal });
+            return;
+          }
         }
+        const constraints: any[] = [];
+        for (const w of wheres) {
+          if (w && typeof w.field === 'string' && typeof w.op === 'string') {
+            constraints.push(serverFsWhere(w.field, w.op as any, w.value));
+          }
+        }
+        const q = serverFsQuery(serverFsCollection(serverDb, colName), ...constraints);
+        const snap = await serverFsGetCountFromServer(q);
+        res.json({ success: true, count: Number(snap.data().count || 0) });
+        return;
+      } catch (sdkErr: any) {
+        const canTryWorkerRest = !(sdkErr instanceof ServerFirebaseConfigError);
+        const fallbackRestToken =
+          (canTryWorkerRest ? await getServerWorkerRestToken() : null) ||
+          (await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid, colName));
+        if (fallbackRestToken) {
+          const countVal = await firestoreRestRunCount(fallbackRestToken, colName, wheres);
+          res.json({ success: true, count: countVal });
+          return;
+        }
+        throw sdkErr;
       }
-      const q = serverFsQuery(serverFsCollection(serverDb, colName), ...constraints);
-      const snap = await serverFsGetCountFromServer(q);
-      res.json({ success: true, count: Number(snap.data().count || 0) });
     } catch (err: any) {
       if (err instanceof ServerFirebaseConfigError) {
         res.status(err.statusCode).json({
@@ -7377,13 +8006,161 @@ async function startServer() {
     }
     const targetOwnerUid = rawOwner || caller.uid;
 
+    const executeMutateViaRest = async (restToken: string) => {
+      const writes: any[] = [];
+      for (const item of ops) {
+        const opType = item?.op;
+        const colName = String(item?.collection || '').trim();
+        const docId = String(item?.docId || '').trim();
+
+        if (!ALLOWED_USER_DB_COLLECTIONS.has(colName) || !docId || docId.includes('/')) {
+          return { status: 400, error: `Operasi pada ${colName}/${docId} tidak valid.` };
+        }
+
+        const docPath = fsRestDocResourcePath(colName, docId);
+        if (opType === 'delete') {
+          if (!caller.isAdmin) {
+            if (colName === 'users') {
+              return { status: 403, error: 'Tidak dapat menghapus dokumen users.' };
+            }
+            const existingSnap = await firestoreRestGetDocRaw(restToken, colName, docId);
+            if (existingSnap.exists) {
+              const existingOwner = String(decodeFirestoreRestFields(existingSnap.fields).ownerId || '').trim();
+              if (existingOwner !== targetOwnerUid && existingOwner !== caller.uid) {
+                return { status: 403, error: 'Tidak berwenang menghapus dokumen pengguna lain.' };
+              }
+            }
+          }
+          writes.push({ delete: docPath });
+          continue;
+        }
+
+        if (opType !== 'set' && opType !== 'update') {
+          return { status: 400, error: 'Jenis operasi database tidak dikenal.' };
+        }
+
+        const rawPayload = item?.data && typeof item.data === 'object' ? { ...item.data } : {};
+        if (!caller.isAdmin) {
+          if (colName === 'users') {
+            const ownsUserDoc = await doesCallerOwnTargetUid(caller.uid, caller.email, docId);
+            if (!ownsUserDoc) {
+              return { status: 403, error: 'Tidak berwenang mengubah profil pengguna lain.' };
+            }
+            for (const f of USER_SENSITIVE_FIELDS) {
+              delete rawPayload[f];
+            }
+            if (
+              rawPayload.subscriptionStatus !== undefined &&
+              rawPayload.subscriptionStatus !== 'free' &&
+              rawPayload.subscriptionStatus !== 'pending'
+            ) {
+              delete rawPayload.subscriptionStatus;
+            }
+          } else {
+            if (
+              rawPayload.ownerId !== undefined &&
+              String(rawPayload.ownerId || '').trim() !== targetOwnerUid &&
+              String(rawPayload.ownerId || '').trim() !== caller.uid
+            ) {
+              return { status: 403, error: 'ownerId dokumen harus sesuai akun yang sedang masuk.' };
+            }
+            if (opType === 'update') {
+              const existingSnap = await firestoreRestGetDocRaw(restToken, colName, docId);
+              if (existingSnap.exists) {
+                const existingOwner = String(decodeFirestoreRestFields(existingSnap.fields).ownerId || '').trim();
+                const isOwnReport = colName === 'report_settings' && docId === targetOwnerUid;
+                if (!isOwnReport && existingOwner !== targetOwnerUid && existingOwner !== caller.uid) {
+                  return { status: 403, error: 'Tidak berwenang memperbarui dokumen pengguna lain.' };
+                }
+              }
+            } else if (!rawPayload.ownerId) {
+              rawPayload.ownerId = targetOwnerUid;
+            }
+          }
+        }
+
+        const fields: Record<string, any> = {};
+        const fieldPaths: string[] = [];
+        const transforms: any[] = [];
+        for (const [k, v] of Object.entries(rawPayload)) {
+          if (v === undefined) continue;
+          const sentinel = v as { __fsType?: string; delta?: number } | null;
+          if (sentinel && typeof sentinel === 'object' && sentinel.__fsType === 'serverTimestamp') {
+            transforms.push({ fieldPath: k, setToServerValue: 'REQUEST_TIME' });
+          } else if (sentinel && typeof sentinel === 'object' && sentinel.__fsType === 'increment') {
+            const delta = Number(sentinel.delta || 0);
+            transforms.push({
+              fieldPath: k,
+              increment: Number.isInteger(delta) ? { integerValue: String(delta) } : { doubleValue: delta },
+            });
+          } else {
+            fields[k] = encodeFirestoreRestValue(v);
+            fieldPaths.push(k);
+          }
+        }
+
+        const writeObj: Record<string, any> = {
+          update: { name: docPath, fields },
+        };
+        if (opType === 'update' || item?.merge) {
+          writeObj.updateMask = { fieldPaths };
+        }
+        if (opType === 'update') {
+          writeObj.currentDocument = { exists: true };
+        }
+        if (transforms.length > 0) {
+          writeObj.updateTransforms = transforms;
+        }
+        writes.push(writeObj);
+      }
+
+      const commitRes = await fetch(`${fsRestDocsRoot()}:commit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${restToken}`,
+        },
+        body: JSON.stringify({ writes }),
+        signal: AbortSignal.timeout(15000),
+      });
+      const commitBody = (await commitRes.json().catch(() => null)) as any;
+      if (!commitRes.ok) {
+        throw new Error(commitBody?.error?.message || `Firestore REST commit failed (${commitRes.status})`);
+      }
+      return { status: 200 };
+    };
+
     try {
-      const restToken = !isServerFirebaseBridgeReady()
+      const preRestToken = !hasWarmServerWorkerSession()
         ? await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid)
         : null;
 
-      if (restToken) {
-        const writes: any[] = [];
+      if (preRestToken) {
+        const restOutcome = await executeMutateViaRest(preRestToken);
+        if (restOutcome.status !== 200) {
+          res.status(restOutcome.status).json({ success: false, error: restOutcome.error });
+          return;
+        }
+        res.json({ success: true });
+        return;
+      }
+
+      try {
+        await ensureServerFirebaseSignedIn();
+        if (!serverAuth?.currentUser) {
+          const workerRestToken = await getServerWorkerRestToken();
+          if (workerRestToken) {
+            const restOutcome = await executeMutateViaRest(workerRestToken);
+            if (restOutcome.status !== 200) {
+              res.status(restOutcome.status).json({ success: false, error: restOutcome.error });
+              return;
+            }
+            res.json({ success: true });
+            return;
+          }
+        }
+        const batch = serverFsWriteBatch(serverDb);
+
         for (const item of ops) {
           const opType = item?.op;
           const colName = String(item?.collection || '').trim();
@@ -7394,23 +8171,24 @@ async function startServer() {
             return;
           }
 
-          const docPath = fsRestDocResourcePath(colName, docId);
+          const docRef = serverFsDoc(serverDb, colName, docId);
+
           if (opType === 'delete') {
             if (!caller.isAdmin) {
               if (colName === 'users') {
                 res.status(403).json({ success: false, error: 'Tidak dapat menghapus dokumen users.' });
                 return;
               }
-              const existingSnap = await firestoreRestGetDocRaw(restToken, colName, docId);
-              if (existingSnap.exists) {
-                const existingOwner = String(decodeFirestoreRestFields(existingSnap.fields).ownerId || '').trim();
+              const existingSnap = await serverFsGetDoc(docRef);
+              if (existingSnap.exists()) {
+                const existingOwner = String(existingSnap.data()?.ownerId || '').trim();
                 if (existingOwner !== targetOwnerUid && existingOwner !== caller.uid) {
                   res.status(403).json({ success: false, error: 'Tidak berwenang menghapus dokumen pengguna lain.' });
                   return;
                 }
               }
             }
-            writes.push({ delete: docPath });
+            batch.delete(docRef);
             continue;
           }
 
@@ -7420,6 +8198,7 @@ async function startServer() {
           }
 
           const rawPayload = item?.data && typeof item.data === 'object' ? { ...item.data } : {};
+
           if (!caller.isAdmin) {
             if (colName === 'users') {
               const ownsUserDoc = await doesCallerOwnTargetUid(caller.uid, caller.email, docId);
@@ -7447,9 +8226,9 @@ async function startServer() {
                 return;
               }
               if (opType === 'update') {
-                const existingSnap = await firestoreRestGetDocRaw(restToken, colName, docId);
-                if (existingSnap.exists) {
-                  const existingOwner = String(decodeFirestoreRestFields(existingSnap.fields).ownerId || '').trim();
+                const existingSnap = await serverFsGetDoc(docRef);
+                if (existingSnap.exists()) {
+                  const existingOwner = String(existingSnap.data()?.ownerId || '').trim();
                   const isOwnReport = colName === 'report_settings' && docId === targetOwnerUid;
                   if (!isOwnReport && existingOwner !== targetOwnerUid && existingOwner !== caller.uid) {
                     res.status(403).json({ success: false, error: 'Tidak berwenang memperbarui dokumen pengguna lain.' });
@@ -7462,155 +8241,38 @@ async function startServer() {
             }
           }
 
-          const fields: Record<string, any> = {};
-          const fieldPaths: string[] = [];
-          const transforms: any[] = [];
-          for (const [k, v] of Object.entries(rawPayload)) {
-            if (v === undefined) continue;
-            const sentinel = v as { __fsType?: string; delta?: number } | null;
-            if (sentinel && typeof sentinel === 'object' && sentinel.__fsType === 'serverTimestamp') {
-              transforms.push({ fieldPath: k, setToServerValue: 'REQUEST_TIME' });
-            } else if (sentinel && typeof sentinel === 'object' && sentinel.__fsType === 'increment') {
-              const delta = Number(sentinel.delta || 0);
-              transforms.push({
-                fieldPath: k,
-                increment: Number.isInteger(delta) ? { integerValue: String(delta) } : { doubleValue: delta },
-              });
+          const translated = translateBridgeSentinels(rawPayload);
+          if (opType === 'set') {
+            if (item?.merge) {
+              batch.set(docRef, translated, { merge: true });
             } else {
-              fields[k] = encodeFirestoreRestValue(v);
-              fieldPaths.push(k);
+              batch.set(docRef, translated);
             }
+          } else {
+            batch.update(docRef, translated);
           }
-
-          const writeObj: Record<string, any> = {
-            update: { name: docPath, fields },
-          };
-          if (opType === 'update' || item?.merge) {
-            writeObj.updateMask = { fieldPaths };
-          }
-          if (opType === 'update') {
-            writeObj.currentDocument = { exists: true };
-          }
-          if (transforms.length > 0) {
-            writeObj.updateTransforms = transforms;
-          }
-          writes.push(writeObj);
         }
 
-        const commitRes = await fetch(`${fsRestDocsRoot()}:commit`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${restToken}`,
-          },
-          body: JSON.stringify({ writes }),
-          signal: AbortSignal.timeout(15000),
-        });
-        const commitBody = (await commitRes.json().catch(() => null)) as any;
-        if (!commitRes.ok) {
-          throw new Error(commitBody?.error?.message || `Firestore REST commit failed (${commitRes.status})`);
-        }
+        await batch.commit();
         res.json({ success: true });
         return;
-      }
-
-      await ensureServerFirebaseSignedIn();
-      const batch = serverFsWriteBatch(serverDb);
-
-      for (const item of ops) {
-        const opType = item?.op;
-        const colName = String(item?.collection || '').trim();
-        const docId = String(item?.docId || '').trim();
-
-        if (!ALLOWED_USER_DB_COLLECTIONS.has(colName) || !docId || docId.includes('/')) {
-          res.status(400).json({ success: false, error: `Operasi pada ${colName}/${docId} tidak valid.` });
+      } catch (sdkErr: any) {
+        if (res.headersSent) return;
+        const canTryWorkerRest = !(sdkErr instanceof ServerFirebaseConfigError);
+        const fallbackRestToken =
+          (canTryWorkerRest ? await getServerWorkerRestToken() : null) ||
+          (await resolveCallerFirestoreRestToken(req, caller, targetOwnerUid));
+        if (fallbackRestToken) {
+          const restOutcome = await executeMutateViaRest(fallbackRestToken);
+          if (restOutcome.status !== 200) {
+            res.status(restOutcome.status).json({ success: false, error: restOutcome.error });
+            return;
+          }
+          res.json({ success: true });
           return;
         }
-
-        const docRef = serverFsDoc(serverDb, colName, docId);
-
-        if (opType === 'delete') {
-          if (!caller.isAdmin) {
-            if (colName === 'users') {
-              res.status(403).json({ success: false, error: 'Tidak dapat menghapus dokumen users.' });
-              return;
-            }
-            const existingSnap = await serverFsGetDoc(docRef);
-            if (existingSnap.exists()) {
-              const existingOwner = String(existingSnap.data()?.ownerId || '').trim();
-              if (existingOwner !== targetOwnerUid && existingOwner !== caller.uid) {
-                res.status(403).json({ success: false, error: 'Tidak berwenang menghapus dokumen pengguna lain.' });
-                return;
-              }
-            }
-          }
-          batch.delete(docRef);
-          continue;
-        }
-
-        if (opType !== 'set' && opType !== 'update') {
-          res.status(400).json({ success: false, error: 'Jenis operasi database tidak dikenal.' });
-          return;
-        }
-
-        const rawPayload = item?.data && typeof item.data === 'object' ? { ...item.data } : {};
-
-        if (!caller.isAdmin) {
-          if (colName === 'users') {
-            const ownsUserDoc = await doesCallerOwnTargetUid(caller.uid, caller.email, docId);
-            if (!ownsUserDoc) {
-              res.status(403).json({ success: false, error: 'Tidak berwenang mengubah profil pengguna lain.' });
-              return;
-            }
-            for (const f of USER_SENSITIVE_FIELDS) {
-              delete rawPayload[f];
-            }
-            if (
-              rawPayload.subscriptionStatus !== undefined &&
-              rawPayload.subscriptionStatus !== 'free' &&
-              rawPayload.subscriptionStatus !== 'pending'
-            ) {
-              delete rawPayload.subscriptionStatus;
-            }
-          } else {
-            if (
-              rawPayload.ownerId !== undefined &&
-              String(rawPayload.ownerId || '').trim() !== targetOwnerUid &&
-              String(rawPayload.ownerId || '').trim() !== caller.uid
-            ) {
-              res.status(403).json({ success: false, error: 'ownerId dokumen harus sesuai akun yang sedang masuk.' });
-              return;
-            }
-            if (opType === 'update') {
-              const existingSnap = await serverFsGetDoc(docRef);
-              if (existingSnap.exists()) {
-                const existingOwner = String(existingSnap.data()?.ownerId || '').trim();
-                const isOwnReport = colName === 'report_settings' && docId === targetOwnerUid;
-                if (!isOwnReport && existingOwner !== targetOwnerUid && existingOwner !== caller.uid) {
-                  res.status(403).json({ success: false, error: 'Tidak berwenang memperbarui dokumen pengguna lain.' });
-                  return;
-                }
-              }
-            } else if (!rawPayload.ownerId) {
-              rawPayload.ownerId = targetOwnerUid;
-            }
-          }
-        }
-
-        const translated = translateBridgeSentinels(rawPayload);
-        if (opType === 'set') {
-          if (item?.merge) {
-            batch.set(docRef, translated, { merge: true });
-          } else {
-            batch.set(docRef, translated);
-          }
-        } else {
-          batch.update(docRef, translated);
-        }
+        throw sdkErr;
       }
-
-      await batch.commit();
-      res.json({ success: true });
     } catch (err: any) {
       if (err instanceof ServerFirebaseConfigError) {
         res.status(err.statusCode).json({
@@ -8037,6 +8699,14 @@ async function startServer() {
     }
   });
 
+  // Ensure unmatched /api/* requests always return JSON instead of falling through to SPA HTML (200)
+  app.all('/api/*', (req: Request, res: Response) => {
+    res.status(404).json({
+      success: false,
+      error: `Endpoint API tidak ditemukan: ${req.method} ${req.path}`,
+    });
+  });
+
   // =========================================================================
   // Vite Middleware (Development) or Static Dist (Production)
   // =========================================================================
@@ -8145,10 +8815,26 @@ async function startServer() {
 
     // 2. Serve static assets (js, css, images, icons, manifest)
     // Use index: false so express.static does not automatically send un-injected index.html for directory routes
-    app.use(express.static(distPath, { index: false }));
+    app.use(
+      express.static(distPath, {
+        index: false,
+        setHeaders(res, filePath) {
+          const base = path.basename(filePath);
+          if (
+            base === 'app-shell.html' ||
+            base === 'sw.js' ||
+            base === 'registerSW.js' ||
+            base === 'manifest.webmanifest'
+          ) {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+          }
+        },
+      })
+    );
 
     // 3. Fallback for SPA routes (/dashboard, /auth, /wallets, /transactions, /budgets, etc.)
     app.get('*', (_req: Request, res: Response) => {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
       const spaShell = path.join(distPath, 'app-shell.html');
       if (fs.existsSync(spaShell)) {
         res.sendFile(spaShell);
@@ -8159,7 +8845,21 @@ async function startServer() {
   }
 
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`Sisa Uang server running on http://0.0.0.0:${PORT}`);
+    console.log(
+      `Sisa Uang server running on http://0.0.0.0:${PORT} (mode: ${isProduction ? 'production' : 'development'})`
+    );
+    void (async () => {
+      try {
+        await ensureServerFirebaseSignedIn();
+        console.log(
+          `[Firestore Worker] Connected to project "${firebaseServerConfig.projectId}" database "${firebaseServerConfig.firestoreDatabaseId}".`
+        );
+      } catch (err: any) {
+        console.warn(
+          `[Firestore Worker Notice] ${err?.message || 'Server Firebase worker not ready yet.'}`
+        );
+      }
+    })();
   });
 }
 
