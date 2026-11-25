@@ -1,27 +1,20 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  getDocsFromServer,
-  setDoc,
-  deleteDoc,
-  query,
-  where,
-  limit,
-  onSnapshot,
-  serverTimestamp,
-} from 'firebase/firestore';
-import {
   auth,
-  db,
   sanitizeId,
   sanitizeString,
   isFirestoreOfflineError,
   isFirestoreQuotaError,
 } from '../firebase';
+import { getUserAuthHeaders } from '../services/api';
+import {
+  fsGetDoc,
+  fsGetDocs,
+  fsSetDoc,
+  fsDeleteDoc,
+  fsServerTimestamp,
+} from '../services/userFirestoreBridge';
 import { useAuthStore } from './auth';
 import { useFinanceStore } from './finance';
 import { useNotificationStore } from './notification';
@@ -363,7 +356,7 @@ export const useAutomationStore = defineStore('automation', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/automations/batch`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify({ rules: items }),
       });
     } catch {
@@ -425,10 +418,12 @@ export const useAutomationStore = defineStore('automation', () => {
       let firestoreRules: AutomationItem[] = [];
       let firestoreFetchSuccess = false;
       try {
-        const q = query(collection(db, 'automations'), where('ownerId', '==', uid));
-        const snap = forceServer
-          ? await getDocsFromServer(q).catch(() => getDocs(q))
-          : await getDocs(q);
+        const snap = await fsGetDocs(
+          'automations',
+          { wheres: [{ field: 'ownerId', op: '==', value: uid }] },
+          uid,
+          forceServer
+        );
         firestoreRules = snap.docs
           .map((d) => ({
             id: d.id,
@@ -445,7 +440,9 @@ export const useAutomationStore = defineStore('automation', () => {
       // 3. Fallback: persistent Server REST API (/api/users/:uid/automations)
       let serverRules: AutomationItem[] = [];
       try {
-        const res = await fetch(`/api/users/${encodeURIComponent(uid)}/automations`);
+        const res = await fetch(`/api/users/${encodeURIComponent(uid)}/automations`, {
+          headers: getUserAuthHeaders(),
+        });
         if (res.ok) {
           const data = await res.json();
           if (data && Array.isArray(data.rules)) {
@@ -554,10 +551,10 @@ export const useAutomationStore = defineStore('automation', () => {
         snoozedUntil: item.snoozedUntil || null,
         deleted: false,
         deletedAt: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        createdAt: fsServerTimestamp(),
+        updatedAt: fsServerTimestamp(),
       };
-      await setDoc(doc(db, 'automations', item.id), docData, { merge: true });
+      await fsSetDoc('automations', item.id, docData, { merge: true }, item.ownerId);
     } catch {
       // Ignore background push error
     }
@@ -694,7 +691,7 @@ export const useAutomationStore = defineStore('automation', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/automations`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify(updatedItem),
       });
     } catch {
@@ -727,7 +724,7 @@ export const useAutomationStore = defineStore('automation', () => {
         isActive: payload.isActive !== undefined ? payload.isActive : true,
         deleted: false,
         deletedAt: null,
-        updatedAt: serverTimestamp(),
+        updatedAt: fsServerTimestamp(),
       };
 
       if (resolvedCategoryId) {
@@ -735,13 +732,13 @@ export const useAutomationStore = defineStore('automation', () => {
       }
 
       if (!isEdit) {
-        docData.createdAt = serverTimestamp();
+        docData.createdAt = fsServerTimestamp();
         docData.lastExecutedDate = null;
         docData.lastCancelledDate = null;
         docData.snoozedUntil = null;
       }
 
-      await setDoc(doc(db, 'automations', id), docData, { merge: true });
+      await fsSetDoc('automations', id, docData, { merge: true }, uid);
       await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch (err: any) {
       console.warn('Firestore saveAutomation notice:', err?.message || err);
@@ -812,6 +809,7 @@ export const useAutomationStore = defineStore('automation', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(id)}`, {
         method: 'DELETE',
+        headers: getUserAuthHeaders(),
       });
     } catch {
       // Ignore
@@ -820,18 +818,20 @@ export const useAutomationStore = defineStore('automation', () => {
     // 7. Hard Delete AND soft-delete tombstone in Cloud Firestore
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await deleteDoc(doc(db, 'automations', id));
+      await fsDeleteDoc('automations', id, uid);
       await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch (err: any) {
       try {
-        await setDoc(
-          doc(db, 'automations', id),
+        await fsSetDoc(
+          'automations',
+          id,
           {
             deleted: true,
-            deletedAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
+            deletedAt: fsServerTimestamp(),
+            updatedAt: fsServerTimestamp(),
           },
-          { merge: true }
+          { merge: true },
+          uid
         );
         await financeStore.bumpRemoteAndLocalSyncToken(uid);
       } catch (err2: any) {
@@ -866,7 +866,7 @@ export const useAutomationStore = defineStore('automation', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(id)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify({ isActive: nextState }),
       });
     } catch {
@@ -876,13 +876,15 @@ export const useAutomationStore = defineStore('automation', () => {
     // Cloud Firestore sync
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await setDoc(
-        doc(db, 'automations', id),
+      await fsSetDoc(
+        'automations',
+        id,
         {
           isActive: nextState,
-          updatedAt: serverTimestamp(),
+          updatedAt: fsServerTimestamp(),
         },
-        { merge: true }
+        { merge: true },
+        uid
       );
       await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch (err: any) {
@@ -969,7 +971,7 @@ export const useAutomationStore = defineStore('automation', () => {
         `/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(rule.id)}/claim-execution`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
           body: JSON.stringify({ date: todayIso, deviceId }),
         }
       );
@@ -1002,7 +1004,7 @@ export const useAutomationStore = defineStore('automation', () => {
     try {
       const canSync = await financeStore.ensureFirestoreSessionForUser(uid);
       if (canSync) {
-        const existingDocSnap = await getDoc(doc(db, 'transactions', autoTxId));
+        const existingDocSnap = await fsGetDoc('transactions', autoTxId, uid);
         if (existingDocSnap.exists() && !existingDocSnap.data()?.deleted) {
           rule.lastExecutedDate = todayIso;
           rule.snoozedUntil = undefined;
@@ -1054,7 +1056,7 @@ export const useAutomationStore = defineStore('automation', () => {
       try {
         await fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(rule.id)}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
           body: JSON.stringify({ lastExecutedDate: todayIso, snoozedUntil: null }),
         });
       } catch {
@@ -1065,14 +1067,16 @@ export const useAutomationStore = defineStore('automation', () => {
       try {
         const canSync = await financeStore.ensureFirestoreSessionForUser(uid);
         if (canSync) {
-          await setDoc(
-            doc(db, 'automations', rule.id),
+          await fsSetDoc(
+            'automations',
+            rule.id,
             {
               lastExecutedDate: todayIso,
               snoozedUntil: null,
-              updatedAt: serverTimestamp(),
+              updatedAt: fsServerTimestamp(),
             },
-            { merge: true }
+            { merge: true },
+            uid
           );
         }
       } catch (err: any) {
@@ -1125,7 +1129,7 @@ export const useAutomationStore = defineStore('automation', () => {
             `/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(rule.id)}/release-claim`,
             {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
               body: JSON.stringify({ deviceId }),
             }
           );
@@ -1158,7 +1162,7 @@ export const useAutomationStore = defineStore('automation', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(ruleId)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify({ snoozedUntil }),
       });
     } catch {
@@ -1168,13 +1172,15 @@ export const useAutomationStore = defineStore('automation', () => {
     // Cloud Firestore sync
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await setDoc(
-        doc(db, 'automations', ruleId),
+      await fsSetDoc(
+        'automations',
+        ruleId,
         {
           snoozedUntil,
-          updatedAt: serverTimestamp(),
+          updatedAt: fsServerTimestamp(),
         },
-        { merge: true }
+        { merge: true },
+        uid
       );
     } catch (err: any) {
       console.warn('Firestore snoozeRule notice:', err?.message || err);
@@ -1227,7 +1233,7 @@ export const useAutomationStore = defineStore('automation', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(ruleId)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify({ lastCancelledDate: todayIso, snoozedUntil: null }),
       });
     } catch {
@@ -1237,14 +1243,16 @@ export const useAutomationStore = defineStore('automation', () => {
     // Cloud Firestore sync
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await setDoc(
-        doc(db, 'automations', ruleId),
+      await fsSetDoc(
+        'automations',
+        ruleId,
         {
           lastCancelledDate: todayIso,
           snoozedUntil: null,
-          updatedAt: serverTimestamp(),
+          updatedAt: fsServerTimestamp(),
         },
-        { merge: true }
+        { merge: true },
+        uid
       );
     } catch (err: any) {
       console.warn('Firestore cancelRuleForToday notice:', err?.message || err);
@@ -1335,7 +1343,7 @@ export const useAutomationStore = defineStore('automation', () => {
 
     void fetch(`/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(rule.id)}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
       body: JSON.stringify({ lastPushNotifiedDate: dateIso }),
     }).catch(() => {});
   }
@@ -1518,7 +1526,8 @@ export const useAutomationStore = defineStore('automation', () => {
         // Deduplication Check 2: Live check server rule state to see if another device already executed or claimed lease
         try {
           const statusRes = await fetch(
-            `/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(rule.id)}`
+            `/api/users/${encodeURIComponent(uid)}/automations/${encodeURIComponent(rule.id)}`,
+            { headers: getUserAuthHeaders() }
           );
           if (statusRes.ok) {
             const statusData = await statusRes.json();

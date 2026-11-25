@@ -1,36 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref, computed, watch } from 'vue';
 import {
-  collection,
-  doc,
-  getDoc,
-  getDocFromServer,
-  getDocs,
-  getDocsFromServer,
-  setDoc,
-  updateDoc,
-  getCountFromServer,
-  query,
-  where,
-  orderBy,
-  limit,
-  startAfter,
-  documentId,
-  serverTimestamp,
-  increment,
-  writeBatch,
-  type WriteBatch,
-  type DocumentSnapshot,
-  type QueryConstraint,
-} from 'firebase/firestore';
-import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signInAnonymously,
-} from 'firebase/auth';
-import {
   auth,
-  db,
   OperationType,
   handleFirestoreError,
   isFirestoreQuotaError,
@@ -40,6 +11,19 @@ import {
   MAX_CATEGORY_LENGTH,
   MAX_NOTE_LENGTH,
 } from '../firebase';
+import {
+  fsGetDoc,
+  fsGetDocs,
+  fsGetCount,
+  fsSetDoc,
+  fsUpdateDoc,
+  createFsBatch,
+  fsServerTimestamp,
+  fsIncrement,
+  hasActiveFirestoreAccess,
+  type FsBatchWriter,
+  type FsWhereClause,
+} from '../services/userFirestoreBridge';
 import { useAuthStore, purgeForeignLocalStorage } from './auth';
 import { useNotificationStore } from './notification';
 
@@ -424,8 +408,7 @@ export const useFinanceStore = defineStore('finance', () => {
     if (!uid || uid === 'guest') return;
     try {
       const authStore = useAuthStore();
-      const uRef = doc(db, 'users', uid);
-      const snap = await getDoc(uRef);
+      const snap = await fsGetDoc('users', uid, uid);
       if (snap.exists()) {
         confirmedUserDocsInFirestore.add(uid);
         return;
@@ -435,23 +418,29 @@ export const useFinanceStore = defineStore('finance', () => {
         const isDeactivated = Boolean(activeUser.isExplicitlyDeactivated);
         const subStatus = !isDeactivated && activeUser.subscriptionStatus === 'pro' ? 'pro' : 'free';
         const isPro = !isDeactivated && Boolean(activeUser.isPro);
-        await setDoc(uRef, {
+        await fsSetDoc(
+          'users',
           uid,
-          username: sanitizeString(activeUser.username || activeUser.email.split('@')[0] || 'user', 60, 'user'),
-          email: sanitizeString(activeUser.email || 'user@sisa-uang.id', 120, 'user@sisa-uang.id'),
-          displayName: sanitizeString(activeUser.displayName || activeUser.username || 'Pengguna', 80, 'Pengguna'),
-          role: activeUser.role === 'admin' ? 'admin' : 'user',
-          status: 'active',
-          authProvider: activeUser.authProvider === 'google' ? 'google' : 'password',
-          currency: activeUser.currency === 'USD' ? 'USD' : 'IDR',
-          subscriptionStatus: subStatus,
-          isPro: isPro,
-          isExplicitlyDeactivated: isDeactivated,
-          deleted: false,
-          deletedAt: null,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+          {
+            uid,
+            username: sanitizeString(activeUser.username || activeUser.email.split('@')[0] || 'user', 60, 'user'),
+            email: sanitizeString(activeUser.email || 'user@sisa-uang.id', 120, 'user@sisa-uang.id'),
+            displayName: sanitizeString(activeUser.displayName || activeUser.username || 'Pengguna', 80, 'Pengguna'),
+            role: activeUser.role === 'admin' ? 'admin' : 'user',
+            status: 'active',
+            authProvider: activeUser.authProvider === 'google' ? 'google' : 'password',
+            currency: activeUser.currency === 'USD' ? 'USD' : 'IDR',
+            subscriptionStatus: subStatus,
+            isPro: isPro,
+            isExplicitlyDeactivated: isDeactivated,
+            deleted: false,
+            deletedAt: null,
+            createdAt: fsServerTimestamp(),
+            updatedAt: fsServerTimestamp(),
+          },
+          undefined,
+          uid
+        );
         confirmedUserDocsInFirestore.add(uid);
       }
     } catch {
@@ -516,12 +505,12 @@ export const useFinanceStore = defineStore('finance', () => {
     return Date.now() + serverClockOffsetMs;
   }
 
-  function touchUserSyncTokenInBatch(batch: WriteBatch, uid: string) {
+  function touchUserSyncTokenInBatch(batch: FsBatchWriter, uid: string) {
     if (!uid || uid === 'guest') return;
     try {
       if (confirmedUserDocsInFirestore.has(uid)) {
-        batch.update(doc(db, 'users', uid), {
-          updatedAt: serverTimestamp(),
+        batch.update('users', uid, {
+          updatedAt: fsServerTimestamp(),
         });
       }
     } catch (e) {
@@ -538,9 +527,14 @@ export const useFinanceStore = defineStore('finance', () => {
       if (!confirmedUserDocsInFirestore.has(uid)) {
         await ensureUserDocExistsForSyncToken(uid);
       }
-      await updateDoc(doc(db, 'users', uid), {
-        updatedAt: serverTimestamp(),
-      });
+      await fsUpdateDoc(
+        'users',
+        uid,
+        {
+          updatedAt: fsServerTimestamp(),
+        },
+        uid
+      );
     } catch {
       // Non-fatal fallback
     }
@@ -549,7 +543,7 @@ export const useFinanceStore = defineStore('finance', () => {
   }
 
   function upsertBudgetDocInBatch(
-    batch: WriteBatch,
+    batch: FsBatchWriter,
     docId: string,
     uid: string,
     payload: {
@@ -562,7 +556,6 @@ export const useFinanceStore = defineStore('finance', () => {
       deletedAt?: any;
     }
   ) {
-    const refDoc = doc(db, 'budgets', docId);
     const existsOnServer =
       knownFirestoreBudgetDocIds.has(docId) || budgets.value.some((b) => b.id === docId);
 
@@ -586,12 +579,12 @@ export const useFinanceStore = defineStore('finance', () => {
         period: payload.period,
         deleted: payload.deleted ?? false,
         deletedAt: payload.deletedAt ?? null,
-        updatedAt: serverTimestamp(),
+        updatedAt: fsServerTimestamp(),
       };
       if (resolvedCategoryId) {
         updateData.categoryId = resolvedCategoryId;
       }
-      batch.update(refDoc, updateData);
+      batch.update('budgets', docId, updateData);
     } else {
       const setData: Record<string, any> = {
         ownerId: uid,
@@ -601,13 +594,13 @@ export const useFinanceStore = defineStore('finance', () => {
         period: payload.period,
         deleted: payload.deleted ?? false,
         deletedAt: payload.deletedAt ?? null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        createdAt: fsServerTimestamp(),
+        updatedAt: fsServerTimestamp(),
       };
       if (resolvedCategoryId) {
         setData.categoryId = resolvedCategoryId;
       }
-      batch.set(refDoc, setData);
+      batch.set('budgets', docId, setData);
       knownFirestoreBudgetDocIds.add(docId);
     }
   }
@@ -664,9 +657,8 @@ export const useFinanceStore = defineStore('finance', () => {
   }
 
   /**
-   * Ensure an active, authenticated Firebase Auth session before querying Cloud Firestore collections.
-   * Recognizes bootstrapped admin emails (adnanzaki65@admin.sd.belajar.id, vuedevo@gmail.com) and authentic user sessions.
-   * Never falls back to returning true for anonymous sessions which lack permissions for private financial data.
+   * Ensure the active session is authorized to query Firestore (either direct Firebase Auth for own UID / verified Super Admin,
+   * or authenticated backend user-db bridge token). Never signs into any hardcoded account.
    */
   async function ensureFirestoreSessionForUser(uid: string): Promise<boolean> {
     try {
@@ -677,35 +669,7 @@ export const useFinanceStore = defineStore('finance', () => {
       // Ignore
     }
 
-    const authStore = useAuthStore();
-    let current = auth.currentUser;
-
-    const isAdminSession =
-      current &&
-      !current.isAnonymous &&
-      (current.email === 'vuedevo@gmail.com' ||
-        current.email === 'adnanzaki65@admin.sd.belajar.id' ||
-        current.email === 'sdnpengasinantujuh@gmail.com');
-
-    // If already authenticated with a valid non-anonymous Firebase session matching target user UID or an admin, proceed immediately
-    if (current && !current.isAnonymous && (current.uid === uid || isAdminSession)) {
-      return true;
-    }
-
-    // If no session exists, or existing session lacks permissions for this user's data, establish connection using application credentials
-    // so the client SDK can read/write Cloud Firestore collections for the active session under isAdmin rules.
-    try {
-      await signInWithEmailAndPassword(auth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-      current = auth.currentUser;
-    } catch (fbErr) {
-      console.warn('[Finance] Auto-session sign in notice:', fbErr);
-    }
-
-    if (current && !current.isAnonymous) {
-      return true;
-    }
-
-    return false;
+    return hasActiveFirestoreAccess(uid);
   }
 
   /**
@@ -993,7 +957,7 @@ export const useFinanceStore = defineStore('finance', () => {
   const isTxServerPageLoading = ref(false);
   const loadedTransactionPeriods = new Set<string>();
   const inFlightDateRangeQueries = new Map<string, Promise<void>>();
-  const txCursorByFilterKey = new Map<string, Map<number, DocumentSnapshot>>();
+  const txCursorByFilterKey = new Map<string, Map<number, any>>();
   const txServerPageMemoryCache = new Map<string, CachedTxServerPageEntry>();
   const txFilteredPoolMemoryCache = new Map<
     string,
@@ -1251,15 +1215,19 @@ export const useFinanceStore = defineStore('finance', () => {
       if (!canQuery) return;
 
       try {
-        const q = query(
-          collection(db, 'transactions'),
-          where('ownerId', '==', uid),
-          where('date', '>=', startIso),
-          where('date', '<=', `${endIso}\uf8ff`),
-          orderBy('date', 'desc'),
-          limit(300)
+        const snap = await fsGetDocs(
+          'transactions',
+          {
+            wheres: [
+              { field: 'ownerId', op: '==', value: uid },
+              { field: 'date', op: '>=', value: startIso },
+              { field: 'date', op: '<=', value: `${endIso}\uf8ff` },
+            ],
+            orderBys: [{ field: 'date', dir: 'desc' }],
+            limitCount: 300,
+          },
+          uid
         );
-        const snap = await getDocs(q);
         const fetched: TransactionItem[] = snap.docs
           .map((d: any) => parseTransactionDoc(d.id, d.data()))
           .filter((t: TransactionItem) => !t.deleted);
@@ -1274,12 +1242,14 @@ export const useFinanceStore = defineStore('finance', () => {
       } catch {
         // Bounded fallback (max 150 docs) if composite index is building - NEVER scan full history!
         try {
-          const fallbackQ = query(
-            collection(db, 'transactions'),
-            where('ownerId', '==', uid),
-            limit(150)
+          const snap = await fsGetDocs(
+            'transactions',
+            {
+              wheres: [{ field: 'ownerId', op: '==', value: uid }],
+              limitCount: 150,
+            },
+            uid
           );
-          const snap = await getDocs(fallbackQ);
           const fetched: TransactionItem[] = snap.docs
             .map((d: any) => parseTransactionDoc(d.id, d.data()))
             .filter(
@@ -1424,43 +1394,50 @@ export const useFinanceStore = defineStore('finance', () => {
       try {
         const canQuery = await ensureFirestoreSessionForUser(uid);
         if (canQuery) {
-          const searchConstraints: QueryConstraint[] = [
-            where('ownerId', '==', uid),
-            where('deleted', '==', false),
+          const searchWheres: FsWhereClause[] = [
+            { field: 'ownerId', op: '==', value: uid },
+            { field: 'deleted', op: '==', value: false },
           ];
 
           if (currentTxServerFilter.type !== 'all') {
-            searchConstraints.push(where('type', '==', currentTxServerFilter.type));
+            searchWheres.push({ field: 'type', op: '==', value: currentTxServerFilter.type });
           }
           if (currentTxServerFilter.category !== 'all') {
-            searchConstraints.push(where('category', '==', currentTxServerFilter.category));
+            searchWheres.push({ field: 'category', op: '==', value: currentTxServerFilter.category });
           }
           if (
             currentTxServerFilter.walletId !== 'all' &&
             currentTxServerFilter.type !== 'transfer'
           ) {
-            searchConstraints.push(where('walletId', '==', currentTxServerFilter.walletId));
+            searchWheres.push({ field: 'walletId', op: '==', value: currentTxServerFilter.walletId });
           }
 
           let searchSnap;
-          const searchFetcher = forceServerReload ? getDocsFromServer : getDocs;
           try {
-            searchSnap = await searchFetcher(
-              query(
-                collection(db, 'transactions'),
-                ...searchConstraints,
-                orderBy('date', 'desc'),
-                limit(100)
-              )
+            searchSnap = await fsGetDocs(
+              'transactions',
+              {
+                wheres: searchWheres,
+                orderBys: [{ field: 'date', dir: 'desc' }],
+                limitCount: 100,
+              },
+              uid,
+              forceServerReload
             );
           } catch {
             try {
-              searchSnap = await searchFetcher(
-                query(collection(db, 'transactions'), ...searchConstraints, limit(100))
+              searchSnap = await fsGetDocs(
+                'transactions',
+                { wheres: searchWheres, limitCount: 100 },
+                uid,
+                forceServerReload
               );
             } catch {
-              searchSnap = await getDocs(
-                query(collection(db, 'transactions'), ...searchConstraints, limit(100))
+              searchSnap = await fsGetDocs(
+                'transactions',
+                { wheres: searchWheres, limitCount: 100 },
+                uid,
+                false
               );
             }
           }
@@ -1549,22 +1526,22 @@ export const useFinanceStore = defineStore('finance', () => {
         }
         const cursorMap = txCursorByFilterKey.get(filterKey)!;
 
-        const baseConstraints: QueryConstraint[] = [
-          where('ownerId', '==', uid),
-          where('date', '>=', startIso),
-          where('date', '<=', endIso),
+        const baseWheres: FsWhereClause[] = [
+          { field: 'ownerId', op: '==', value: uid },
+          { field: 'date', op: '>=', value: startIso },
+          { field: 'date', op: '<=', value: endIso },
         ];
         if (currentTxServerFilter.type !== 'all') {
-          baseConstraints.push(where('type', '==', currentTxServerFilter.type));
+          baseWheres.push({ field: 'type', op: '==', value: currentTxServerFilter.type });
         }
         if (currentTxServerFilter.category !== 'all') {
-          baseConstraints.push(where('category', '==', currentTxServerFilter.category));
+          baseWheres.push({ field: 'category', op: '==', value: currentTxServerFilter.category });
         }
         if (
           currentTxServerFilter.walletId !== 'all' &&
           currentTxServerFilter.type !== 'transfer'
         ) {
-          baseConstraints.push(where('walletId', '==', currentTxServerFilter.walletId));
+          baseWheres.push({ field: 'walletId', op: '==', value: currentTxServerFilter.walletId });
         }
 
         // 1. Cek Firestore: dapatkan total count transaksi untuk periode bulan ini (1 count aggregation read)
@@ -1578,21 +1555,20 @@ export const useFinanceStore = defineStore('finance', () => {
           totalServerCount = cachedCountObj.count;
         } else if (canQuery) {
           try {
-            const countSnap = await getCountFromServer(
-              query(collection(db, 'transactions'), ...baseConstraints)
-            );
-            totalServerCount = countSnap.data().count;
+            totalServerCount = await fsGetCount('transactions', { wheres: baseWheres }, uid);
           } catch {
             try {
-              const fallbackCountSnap = await getCountFromServer(
-                query(
-                  collection(db, 'transactions'),
-                  where('ownerId', '==', uid),
-                  where('date', '>=', startIso),
-                  where('date', '<=', endIso)
-                )
+              totalServerCount = await fsGetCount(
+                'transactions',
+                {
+                  wheres: [
+                    { field: 'ownerId', op: '==', value: uid },
+                    { field: 'date', op: '>=', value: startIso },
+                    { field: 'date', op: '<=', value: endIso },
+                  ],
+                },
+                uid
               );
-              totalServerCount = fallbackCountSnap.data().count;
             } catch {
               totalServerCount = rawTransactions.value.filter(
                 (t) => !t.deleted && String(t.date || '').slice(0, 7) === targetPeriod
@@ -1632,7 +1608,7 @@ export const useFinanceStore = defineStore('finance', () => {
         // 3. Ambil 25 data (atau 26-50 untuk halaman 2) dari Firestore
         if (canQuery) {
           try {
-            let startAfterDoc: DocumentSnapshot | undefined =
+            let startAfterDoc: any | undefined =
               safePage > 1 ? cursorMap.get(safePage - 1) : undefined;
 
             if (safePage > 1 && !startAfterDoc) {
@@ -1645,16 +1621,15 @@ export const useFinanceStore = defineStore('finance', () => {
               }
               const docsToSkip = (safePage - 1 - latestCachedPage) * pageSize;
               if (docsToSkip > 0) {
-                const skipConstraints: QueryConstraint[] = [
-                  ...baseConstraints,
-                  orderBy('date', 'desc'),
-                ];
-                if (startAfterDoc) {
-                  skipConstraints.push(startAfter(startAfterDoc));
-                }
-                skipConstraints.push(limit(docsToSkip));
-                const skipSnap = await getDocs(
-                  query(collection(db, 'transactions'), ...skipConstraints)
+                const skipSnap = await fsGetDocs(
+                  'transactions',
+                  {
+                    wheres: baseWheres,
+                    orderBys: [{ field: 'date', dir: 'desc' }],
+                    startAfterCursor: startAfterDoc,
+                    limitCount: docsToSkip,
+                  },
+                  uid
                 );
                 if (skipSnap.docs.length > 0) {
                   for (let idx = pageSize - 1; idx < skipSnap.docs.length; idx += pageSize) {
@@ -1667,17 +1642,15 @@ export const useFinanceStore = defineStore('finance', () => {
               }
             }
 
-            const pageConstraints: QueryConstraint[] = [
-              ...baseConstraints,
-              orderBy('date', 'desc'),
-            ];
-            if (startAfterDoc) {
-              pageConstraints.push(startAfter(startAfterDoc));
-            }
-            pageConstraints.push(limit(pageSize));
-
-            const pageSnap = await getDocs(
-              query(collection(db, 'transactions'), ...pageConstraints)
+            const pageSnap = await fsGetDocs(
+              'transactions',
+              {
+                wheres: baseWheres,
+                orderBys: [{ field: 'date', dir: 'desc' }],
+                startAfterCursor: startAfterDoc,
+                limitCount: pageSize,
+              },
+              uid
             );
 
             if (pageSnap.docs.length > 0) {
@@ -1793,19 +1766,23 @@ export const useFinanceStore = defineStore('finance', () => {
           ) {
             totalServerCount = cachedCountObj.count;
           } else {
-            const baseCountQuery = query(
-              collection(db, 'transactions'),
-              where('ownerId', '==', uid),
-              where('deleted', '==', false)
-            );
             try {
-              const countSnap = await getCountFromServer(baseCountQuery);
-              totalServerCount = countSnap.data().count;
-            } catch {
-              const fallbackCountSnap = await getCountFromServer(
-                query(collection(db, 'transactions'), where('ownerId', '==', uid))
+              totalServerCount = await fsGetCount(
+                'transactions',
+                {
+                  wheres: [
+                    { field: 'ownerId', op: '==', value: uid },
+                    { field: 'deleted', op: '==', value: false },
+                  ],
+                },
+                uid
               );
-              totalServerCount = fallbackCountSnap.data().count;
+            } catch {
+              totalServerCount = await fsGetCount(
+                'transactions',
+                { wheres: [{ field: 'ownerId', op: '==', value: uid }] },
+                uid
+              );
             }
             txCountCacheByFilterKey.set(filterKey, {
               count: totalServerCount,
@@ -1837,7 +1814,7 @@ export const useFinanceStore = defineStore('finance', () => {
           }
 
           // 2. Ensure cursor for (safePage - 1) is available, or walk forward using lightweight limit queries
-          let startAfterDoc: DocumentSnapshot | undefined =
+          let startAfterDoc: any | undefined =
             safePage > 1 ? cursorMap.get(safePage - 1) : undefined;
 
           if (safePage > 1 && !startAfterDoc) {
@@ -1851,16 +1828,15 @@ export const useFinanceStore = defineStore('finance', () => {
             }
             const docsToSkip = (safePage - 1 - latestCachedPage) * pageSize;
             if (docsToSkip > 0) {
-              const skipConstraints: QueryConstraint[] = [
-                where('ownerId', '==', uid),
-                orderBy('date', 'desc'),
-              ];
-              if (startAfterDoc) {
-                skipConstraints.push(startAfter(startAfterDoc));
-              }
-              skipConstraints.push(limit(docsToSkip));
-              const skipSnap = await getDocs(
-                query(collection(db, 'transactions'), ...skipConstraints)
+              const skipSnap = await fsGetDocs(
+                'transactions',
+                {
+                  wheres: [{ field: 'ownerId', op: '==', value: uid }],
+                  orderBys: [{ field: 'date', dir: 'desc' }],
+                  startAfterCursor: startAfterDoc,
+                  limitCount: docsToSkip,
+                },
+                uid
               );
               if (skipSnap.docs.length > 0) {
                 // Also save intermediate page cursors every `pageSize` docs so jumping back to intermediate pages is instant!
@@ -1875,17 +1851,15 @@ export const useFinanceStore = defineStore('finance', () => {
           }
 
           // 3. Fetch ONLY `pageSize` (25) documents for the current page from Firestore!
-          const pageConstraints: QueryConstraint[] = [
-            where('ownerId', '==', uid),
-            orderBy('date', 'desc'),
-          ];
-          if (startAfterDoc) {
-            pageConstraints.push(startAfter(startAfterDoc));
-          }
-          pageConstraints.push(limit(pageSize));
-
-          const pageSnap = await getDocs(
-            query(collection(db, 'transactions'), ...pageConstraints)
+          const pageSnap = await fsGetDocs(
+            'transactions',
+            {
+              wheres: [{ field: 'ownerId', op: '==', value: uid }],
+              orderBys: [{ field: 'date', dir: 'desc' }],
+              startAfterCursor: startAfterDoc,
+              limitCount: pageSize,
+            },
+            uid
           );
 
           if (pageSnap.docs.length > 0) {
@@ -1948,22 +1922,25 @@ export const useFinanceStore = defineStore('finance', () => {
         if (cachedPool && Math.abs(cachedPool.syncToken - activeSyncToken) <= 2000) {
           matchedDocs = cachedPool.items;
         } else {
-          const constraints: QueryConstraint[] = [where('ownerId', '==', uid)];
+          const poolWheres: FsWhereClause[] = [{ field: 'ownerId', op: '==', value: uid }];
           if (currentTxServerFilter.type !== 'all') {
-            constraints.push(where('type', '==', currentTxServerFilter.type));
+            poolWheres.push({ field: 'type', op: '==', value: currentTxServerFilter.type });
           }
           if (currentTxServerFilter.category !== 'all') {
-            constraints.push(where('category', '==', currentTxServerFilter.category));
+            poolWheres.push({ field: 'category', op: '==', value: currentTxServerFilter.category });
           }
           if (
             currentTxServerFilter.walletId !== 'all' &&
             currentTxServerFilter.type !== 'transfer'
           ) {
-            constraints.push(where('walletId', '==', currentTxServerFilter.walletId));
+            poolWheres.push({ field: 'walletId', op: '==', value: currentTxServerFilter.walletId });
           }
           // Strict quota protection: bound query with limit(25) when fetching all-periods pool
-          constraints.push(limit(25));
-          const snap = await getDocs(query(collection(db, 'transactions'), ...constraints));
+          const snap = await fsGetDocs(
+            'transactions',
+            { wheres: poolWheres, limitCount: 25 },
+            uid
+          );
           matchedDocs = snap.docs
             .map((d: any) => parseTransactionDoc(d.id, d.data()))
             .filter((t: TransactionItem) => !t.deleted);
@@ -2141,13 +2118,14 @@ export const useFinanceStore = defineStore('finance', () => {
     let initialPage1Items: TransactionItem[] = [];
     const fetchInitialBoundedTransactions = async () => {
       try {
-        const qRecent = query(
-          collection(db, 'transactions'),
-          where('ownerId', '==', uid),
-          orderBy('date', 'desc'),
-          limit(25)
+        const recentSpec = {
+          wheres: [{ field: 'ownerId', op: '==' as const, value: uid }],
+          orderBys: [{ field: 'date', dir: 'desc' as const }],
+          limitCount: 25,
+        };
+        const page1Snap = await fsGetDocs('transactions', recentSpec, uid, true).catch(() =>
+          fsGetDocs('transactions', recentSpec, uid, false)
         );
-        const page1Snap = await getDocsFromServer(qRecent).catch(() => getDocs(qRecent));
 
         if (page1Snap.docs.length > 0) {
           const filterKey = `${uid}:all`;
@@ -2165,25 +2143,31 @@ export const useFinanceStore = defineStore('finance', () => {
         return page1Snap;
       } catch {
         // Fallback if composite index on (ownerId, date) is not yet available
-        const qFallback = query(collection(db, 'transactions'), where('ownerId', '==', uid), limit(25));
-        const boundedSnap = await getDocsFromServer(qFallback).catch(() => getDocs(qFallback));
+        const fallbackSpec = {
+          wheres: [{ field: 'ownerId', op: '==' as const, value: uid }],
+          limitCount: 25,
+        };
+        const boundedSnap = await fsGetDocs('transactions', fallbackSpec, uid, true).catch(() =>
+          fsGetDocs('transactions', fallbackSpec, uid, false)
+        );
         return boundedSnap;
       }
     };
 
+    const ownerSpec = { wheres: [{ field: 'ownerId', op: '==' as const, value: uid }] };
     const queries: Promise<any>[] = [
-      getDocsFromServer(query(collection(db, 'wallets'), where('ownerId', '==', uid))).catch(() =>
-        getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid)))
+      fsGetDocs('wallets', ownerSpec, uid, true).catch(() =>
+        fsGetDocs('wallets', ownerSpec, uid, false)
       ),
-      getDocsFromServer(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))).catch(() =>
-        getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid)))
+      fsGetDocs('wallet_owners', ownerSpec, uid, true).catch(() =>
+        fsGetDocs('wallet_owners', ownerSpec, uid, false)
       ),
-      getDocsFromServer(query(collection(db, 'categories'), where('ownerId', '==', uid))).catch(() =>
-        getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid)))
+      fsGetDocs('categories', ownerSpec, uid, true).catch(() =>
+        fsGetDocs('categories', ownerSpec, uid, false)
       ),
       fetchInitialBoundedTransactions(),
-      getDocsFromServer(query(collection(db, 'budgets'), where('ownerId', '==', uid))).catch(() =>
-        getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid)))
+      fsGetDocs('budgets', ownerSpec, uid, true).catch(() =>
+        fsGetDocs('budgets', ownerSpec, uid, false)
       ),
     ];
 
@@ -2192,8 +2176,10 @@ export const useFinanceStore = defineStore('finance', () => {
       uid !== DEFAULT_CATEGORY_OWNER_ID && defaultCategories.value.length === 0;
     if (shouldFetchDefaultCats) {
       queries.push(
-        getDocs(
-          query(collection(db, 'categories'), where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID))
+        fsGetDocs(
+          'categories',
+          { wheres: [{ field: 'ownerId', op: '==', value: DEFAULT_CATEGORY_OWNER_ID }] },
+          uid
         )
       );
     }
@@ -2402,8 +2388,9 @@ export const useFinanceStore = defineStore('finance', () => {
       if (!canQuery) return false;
 
       const localSyncToken = getSavedUserSyncToken(uid);
-      const userDocRef = doc(db, 'users', uid);
-      const userSnap = await getDocFromServer(userDocRef).catch(() => getDoc(userDocRef));
+      const userSnap = await fsGetDoc('users', uid, uid, true).catch(() =>
+        fsGetDoc('users', uid, uid)
+      );
       if (!userSnap.exists()) return false;
 
       confirmedUserDocsInFirestore.add(uid);
@@ -2646,8 +2633,9 @@ export const useFinanceStore = defineStore('finance', () => {
         const authStore = useAuthStore();
 
         try {
-          const userDocRef = doc(db, 'users', uid);
-          const userSnap = await getDocFromServer(userDocRef).catch(() => getDoc(userDocRef));
+          const userSnap = await fsGetDoc('users', uid, uid, true).catch(() =>
+            fsGetDoc('users', uid, uid)
+          );
           if (userSnap.exists()) {
             confirmedUserDocsInFirestore.add(uid);
             const uData = userSnap.data();
@@ -2800,24 +2788,27 @@ export const useFinanceStore = defineStore('finance', () => {
     if (!canQuery) return;
 
     try {
+      const ownerSpec = { wheres: [{ field: 'ownerId', op: '==' as const, value: uid }] };
+
       // 1. Dashboard ('/' or '/dashboard')
       if (cleanPath === '/' || cleanPath === '/dashboard') {
         const [walletsSnap, holdersSnap, txSnap, budgetSnap] = await Promise.all([
-          getDocsFromServer(query(collection(db, 'wallets'), where('ownerId', '==', uid))).catch(() =>
-            getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid)))
+          fsGetDocs('wallets', ownerSpec, uid, true).catch(() =>
+            fsGetDocs('wallets', ownerSpec, uid, false)
           ),
-          getDocsFromServer(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))).catch(() =>
-            getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid)))
+          fsGetDocs('wallet_owners', ownerSpec, uid, true).catch(() =>
+            fsGetDocs('wallet_owners', ownerSpec, uid, false)
           ),
-          getDocs(
-            query(
-              collection(db, 'transactions'),
-              where('ownerId', '==', uid),
-              orderBy('date', 'desc'),
-              limit(25)
-            )
+          fsGetDocs(
+            'transactions',
+            {
+              wheres: [{ field: 'ownerId', op: '==', value: uid }],
+              orderBys: [{ field: 'date', dir: 'desc' }],
+              limitCount: 25,
+            },
+            uid
           ),
-          getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid))),
+          fsGetDocs('budgets', ownerSpec, uid),
         ]);
 
         const fetchedWallets = walletsSnap.docs
@@ -2864,11 +2855,11 @@ export const useFinanceStore = defineStore('finance', () => {
       // 2. Transactions ('/transactions')
       if (cleanPath === '/transactions') {
         const [walletsSnap, holdersSnap] = await Promise.all([
-          getDocsFromServer(query(collection(db, 'wallets'), where('ownerId', '==', uid))).catch(() =>
-            getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid)))
+          fsGetDocs('wallets', ownerSpec, uid, true).catch(() =>
+            fsGetDocs('wallets', ownerSpec, uid, false)
           ),
-          getDocsFromServer(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))).catch(() =>
-            getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid)))
+          fsGetDocs('wallet_owners', ownerSpec, uid, true).catch(() =>
+            fsGetDocs('wallet_owners', ownerSpec, uid, false)
           ),
         ]);
 
@@ -2892,11 +2883,11 @@ export const useFinanceStore = defineStore('finance', () => {
       // 3. Wallets & Ownership ('/wallets', '/ownership')
       if (cleanPath === '/wallets' || cleanPath === '/ownership') {
         const [walletsSnap, holdersSnap] = await Promise.all([
-          getDocsFromServer(query(collection(db, 'wallets'), where('ownerId', '==', uid))).catch(() =>
-            getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid)))
+          fsGetDocs('wallets', ownerSpec, uid, true).catch(() =>
+            fsGetDocs('wallets', ownerSpec, uid, false)
           ),
-          getDocsFromServer(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))).catch(() =>
-            getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid)))
+          fsGetDocs('wallet_owners', ownerSpec, uid, true).catch(() =>
+            fsGetDocs('wallet_owners', ownerSpec, uid, false)
           ),
         ]);
 
@@ -2918,15 +2909,14 @@ export const useFinanceStore = defineStore('finance', () => {
       // 4. Categories ('/categories')
       if (cleanPath === '/categories') {
         const queries: Promise<any>[] = [
-          getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid))),
+          fsGetDocs('categories', ownerSpec, uid),
         ];
         if (defaultCategories.value.length === 0 && uid !== DEFAULT_CATEGORY_OWNER_ID) {
           queries.push(
-            getDocs(
-              query(
-                collection(db, 'categories'),
-                where('ownerId', '==', DEFAULT_CATEGORY_OWNER_ID)
-              )
+            fsGetDocs(
+              'categories',
+              { wheres: [{ field: 'ownerId', op: '==', value: DEFAULT_CATEGORY_OWNER_ID }] },
+              uid
             )
           );
         }
@@ -2958,8 +2948,8 @@ export const useFinanceStore = defineStore('finance', () => {
       if (cleanPath === '/budgets') {
         const curYear = String(new Date().getFullYear());
         const queries: Promise<any>[] = [
-          getDocs(query(collection(db, 'budgets'), where('ownerId', '==', uid))),
-          getDocs(query(collection(db, 'categories'), where('ownerId', '==', uid))),
+          fsGetDocs('budgets', ownerSpec, uid),
+          fsGetDocs('categories', ownerSpec, uid),
         ];
         const [budgetSnap, catsSnap] = await Promise.all(queries);
 
@@ -3000,8 +2990,8 @@ export const useFinanceStore = defineStore('finance', () => {
           : getCurrentMonthPeriod();
 
         const [walletsSnap, holdersSnap] = await Promise.all([
-          getDocs(query(collection(db, 'wallets'), where('ownerId', '==', uid))),
-          getDocs(query(collection(db, 'wallet_owners'), where('ownerId', '==', uid))),
+          fsGetDocs('wallets', ownerSpec, uid),
+          fsGetDocs('wallet_owners', ownerSpec, uid),
         ]);
 
         const fetchedWallets = walletsSnap.docs
@@ -3297,8 +3287,8 @@ export const useFinanceStore = defineStore('finance', () => {
       color: safeColor,
       deleted: false,
       deletedAt: null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+      createdAt: fsServerTimestamp(),
+      updatedAt: fsServerTimestamp(),
     };
     const holderDocData = {
       ownerId: uid,
@@ -3308,23 +3298,23 @@ export const useFinanceStore = defineStore('finance', () => {
       balance: numericBalance,
       deleted: false,
       deletedAt: null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+      createdAt: fsServerTimestamp(),
+      updatedAt: fsServerTimestamp(),
     };
 
     try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'wallets', id), walletDocData);
-      batch.set(doc(db, 'wallet_owners', holderId), holderDocData);
+      const batch = createFsBatch(uid);
+      batch.set('wallets', id, walletDocData);
+      batch.set('wallet_owners', holderId, holderDocData);
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
     } catch {
       // Fallback: if live Firestore rules evaluate exists(/wallets/{walletId}) before batch commit,
       // create the parent wallet document first so it exists, then create its initial wallet_owners document!
       try {
-        await setDoc(doc(db, 'wallets', id), walletDocData);
-        const secondBatch = writeBatch(db);
-        secondBatch.set(doc(db, 'wallet_owners', holderId), holderDocData);
+        await fsSetDoc('wallets', id, walletDocData, undefined, uid);
+        const secondBatch = createFsBatch(uid);
+        secondBatch.set('wallet_owners', holderId, holderDocData);
         touchUserSyncTokenInBatch(secondBatch, uid);
         await secondBatch.commit();
       } catch (err) {
@@ -3382,20 +3372,20 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'wallets', walletId), {
+      const batch = createFsBatch(uid);
+      batch.update('wallets', walletId, {
         name: safeName,
         type: payload.type,
         color: safeColor,
-        updatedAt: serverTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
 
       // Also update walletName in child wallet_owners
       const childHolders = walletOwners.value.filter((fo) => fo.walletId === walletId);
       for (const ch of childHolders) {
-        batch.update(doc(db, 'wallet_owners', ch.id), {
+        batch.update('wallet_owners', ch.id, {
           walletName: safeName,
-          updatedAt: serverTimestamp(),
+          updatedAt: fsServerTimestamp(),
         });
       }
       touchUserSyncTokenInBatch(batch, uid);
@@ -3463,8 +3453,8 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'wallet_owners', id), {
+      const batch = createFsBatch(uid);
+      batch.set('wallet_owners', id, {
         ownerId: uid,
         walletId: wallet.id,
         walletName: wallet.name,
@@ -3472,12 +3462,12 @@ export const useFinanceStore = defineStore('finance', () => {
         balance: numericBalance,
         deleted: false,
         deletedAt: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        createdAt: fsServerTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
-      batch.update(doc(db, 'wallets', wallet.id), {
+      batch.update('wallets', wallet.id, {
         balance: newWalletTotal,
-        updatedAt: serverTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -3530,15 +3520,15 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'wallet_owners', holderId), {
+      const batch = createFsBatch(uid);
+      batch.update('wallet_owners', holderId, {
         holderName: safeHolderName,
         balance: numericBalance,
-        updatedAt: serverTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
-      batch.update(doc(db, 'wallets', target.walletId), {
+      batch.update('wallets', target.walletId, {
         balance: newWalletTotal,
-        updatedAt: serverTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -3578,11 +3568,11 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
+      const batch = createFsBatch(uid);
       for (const h of matchingHolders) {
-        batch.update(doc(db, 'wallet_owners', h.id), {
+        batch.update('wallet_owners', h.id, {
           holderName: safeNewName,
-          updatedAt: serverTimestamp(),
+          updatedAt: fsServerTimestamp(),
         });
       }
       touchUserSyncTokenInBatch(batch, uid);
@@ -3627,15 +3617,15 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'wallet_owners', holderId), {
+      const batch = createFsBatch(uid);
+      batch.update('wallet_owners', holderId, {
         deleted: true,
-        deletedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        deletedAt: fsServerTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
-      batch.update(doc(db, 'wallets', target.walletId), {
+      batch.update('wallets', target.walletId, {
         balance: newBalance,
-        updatedAt: serverTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -3689,12 +3679,12 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
+      const batch = createFsBatch(uid);
       for (const h of matchingHolders) {
-        batch.update(doc(db, 'wallet_owners', h.id), {
+        batch.update('wallet_owners', h.id, {
           deleted: true,
-          deletedAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+          deletedAt: fsServerTimestamp(),
+          updatedAt: fsServerTimestamp(),
         });
       }
 
@@ -3706,9 +3696,9 @@ export const useFinanceStore = defineStore('finance', () => {
           (sum, h) => sum + Number(h.balance || 0),
           0
         );
-        batch.update(doc(db, 'wallets', wId), {
+        batch.update('wallets', wId, {
           balance: nextWalletBal,
-          updatedAt: serverTimestamp(),
+          updatedAt: fsServerTimestamp(),
         });
       }
 
@@ -3748,17 +3738,17 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'wallets', walletId), {
+      const batch = createFsBatch(uid);
+      batch.update('wallets', walletId, {
         deleted: true,
-        deletedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        deletedAt: fsServerTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
       for (const ch of childHolders) {
-        batch.update(doc(db, 'wallet_owners', ch.id), {
+        batch.update('wallet_owners', ch.id, {
           deleted: true,
-          deletedAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+          deletedAt: fsServerTimestamp(),
+          updatedAt: fsServerTimestamp(),
         });
       }
       touchUserSyncTokenInBatch(batch, uid);
@@ -3803,16 +3793,16 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'categories', id), {
+      const batch = createFsBatch(uid);
+      batch.set('categories', id, {
         ownerId: uid,
         name: safeName,
         type: payload.type,
         color: safeColor,
         deleted: false,
         deletedAt: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        createdAt: fsServerTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -3900,12 +3890,16 @@ export const useFinanceStore = defineStore('finance', () => {
 
       // Query Firestore transactions by exact oldName
       try {
-        const q1 = query(
-          collection(db, 'transactions'),
-          where('ownerId', '==', uid),
-          where('category', '==', cleanOld)
+        const snap1 = await fsGetDocs(
+          'transactions',
+          {
+            wheres: [
+              { field: 'ownerId', op: '==', value: uid },
+              { field: 'category', op: '==', value: cleanOld },
+            ],
+          },
+          uid
         );
-        const snap1 = await getDocs(q1);
         for (const d of snap1.docs) {
           const dData = d.data();
           if (!catType || dData.type === catType) {
@@ -3919,12 +3913,16 @@ export const useFinanceStore = defineStore('finance', () => {
       // If cleanOld has different casing, also query lowercase
       if (cleanOldLower !== cleanOld) {
         try {
-          const q2 = query(
-            collection(db, 'transactions'),
-            where('ownerId', '==', uid),
-            where('category', '==', cleanOldLower)
+          const snap2 = await fsGetDocs(
+            'transactions',
+            {
+              wheres: [
+                { field: 'ownerId', op: '==', value: uid },
+                { field: 'category', op: '==', value: cleanOldLower },
+              ],
+            },
+            uid
           );
-          const snap2 = await getDocs(q2);
           for (const d of snap2.docs) {
             const dData = d.data();
             if (!catType || dData.type === catType) {
@@ -3941,11 +3939,11 @@ export const useFinanceStore = defineStore('finance', () => {
       if (docIdList.length > 0) {
         for (let i = 0; i < docIdList.length; i += 400) {
           const chunk = docIdList.slice(i, i + 400);
-          const batch = writeBatch(db);
+          const batch = createFsBatch(uid);
           for (const docId of chunk) {
-            batch.update(doc(db, 'transactions', docId), {
+            batch.update('transactions', docId, {
               category: cleanNew,
-              updatedAt: serverTimestamp(),
+              updatedAt: fsServerTimestamp(),
             });
           }
           touchUserSyncTokenInBatch(batch, uid);
@@ -3956,12 +3954,16 @@ export const useFinanceStore = defineStore('finance', () => {
       // 5. Query & Batch update matching budgets in Firestore
       const matchedBudgetDocIds = new Set<string>(localMatchedBudgetIds);
       try {
-        const bq = query(
-          collection(db, 'budgets'),
-          where('ownerId', '==', uid),
-          where('category', '==', cleanOld)
+        const bSnap = await fsGetDocs(
+          'budgets',
+          {
+            wheres: [
+              { field: 'ownerId', op: '==', value: uid },
+              { field: 'category', op: '==', value: cleanOld },
+            ],
+          },
+          uid
         );
-        const bSnap = await getDocs(bq);
         for (const bd of bSnap.docs) {
           matchedBudgetDocIds.add(bd.id);
         }
@@ -3971,11 +3973,11 @@ export const useFinanceStore = defineStore('finance', () => {
 
       const budgetIdList = Array.from(matchedBudgetDocIds);
       if (budgetIdList.length > 0) {
-        const bBatch = writeBatch(db);
+        const bBatch = createFsBatch(uid);
         for (const bId of budgetIdList) {
-          bBatch.update(doc(db, 'budgets', bId), {
+          bBatch.update('budgets', bId, {
             category: cleanNew,
-            updatedAt: serverTimestamp(),
+            updatedAt: fsServerTimestamp(),
           });
         }
         touchUserSyncTokenInBatch(bBatch, uid);
@@ -4060,16 +4062,16 @@ export const useFinanceStore = defineStore('finance', () => {
     if (defaultTarget && uid !== DEFAULT_CATEGORY_OWNER_ID) {
       const overrideDocId = sanitizeId(`${uid}_def_${catId}`);
       try {
-        const batch = writeBatch(db);
-        batch.set(doc(db, 'categories', overrideDocId), {
+        const batch = createFsBatch(uid);
+        batch.set('categories', overrideDocId, {
           ownerId: uid,
           name: safeName,
           type: payload.type,
           color: safeColor,
           deleted: false,
           deletedAt: null,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+          createdAt: fsServerTimestamp(),
+          updatedAt: fsServerTimestamp(),
         });
         touchUserSyncTokenInBatch(batch, uid);
         await batch.commit();
@@ -4112,12 +4114,12 @@ export const useFinanceStore = defineStore('finance', () => {
     }
 
     try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'categories', catId), {
+      const batch = createFsBatch(uid);
+      batch.update('categories', catId, {
         name: safeName,
         type: payload.type,
         color: safeColor,
-        updatedAt: serverTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -4199,16 +4201,16 @@ export const useFinanceStore = defineStore('finance', () => {
         'emerald'
       );
       try {
-        const batch = writeBatch(db);
-        batch.set(doc(db, 'categories', overrideDocId), {
+        const batch = createFsBatch(uid);
+        batch.set('categories', overrideDocId, {
           ownerId: uid,
           name: safeName,
           type: target.type,
           color: safeColor,
           deleted: true,
-          deletedAt: serverTimestamp(),
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+          deletedAt: fsServerTimestamp(),
+          createdAt: fsServerTimestamp(),
+          updatedAt: fsServerTimestamp(),
         });
         touchUserSyncTokenInBatch(batch, uid);
         await batch.commit();
@@ -4242,11 +4244,11 @@ export const useFinanceStore = defineStore('finance', () => {
     }
 
     try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'categories', catId), {
+      const batch = createFsBatch(uid);
+      batch.update('categories', catId, {
         deleted: true,
-        deletedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        deletedAt: fsServerTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -4479,7 +4481,7 @@ export const useFinanceStore = defineStore('finance', () => {
     const safeAttachments = sanitizeTransactionAttachments(payload.attachments);
 
     const buildTxBatch = (includeAttachmentsInFirestore: boolean) => {
-      const batch = writeBatch(db);
+      const batch = createFsBatch(uid);
       const firestoreTxData: Record<string, any> = {
         ownerId: uid,
         walletId: wallet.id,
@@ -4493,8 +4495,8 @@ export const useFinanceStore = defineStore('finance', () => {
         date: safeDate,
         deleted: false,
         deletedAt: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        createdAt: fsServerTimestamp(),
+        updatedAt: fsServerTimestamp(),
       };
       if (resolvedCategoryId) {
         firestoreTxData.categoryId = resolvedCategoryId;
@@ -4515,7 +4517,7 @@ export const useFinanceStore = defineStore('finance', () => {
         firestoreTxData.toFundOwnerName = destHolder?.holderName || 'Pribadi';
       }
 
-      batch.set(doc(db, 'transactions', id), firestoreTxData);
+      batch.set('transactions', id, firestoreTxData);
 
       // If transfer includes an admin fee, record a separate Bea Admin expense transaction so it complies with live Firestore schema rules
       if (payload.type === 'transfer' && numericAdminFee > 0) {
@@ -4532,52 +4534,52 @@ export const useFinanceStore = defineStore('finance', () => {
           date: safeDate,
           deleted: false,
           deletedAt: null,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+          createdAt: fsServerTimestamp(),
+          updatedAt: fsServerTimestamp(),
         };
         if (resolvedFeeCatId) {
           feeData.categoryId = resolvedFeeCatId;
         }
-        batch.set(doc(db, 'transactions', feeTxId), feeData);
+        batch.set('transactions', feeTxId, feeData);
       }
 
       if (sourceHolder) {
-        batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
+        batch.update('wallet_owners', sourceHolder.id, {
           balance:
             payload.type === 'income'
-              ? increment(numericAmount)
+              ? fsIncrement(numericAmount)
               : payload.type === 'expense'
-                ? increment(-numericAmount)
-                : increment(-(numericAmount + numericAdminFee)),
-          updatedAt: serverTimestamp(),
+                ? fsIncrement(-numericAmount)
+                : fsIncrement(-(numericAmount + numericAdminFee)),
+          updatedAt: fsServerTimestamp(),
         });
       }
 
       const sourceWalletIncrement =
         payload.type === 'income'
-          ? increment(numericAmount)
+          ? fsIncrement(numericAmount)
           : payload.type === 'expense'
-            ? increment(-numericAmount)
+            ? fsIncrement(-numericAmount)
             : destWallet && destWallet.id === wallet.id
-              ? increment(-numericAdminFee)
-              : increment(-(numericAmount + numericAdminFee));
+              ? fsIncrement(-numericAdminFee)
+              : fsIncrement(-(numericAmount + numericAdminFee));
 
-      batch.update(doc(db, 'wallets', wallet.id), {
+      batch.update('wallets', wallet.id, {
         balance: sourceWalletIncrement,
-        updatedAt: serverTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
 
       if (payload.type === 'transfer' && destWallet) {
         if (destHolder) {
-          batch.update(doc(db, 'wallet_owners', destHolder.id), {
-            balance: increment(numericAmount),
-            updatedAt: serverTimestamp(),
+          batch.update('wallet_owners', destHolder.id, {
+            balance: fsIncrement(numericAmount),
+            updatedAt: fsServerTimestamp(),
           });
         }
         if (destWallet.id !== wallet.id) {
-          batch.update(doc(db, 'wallets', destWallet.id), {
-            balance: increment(numericAmount),
-            updatedAt: serverTimestamp(),
+          batch.update('wallets', destWallet.id, {
+            balance: fsIncrement(numericAmount),
+            updatedAt: fsServerTimestamp(),
           });
         }
       }
@@ -4906,7 +4908,7 @@ export const useFinanceStore = defineStore('finance', () => {
       : sanitizeTransactionAttachments(oldTx.attachments);
 
     const buildUpdateTxBatch = (includeAttachmentsInFirestore: boolean) => {
-      const batch = writeBatch(db);
+      const batch = createFsBatch(uid);
       const updatePayload: Record<string, any> = {
         walletId: newWallet.id,
         walletName: newWallet.name,
@@ -4917,7 +4919,7 @@ export const useFinanceStore = defineStore('finance', () => {
         amount: numericAmount,
         note: safeNote,
         date: safeDate,
-        updatedAt: serverTimestamp(),
+        updatedAt: fsServerTimestamp(),
       };
       if (resolvedCategoryId) {
         updatePayload.categoryId = resolvedCategoryId;
@@ -4938,23 +4940,23 @@ export const useFinanceStore = defineStore('finance', () => {
         updatePayload.toFundOwnerName = newDestHolder?.holderName || 'Pribadi';
       }
 
-      batch.update(doc(db, 'transactions', txId), updatePayload);
+      batch.update('transactions', txId, updatePayload);
 
       // Apply holder balance deltas atomically via Firestore increment
       for (const [hId, delta] of holderDeltas.entries()) {
         if (delta === 0) continue;
-        batch.update(doc(db, 'wallet_owners', hId), {
-          balance: increment(delta),
-          updatedAt: serverTimestamp(),
+        batch.update('wallet_owners', hId, {
+          balance: fsIncrement(delta),
+          updatedAt: fsServerTimestamp(),
         });
       }
 
       // Apply wallet balance deltas atomically via Firestore increment
       for (const [wId, delta] of walletDeltas.entries()) {
         if (delta === 0) continue;
-        batch.update(doc(db, 'wallets', wId), {
-          balance: increment(delta),
-          updatedAt: serverTimestamp(),
+        batch.update('wallets', wId, {
+          balance: fsIncrement(delta),
+          updatedAt: fsServerTimestamp(),
         });
       }
 
@@ -5095,66 +5097,66 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'transactions', txId), {
+      const batch = createFsBatch(uid);
+      batch.update('transactions', txId, {
         deleted: true,
-        deletedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        deletedAt: fsServerTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
 
       if (tx.type === 'income') {
         if (sourceHolder) {
-          batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
-            balance: increment(-tx.amount),
-            updatedAt: serverTimestamp(),
+          batch.update('wallet_owners', sourceHolder.id, {
+            balance: fsIncrement(-tx.amount),
+            updatedAt: fsServerTimestamp(),
           });
         }
         if (wallet) {
-          batch.update(doc(db, 'wallets', wallet.id), {
-            balance: increment(-tx.amount),
-            updatedAt: serverTimestamp(),
+          batch.update('wallets', wallet.id, {
+            balance: fsIncrement(-tx.amount),
+            updatedAt: fsServerTimestamp(),
           });
         }
       } else if (tx.type === 'expense') {
         if (sourceHolder) {
-          batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
-            balance: increment(tx.amount),
-            updatedAt: serverTimestamp(),
+          batch.update('wallet_owners', sourceHolder.id, {
+            balance: fsIncrement(tx.amount),
+            updatedAt: fsServerTimestamp(),
           });
         }
         if (wallet) {
-          batch.update(doc(db, 'wallets', wallet.id), {
-            balance: increment(tx.amount),
-            updatedAt: serverTimestamp(),
+          batch.update('wallets', wallet.id, {
+            balance: fsIncrement(tx.amount),
+            updatedAt: fsServerTimestamp(),
           });
         }
       } else if (tx.type === 'transfer') {
         const txAdminFee = Number(tx.adminFee || 0);
         if (sourceHolder) {
-          batch.update(doc(db, 'wallet_owners', sourceHolder.id), {
-            balance: increment(tx.amount + txAdminFee),
-            updatedAt: serverTimestamp(),
+          batch.update('wallet_owners', sourceHolder.id, {
+            balance: fsIncrement(tx.amount + txAdminFee),
+            updatedAt: fsServerTimestamp(),
           });
         }
         if (destHolder) {
-          batch.update(doc(db, 'wallet_owners', destHolder.id), {
-            balance: increment(-tx.amount),
-            updatedAt: serverTimestamp(),
+          batch.update('wallet_owners', destHolder.id, {
+            balance: fsIncrement(-tx.amount),
+            updatedAt: fsServerTimestamp(),
           });
         }
         if (wallet && destWallet && wallet.id !== destWallet.id) {
-          batch.update(doc(db, 'wallets', wallet.id), {
-            balance: increment(tx.amount + txAdminFee),
-            updatedAt: serverTimestamp(),
+          batch.update('wallets', wallet.id, {
+            balance: fsIncrement(tx.amount + txAdminFee),
+            updatedAt: fsServerTimestamp(),
           });
-          batch.update(doc(db, 'wallets', destWallet.id), {
-            balance: increment(-tx.amount),
-            updatedAt: serverTimestamp(),
+          batch.update('wallets', destWallet.id, {
+            balance: fsIncrement(-tx.amount),
+            updatedAt: fsServerTimestamp(),
           });
         } else if (wallet && txAdminFee > 0) {
-          batch.update(doc(db, 'wallets', wallet.id), {
-            balance: increment(txAdminFee),
-            updatedAt: serverTimestamp(),
+          batch.update('wallets', wallet.id, {
+            balance: fsIncrement(txAdminFee),
+            updatedAt: fsServerTimestamp(),
           });
         }
       }
@@ -5274,7 +5276,7 @@ export const useFinanceStore = defineStore('finance', () => {
     await ensureUserDocExistsForSyncToken(uid);
 
     try {
-      const batch = writeBatch(db);
+      const batch = createFsBatch(uid);
       upsertBudgetDocInBatch(batch, markerDocId, uid, {
         category: BUDGET_PERIOD_MARKER_CATEGORY,
         limitAmount: 1,
@@ -5341,14 +5343,14 @@ export const useFinanceStore = defineStore('finance', () => {
     await ensureUserDocExistsForSyncToken(uid);
 
     try {
-      const batch = writeBatch(db);
+      const batch = createFsBatch(uid);
       upsertBudgetDocInBatch(batch, markerDocId, uid, {
         category: BUDGET_PERIOD_MARKER_CATEGORY,
         limitAmount: 1,
         spentAmount: 0,
         period: cleanPeriod,
         deleted: true,
-        deletedAt: serverTimestamp(),
+        deletedAt: fsServerTimestamp(),
       });
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -5429,7 +5431,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
+      const batch = createFsBatch(uid);
       if (existing) {
         const updateData: Record<string, any> = {
           category: safeCategory,
@@ -5438,12 +5440,12 @@ export const useFinanceStore = defineStore('finance', () => {
           period,
           deleted: false,
           deletedAt: null,
-          updatedAt: serverTimestamp(),
+          updatedAt: fsServerTimestamp(),
         };
         if (resolvedCategoryId) {
           updateData.categoryId = resolvedCategoryId;
         }
-        batch.update(doc(db, 'budgets', targetId), updateData);
+        batch.update('budgets', targetId, updateData);
       } else {
         const setData: Record<string, any> = {
           ownerId: uid,
@@ -5453,13 +5455,13 @@ export const useFinanceStore = defineStore('finance', () => {
           period,
           deleted: false,
           deletedAt: null,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+          createdAt: fsServerTimestamp(),
+          updatedAt: fsServerTimestamp(),
         };
         if (resolvedCategoryId) {
           setData.categoryId = resolvedCategoryId;
         }
-        batch.set(doc(db, 'budgets', targetId), setData);
+        batch.set('budgets', targetId, setData);
       }
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -5529,11 +5531,11 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'budgets', budgetId), {
+      const batch = createFsBatch(uid);
+      batch.update('budgets', budgetId, {
         deleted: true,
-        deletedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        deletedAt: fsServerTimestamp(),
+        updatedAt: fsServerTimestamp(),
       });
       touchUserSyncTokenInBatch(batch, uid);
       await batch.commit();
@@ -5748,7 +5750,7 @@ export const useFinanceStore = defineStore('finance', () => {
     // so we never accidentally overwrite an annual budget that was already created on another device/preview!
     if (!existingMeta) {
       try {
-        const remoteMetaSnap = await getDoc(doc(db, 'budgets', metaDocId));
+        const remoteMetaSnap = await fsGetDoc('budgets', metaDocId, uid);
         if (remoteMetaSnap.exists()) {
           knownFirestoreBudgetDocIds.add(metaDocId);
           const remoteData = remoteMetaSnap.data();
@@ -5792,7 +5794,7 @@ export const useFinanceStore = defineStore('finance', () => {
     );
 
     try {
-      const batch = writeBatch(db);
+      const batch = createFsBatch(uid);
       if (existingMeta) {
         knownFirestoreBudgetDocIds.add(metaDocId);
       }
@@ -5955,7 +5957,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
+      const batch = createFsBatch(uid);
       knownFirestoreBudgetDocIds.add(meta.id);
       upsertBudgetDocInBatch(batch, meta.id, uid, {
         category: ANNUAL_BUDGET_META_CATEGORY,
@@ -6071,7 +6073,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
+      const batch = createFsBatch(uid);
       knownFirestoreBudgetDocIds.add(meta.id);
       upsertBudgetDocInBatch(batch, meta.id, uid, {
         category: ANNUAL_BUDGET_META_CATEGORY,
@@ -6213,7 +6215,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
+      const batch = createFsBatch(uid);
 
       // 1. Upsert annual category total document (`period: "Y:YYYY"`)
       if (existingAnnualDoc) {
@@ -6258,10 +6260,10 @@ export const useFinanceStore = defineStore('finance', () => {
         } else if (existingMonthDoc) {
           // Month was unallocated (0) -> soft-delete the monthly budget doc
           knownFirestoreBudgetDocIds.add(existingMonthDoc.id);
-          batch.update(doc(db, 'budgets', existingMonthDoc.id), {
+          batch.update('budgets', existingMonthDoc.id, {
             deleted: true,
-            deletedAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
+            deletedAt: fsServerTimestamp(),
+            updatedAt: fsServerTimestamp(),
           });
         }
       }
@@ -6382,12 +6384,12 @@ export const useFinanceStore = defineStore('finance', () => {
 
     await ensureFirestoreSessionForUser(uid);
     try {
-      const batch = writeBatch(db);
+      const batch = createFsBatch(uid);
       for (const docItem of matchingDocs) {
-        batch.update(doc(db, 'budgets', docItem.id), {
+        batch.update('budgets', docItem.id, {
           deleted: true,
-          deletedAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+          deletedAt: fsServerTimestamp(),
+          updatedAt: fsServerTimestamp(),
         });
       }
       touchUserSyncTokenInBatch(batch, uid);

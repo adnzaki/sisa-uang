@@ -1,6 +1,7 @@
 import { auth } from '../firebase';
-import { useFinanceStore, type TransactionAttachment } from '../stores/finance';
+import type { TransactionAttachment } from '../stores/finance';
 import { useAuthStore } from '../stores/auth';
+import { getUserAuthHeaders } from './api';
 
 const ALLOWED_CLIENT_MIME_PREFIXES = ['image/'];
 const ALLOWED_CLIENT_EXACT_MIMES = new Set([
@@ -44,11 +45,10 @@ export function isPdfAttachment(att: Pick<TransactionAttachment, 'mimeType' | 'n
 }
 
 async function getAttachmentAuthHeaders(explicitOwnerUid?: string): Promise<{
-  idToken: string;
+  headers: Record<string, string>;
   ownerUid: string;
 }> {
   const authStore = useAuthStore();
-  const financeStore = useFinanceStore();
   const ownerUid = (
     explicitOwnerUid ||
     authStore.user?.uid ||
@@ -58,12 +58,27 @@ async function getAttachmentAuthHeaders(explicitOwnerUid?: string): Promise<{
     .trim()
     .replace(/[^a-zA-Z0-9_\-]/g, '_');
 
-  await financeStore.ensureFirestoreSessionForUser(ownerUid);
-  const idToken = (await auth.currentUser?.getIdToken()) || '';
-  if (!idToken) {
+  const headers: Record<string, string> = {
+    ...getUserAuthHeaders(),
+    'x-owner-uid': ownerUid,
+  };
+
+  if (auth.currentUser && !auth.currentUser.isAnonymous) {
+    try {
+      const idToken = await auth.currentUser.getIdToken();
+      if (idToken) {
+        headers.Authorization = `Bearer ${idToken}`;
+      }
+    } catch {
+      // Ignore idToken error when user session token is active
+    }
+  }
+
+  if (!headers['x-user-token'] && !headers['x-admin-token'] && !headers.Authorization) {
     throw new Error('Sesi autentikasi belum siap. Silakan muat ulang atau masuk kembali.');
   }
-  return { idToken, ownerUid };
+
+  return { headers, ownerUid };
 }
 
 export async function uploadTransactionAttachments(
@@ -85,7 +100,7 @@ export async function uploadTransactionAttachments(
     }
   }
 
-  const { idToken, ownerUid } = await getAttachmentAuthHeaders(explicitOwnerUid);
+  const { headers } = await getAttachmentAuthHeaders(explicitOwnerUid);
   const formData = new FormData();
   for (const file of files) {
     formData.append('files', file, file.name);
@@ -93,10 +108,7 @@ export async function uploadTransactionAttachments(
 
   const res = await fetch('/api/transactions/attachments/upload', {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${idToken}`,
-      'x-owner-uid': ownerUid,
-    },
+    headers,
     body: formData,
   });
 
@@ -112,7 +124,7 @@ export async function fetchTransactionAttachmentBlob(
   disposition: 'inline' | 'attachment' = 'inline',
   explicitOwnerUid?: string
 ): Promise<Blob> {
-  const { idToken, ownerUid } = await getAttachmentAuthHeaders(explicitOwnerUid);
+  const { headers } = await getAttachmentAuthHeaders(explicitOwnerUid);
   const params = new URLSearchParams({
     key: att.key,
     disposition,
@@ -120,10 +132,7 @@ export async function fetchTransactionAttachmentBlob(
   });
   const res = await fetch(`/api/transactions/attachments/file?${params.toString()}`, {
     method: 'GET',
-    headers: {
-      Authorization: `Bearer ${idToken}`,
-      'x-owner-uid': ownerUid,
-    },
+    headers,
   });
   if (!res.ok) {
     const errJson = await res.json().catch(() => null);
@@ -158,13 +167,12 @@ export async function deleteTransactionAttachmentFile(
   explicitOwnerUid?: string
 ): Promise<void> {
   if (!key) return;
-  const { idToken, ownerUid } = await getAttachmentAuthHeaders(explicitOwnerUid);
+  const { headers } = await getAttachmentAuthHeaders(explicitOwnerUid);
   const res = await fetch('/api/transactions/attachments/file', {
     method: 'DELETE',
     headers: {
+      ...headers,
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${idToken}`,
-      'x-owner-uid': ownerUid,
     },
     body: JSON.stringify({ key }),
   });
@@ -180,13 +188,12 @@ export async function saveTransactionAttachmentIndex(
   explicitOwnerUid?: string
 ): Promise<void> {
   try {
-    const { idToken, ownerUid } = await getAttachmentAuthHeaders(explicitOwnerUid);
+    const { headers } = await getAttachmentAuthHeaders(explicitOwnerUid);
     await fetch('/api/transactions/attachments/index', {
       method: 'PUT',
       headers: {
+        ...headers,
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${idToken}`,
-        'x-owner-uid': ownerUid,
       },
       body: JSON.stringify({ txId, attachments }),
     });
@@ -199,13 +206,10 @@ export async function fetchTransactionAttachmentIndex(
   explicitOwnerUid?: string
 ): Promise<Record<string, TransactionAttachment[]>> {
   try {
-    const { idToken, ownerUid } = await getAttachmentAuthHeaders(explicitOwnerUid);
+    const { headers } = await getAttachmentAuthHeaders(explicitOwnerUid);
     const res = await fetch('/api/transactions/attachments/index', {
       method: 'GET',
-      headers: {
-        Authorization: `Bearer ${idToken}`,
-        'x-owner-uid': ownerUid,
-      },
+      headers,
     });
     if (!res.ok) return {};
     const data = await res.json().catch(() => null);

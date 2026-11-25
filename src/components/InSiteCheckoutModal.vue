@@ -64,8 +64,8 @@ watch(
 
 // Form state
 const fullName = ref(authStore.user?.displayName || '');
-const email = ref(authStore.user?.email || 'vuedevo@gmail.com');
-const phone = ref('085129634505');
+const email = ref(authStore.user?.email || '');
+const phone = ref('');
 
 // Duitku Payment Channels
 // 10 Supported Virtual Accounts:

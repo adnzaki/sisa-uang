@@ -5,7 +5,6 @@ import {
   signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signInAnonymously,
   updateProfile,
   updatePassword,
   EmailAuthProvider,
@@ -13,34 +12,30 @@ import {
   signOut as firebaseSignOut,
 } from 'firebase/auth';
 import {
-  doc,
-  getDoc,
-  getDocFromServer,
-  getDocs,
-  getDocsFromServer,
-  setDoc,
-  updateDoc,
-  serverTimestamp,
-  collection,
-  query,
-  where,
-  limit,
-} from 'firebase/firestore';
-import {
   auth,
-  db,
   googleProvider,
-  OperationType,
-  handleFirestoreError,
   isFirestoreQuotaError,
   sanitizeId,
   sanitizeString,
   MAX_DISPLAY_NAME_LENGTH,
   MAX_EMAIL_LENGTH,
   MAX_LOG_DETAIL_LENGTH,
-  sisaUangAuth,
 } from '../firebase';
-import { apiClient, setApiAdminContext } from '../services/api';
+import {
+  apiClient,
+  setApiAdminContext,
+  getApiUserToken,
+  setApiUserToken,
+} from '../services/api';
+import {
+  fsGetDoc,
+  fsGetDocs,
+  fsSetDoc,
+  fsUpdateDoc,
+  fsServerTimestamp,
+  hasActiveFirestoreAccess,
+  isDirectFirestoreAuthorized,
+} from '../services/userFirestoreBridge';
 import { useNotificationStore } from './notification';
 import { useFinanceStore } from './finance';
 
@@ -100,6 +95,7 @@ export function purgeForeignLocalStorage(activeUid?: string) {
     'sisa_uang_explicit_logout',
     'sisa_uang_otp_verified',
     'sisa_uang_admin_token',
+    'sisa_uang_user_token',
     'sisa_uang_admin_synced_session',
     'sisauang_pwa_dismissed',
     'sisa_uang_real_default_categories',
@@ -145,38 +141,77 @@ export function purgeForeignLocalStorage(activeUid?: string) {
   }
 }
 
-// Immediately purge on file evaluation to clean up existing foreign user entries & revoke compromised admin sessions
+let needsFirebaseSignOutOnBoot = false;
+
+// Immediately purge on file evaluation to clean up existing foreign user entries & revoke unverified Super Admin leaks
 try {
   if (typeof window !== 'undefined' && window.localStorage) {
     const rawSaved = localStorage.getItem('sisa_uang_active_user');
     let activeUid = '';
+    const isClaimingSuperAdmin = (candidate: any): boolean => {
+      if (!candidate || typeof candidate !== 'object') return false;
+      const email = String(candidate.email || '').trim().toLowerCase();
+      const username = String(candidate.username || '').trim().toLowerCase();
+      const uid = String(candidate.uid || '').trim();
+      const role = String(candidate.role || '').trim().toLowerCase();
+      return (
+        email === 'vuedevo@gmail.com' ||
+        email === 'adnanzaki65@admin.sd.belajar.id' ||
+        username === 'vuedevo' ||
+        uid === 'KlSX6JgegtUIsQinZRKp535OJ6E3' ||
+        uid === 'admin_vuedevo_01' ||
+        role === 'admin'
+      );
+    };
+
     if (rawSaved) {
       try {
         const parsed = JSON.parse(rawSaved);
         if (parsed?.uid) activeUid = parsed.uid;
-        const isSuperAdminEmail =
-          parsed?.email?.toLowerCase() === 'vuedevo@gmail.com' ||
-          parsed?.email?.toLowerCase() === 'adnanzaki65@admin.sd.belajar.id' ||
-          parsed?.role === 'admin' ||
-          parsed?.username?.toLowerCase() === 'vuedevo';
+        const isSuperAdminClaim = isClaimingSuperAdmin(parsed);
         const hasValidToken = Boolean(localStorage.getItem('sisa_uang_admin_token'));
         const hasVerifiedOtp = localStorage.getItem('sisa_uang_otp_verified') === 'true';
 
-        // Strict: If any cached session claims to be Super Admin but lacks strict 2FA OTP verification and token,
-        // demote to normal 'user' role so they can still view their personal finances without control panel access.
-        if (isSuperAdminEmail && (!hasValidToken || !hasVerifiedOtp)) {
-          parsed.role = 'user';
-          localStorage.setItem('sisa_uang_active_user', JSON.stringify(parsed));
+        // Security fix: NEVER demote an unverified Super Admin cache into a normal 'user' session —
+        // completely wipe the compromised session so non-admin users are never trapped inside @vuedevo.
+        if (isSuperAdminClaim && (!hasValidToken || !hasVerifiedOtp)) {
+          localStorage.removeItem('sisa_uang_active_user');
+          localStorage.removeItem('sisa_uang_user_token');
           localStorage.removeItem('sisa_uang_admin_token');
           localStorage.removeItem('sisa_uang_otp_verified');
           localStorage.removeItem('sisa_uang_actor_email');
           localStorage.removeItem('sisa_uang_admin_synced_session');
-          activeUid = parsed.uid || '';
+          activeUid = '';
+          needsFirebaseSignOutOnBoot = true;
         }
       } catch {
-        // ignore
+        localStorage.removeItem('sisa_uang_active_user');
+        activeUid = '';
       }
     }
+
+    // Also scrub unverified Super Admin entries from saved switcher accounts
+    try {
+      const savedAccountsRaw = localStorage.getItem('sisa_uang_saved_accounts_v1');
+      if (savedAccountsRaw) {
+        const list = JSON.parse(savedAccountsRaw);
+        if (Array.isArray(list)) {
+          const cleaned = list.filter((entry: any) => {
+            if (!entry || !entry.user) return false;
+            if (isClaimingSuperAdmin(entry.user)) {
+              return Boolean(entry.adminToken && entry.otpVerified === true);
+            }
+            return true;
+          });
+          if (cleaned.length !== list.length) {
+            localStorage.setItem('sisa_uang_saved_accounts_v1', JSON.stringify(cleaned));
+          }
+        }
+      }
+    } catch {
+      // Ignore saved accounts parse error
+    }
+
     purgeForeignLocalStorage(activeUid);
   }
 } catch {
@@ -253,6 +288,7 @@ export interface DeviceSessionInfo {
 export interface SavedAccountSession {
   user: AppUser;
   adminToken?: string | null;
+  userToken?: string | null;
   otpVerified?: boolean;
   lastUsedAt: string;
 }
@@ -505,7 +541,11 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  function upsertSavedAccount(targetUser: AppUser, adminToken?: string | null) {
+  function upsertSavedAccount(
+    targetUser: AppUser,
+    adminToken?: string | null,
+    userToken?: string | null
+  ) {
     loadSavedAccountsFromStorage();
     const existingIdx = savedAccounts.value.findIndex(
       (item) =>
@@ -520,6 +560,12 @@ export const useAuthStore = defineStore('auth', () => {
           : existingIdx >= 0
             ? savedAccounts.value[existingIdx].adminToken
             : localStorage.getItem('sisa_uang_admin_token'),
+      userToken:
+        userToken !== undefined
+          ? userToken
+          : existingIdx >= 0
+            ? savedAccounts.value[existingIdx].userToken
+            : getApiUserToken(),
       otpVerified: otpVerified.value,
       lastUsedAt: new Date().toISOString(),
     };
@@ -786,6 +832,26 @@ export const useAuthStore = defineStore('auth', () => {
       nextUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
       nextUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL;
 
+    const effectiveToken = isTargetSuperAdmin ? targetEntry.adminToken || null : null;
+    const effectiveUserToken =
+      isTargetSuperAdmin && !(targetEntry.otpVerified && targetEntry.adminToken)
+        ? null
+        : targetEntry.userToken || null;
+
+    if (!isTargetSuperAdmin && !effectiveUserToken) {
+      removeSavedAccount(targetUid);
+      notify.notifyError(
+        'Sesi Akun Kedaluwarsa',
+        `Sesi untuk @${nextUser.username} perlu masuk ulang demi keamanan.`
+      );
+      return false;
+    }
+
+    user.value = nextUser;
+    localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextUser));
+    purgeForeignLocalStorage(nextUser.uid);
+
     requiresOtp.value = isTargetSuperAdmin;
     otpVerified.value = isTargetSuperAdmin
       ? Boolean(targetEntry.otpVerified && targetEntry.adminToken)
@@ -802,10 +868,10 @@ export const useAuthStore = defineStore('auth', () => {
     }
     localStorage.setItem(OTP_VERIFIED_KEY, otpVerified.value ? 'true' : 'false');
 
-    const effectiveToken = targetEntry.adminToken || null;
+    setApiUserToken(effectiveUserToken);
     setApiAdminContext(nextUser.email, effectiveToken);
 
-    upsertSavedAccount(nextUser, effectiveToken);
+    upsertSavedAccount(nextUser, effectiveToken, effectiveUserToken);
     primaryDeviceOtpPending.value = null;
 
     await syncSubscriptionFromFirestoreForUser(nextUser.uid, nextUser.email);
@@ -847,38 +913,43 @@ export const useAuthStore = defineStore('auth', () => {
     const rawEmail = (targetEmailInput || activeUser?.email || '').trim().toLowerCase();
     if (!rawUid) return false;
 
+    const safeUid = sanitizeId(rawUid);
+    if (!hasActiveFirestoreAccess(safeUid)) {
+      return false;
+    }
+
     isSyncingFirestoreSub = true;
     try {
-      const safeUid = sanitizeId(rawUid);
-
-      // Ensure Firebase Auth session is active
-      if (!auth.currentUser) {
-        try {
-          await signInAnonymously(auth);
-        } catch {
-          // Ignore
-        }
-      }
-
-      // Query the user document directly from Cloud Firestore collection "users"
+      // Query the user document from Cloud Firestore (direct for verified Firebase Auth or authenticated backend bridge)
       let userDocData: Record<string, any> | null = null;
       try {
-        const userDocRef = doc(db, 'users', safeUid);
-        const userDocSnap = await getDocFromServer(userDocRef).catch(() => getDoc(userDocRef));
+        const userDocSnap = await fsGetDoc('users', safeUid, safeUid, true).catch(() =>
+          fsGetDoc('users', safeUid, safeUid)
+        );
         if (userDocSnap.exists()) {
-          userDocData = userDocSnap.data() as Record<string, any>;
+          userDocData = userDocSnap.data() || null;
         }
       } catch {
         // Fallback to query by exact email if UID lookup fails
       }
 
-      // If document was not found by safeUid, query specifically by this user's exact email directly from server
+      // If document was not found by safeUid, query specifically by this user's exact email
       if (!userDocData && rawEmail) {
         try {
-          const emailQ = query(collection(db, 'users'), where('email', '==', rawEmail), limit(1));
-          const emailSnap = await getDocsFromServer(emailQ).catch(() => getDocs(emailQ));
+          const emailSnap = await fsGetDocs(
+            'users',
+            { wheres: [{ field: 'email', op: '==', value: rawEmail }], limitCount: 1 },
+            safeUid,
+            true
+          ).catch(() =>
+            fsGetDocs(
+              'users',
+              { wheres: [{ field: 'email', op: '==', value: rawEmail }], limitCount: 1 },
+              safeUid
+            )
+          );
           if (!emailSnap.empty) {
-            userDocData = emailSnap.docs[0].data() as Record<string, any>;
+            userDocData = emailSnap.docs[0].data() || null;
           }
         } catch {
           // Ignore
@@ -946,21 +1017,23 @@ export const useAuthStore = defineStore('auth', () => {
       if (prevStatus !== resolvedStatus || prevIsPro !== currentIsPro) {
         if (user.value) {
           upsertSavedAccount(user.value);
-          try {
-            await apiClient.post('/users/sync', {
-              uid: user.value.uid,
-              username: user.value.username,
-              email: user.value.email,
-              displayName: user.value.displayName,
-              authProvider: user.value.authProvider,
-              subscriptionStatus: resolvedStatus,
-              isPro: currentIsPro,
-              subscriptionPlan: resolvedPlan,
-              subscriptionExpiresAt: resolvedExpiresAt,
-              isExplicitlyDeactivated: isDeactivated,
-            });
-          } catch {
-            // Ignore
+          if (getApiUserToken() || localStorage.getItem('sisa_uang_admin_token')) {
+            try {
+              await apiClient.post('/users/sync', {
+                uid: user.value.uid,
+                username: user.value.username,
+                email: user.value.email,
+                displayName: user.value.displayName,
+                authProvider: user.value.authProvider,
+                subscriptionStatus: resolvedStatus,
+                isPro: currentIsPro,
+                subscriptionPlan: resolvedPlan,
+                subscriptionExpiresAt: resolvedExpiresAt,
+                isExplicitlyDeactivated: isDeactivated,
+              });
+            } catch {
+              // Ignore
+            }
           }
         }
         return true;
@@ -1119,10 +1192,7 @@ export const useAuthStore = defineStore('auth', () => {
     const authProvider: 'google' | 'password' = isGoogle ? 'google' : 'password';
     const isAdminEmail =
       safeEmail === SUPER_ADMIN_EMAIL ||
-      safeEmail === WORKSPACE_ADMIN_EMAIL ||
-      safeEmail === 'sdnpengasinantujuh@gmail.com';
-
-    const userDocRef = doc(db, 'users', safeUid);
+      safeEmail === WORKSPACE_ADMIN_EMAIL;
 
     let profile: AppUser = {
       uid: safeUid,
@@ -1137,14 +1207,25 @@ export const useAuthStore = defineStore('auth', () => {
     };
 
     try {
-      // First check if a migrated user document already exists by email in /users
-      const snap = await getDocFromServer(userDocRef).catch(() => getDoc(userDocRef));
+      const snap = await fsGetDoc('users', safeUid, safeUid, true).catch(() =>
+        fsGetDoc('users', safeUid, safeUid)
+      );
       if (!snap.exists()) {
-        // Check if there is an existing migrated user doc with this EXACT email directly on server
+        // Check if there is an existing migrated user doc with this EXACT email
         let migratedSnapDoc: any = null;
         try {
-          const emailQ = query(collection(db, 'users'), where('email', '==', safeEmail), limit(1));
-          const emailMatches = await getDocsFromServer(emailQ).catch(() => getDocs(emailQ));
+          const emailMatches = await fsGetDocs(
+            'users',
+            { wheres: [{ field: 'email', op: '==', value: safeEmail }], limitCount: 1 },
+            safeUid,
+            true
+          ).catch(() =>
+            fsGetDocs(
+              'users',
+              { wheres: [{ field: 'email', op: '==', value: safeEmail }], limitCount: 1 },
+              safeUid
+            )
+          );
           if (!emailMatches.empty) {
             migratedSnapDoc = emailMatches.docs[0];
           }
@@ -1182,42 +1263,52 @@ export const useAuthStore = defineStore('auth', () => {
             subscriptionExpiresAt: isPro ? candidateExpires : null,
             isFirebaseBacked: true,
           };
-        } else {
-          // Try creating with username field first; if remote firestore.rules has strict keys or email_verified check, fallback gracefully
+        } else if (isDirectFirestoreAuthorized(safeUid)) {
           try {
-            await setDoc(userDocRef, {
-              uid: safeUid,
-              username: profile.username,
-              email: safeEmail,
-              displayName: safeName,
-              role: isAdminEmail ? 'admin' : 'user',
-              status: 'active',
-              authProvider,
-              currency: 'IDR',
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          } catch {
-            try {
-              // Fallback without `username` and with `role: 'user'` in case remote Console rules haven't been updated yet
-              await setDoc(userDocRef, {
+            await fsSetDoc(
+              'users',
+              safeUid,
+              {
                 uid: safeUid,
+                username: profile.username,
                 email: safeEmail,
                 displayName: safeName,
-                role: 'user',
+                role: isAdminEmail ? 'admin' : 'user',
                 status: 'active',
                 authProvider,
                 currency: 'IDR',
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-              });
+                createdAt: fsServerTimestamp(),
+                updatedAt: fsServerTimestamp(),
+              },
+              undefined,
+              safeUid
+            );
+          } catch {
+            try {
+              await fsSetDoc(
+                'users',
+                safeUid,
+                {
+                  uid: safeUid,
+                  email: safeEmail,
+                  displayName: safeName,
+                  role: 'user',
+                  status: 'active',
+                  authProvider,
+                  currency: 'IDR',
+                  createdAt: fsServerTimestamp(),
+                  updatedAt: fsServerTimestamp(),
+                },
+                undefined,
+                safeUid
+              );
             } catch {
-              // If remote Console rules still reject unverified email creation, keep local/hybrid profile active without throwing
+              // Ignore if remote Console rules restrict creation
             }
           }
         }
       } else {
-        const existingData = snap.data();
+        const existingData = snap.data() || {};
         const isDeactivated = existingData.isExplicitlyDeactivated === true;
         const candidateExpires = existingData.subscriptionExpiresAt ? String(existingData.subscriptionExpiresAt).slice(0, 10) : null;
         let isPro = false;
@@ -1248,53 +1339,62 @@ export const useAuthStore = defineStore('auth', () => {
         };
       }
     } catch {
-      // Do not crash app startup if Firestore rules in external console are still restrictive
+      // Do not crash app startup if Firestore lookup fails
     }
 
-    // Sync with backend directory via Axios
-    try {
-      const { data } = await apiClient.post('/users/sync', {
-        uid: profile.uid,
-        username: profile.username,
-        email: profile.email,
-        displayName: profile.displayName,
-        authProvider: profile.authProvider,
-        subscriptionStatus: profile.subscriptionStatus,
-        isPro: profile.isPro,
-        isExplicitlyDeactivated: profile.isExplicitlyDeactivated,
-        subscriptionPlan: profile.subscriptionPlan,
-        subscriptionExpiresAt: profile.subscriptionExpiresAt,
-      });
-      if (data?.user) {
-        if (data.user.status) {
-          profile.status = data.user.status;
+    // Sync with backend directory via Axios when authenticated
+    if (getApiUserToken() || localStorage.getItem('sisa_uang_admin_token')) {
+      try {
+        const { data } = await apiClient.post('/users/sync', {
+          uid: profile.uid,
+          username: profile.username,
+          email: profile.email,
+          displayName: profile.displayName,
+          authProvider: profile.authProvider,
+          subscriptionStatus: profile.subscriptionStatus,
+          isPro: profile.isPro,
+          isExplicitlyDeactivated: profile.isExplicitlyDeactivated,
+          subscriptionPlan: profile.subscriptionPlan,
+          subscriptionExpiresAt: profile.subscriptionExpiresAt,
+        });
+        if (data?.user) {
+          if (data.user.status) {
+            profile.status = data.user.status;
+          }
+          if (data.user.isExplicitlyDeactivated === true) {
+            profile.subscriptionStatus = 'free';
+            profile.isPro = false;
+            profile.isExplicitlyDeactivated = true;
+            profile.subscriptionPlan = null;
+            profile.subscriptionExpiresAt = null;
+          } else if (data.user.subscriptionStatus === 'pro' || data.user.isPro === true) {
+            profile.subscriptionStatus = 'pro';
+            profile.isPro = true;
+            profile.subscriptionPlan = data.user.subscriptionPlan || profile.subscriptionPlan || 'monthly';
+            profile.subscriptionExpiresAt = data.user.subscriptionExpiresAt || profile.subscriptionExpiresAt || null;
+          } else {
+            profile.subscriptionStatus = data.user.subscriptionStatus === 'pending' ? 'pending' : 'free';
+            profile.isPro = false;
+            profile.subscriptionPlan = null;
+            profile.subscriptionExpiresAt = null;
+          }
         }
-        if (data.user.isExplicitlyDeactivated === true) {
-          profile.subscriptionStatus = 'free';
-          profile.isPro = false;
-          profile.isExplicitlyDeactivated = true;
-          profile.subscriptionPlan = null;
-          profile.subscriptionExpiresAt = null;
-        } else if (data.user.subscriptionStatus === 'pro' || data.user.isPro === true) {
-          profile.subscriptionStatus = 'pro';
-          profile.isPro = true;
-          profile.subscriptionPlan = data.user.subscriptionPlan || profile.subscriptionPlan || 'monthly';
-          profile.subscriptionExpiresAt = data.user.subscriptionExpiresAt || profile.subscriptionExpiresAt || null;
-        } else {
-          profile.subscriptionStatus = data.user.subscriptionStatus === 'pending' ? 'pending' : 'free';
-          profile.isPro = false;
-          profile.subscriptionPlan = null;
-          profile.subscriptionExpiresAt = null;
-        }
+      } catch {
+        // Ignore
       }
-    } catch {
-      // Ignore
     }
 
     return profile;
   }
 
+  let isAuthListenerBound = false;
+
   function initAuth() {
+    if (needsFirebaseSignOutOnBoot) {
+      needsFirebaseSignOutOnBoot = false;
+      void firebaseSignOut(auth).catch(() => {});
+    }
+
     loadSavedAccountsFromStorage();
     // Check explicit logout only if no active session was intentionally saved
     const hasSavedSession = Boolean(localStorage.getItem(SESSION_STORAGE_KEY));
@@ -1307,6 +1407,7 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = null;
       localStorage.removeItem(SESSION_STORAGE_KEY);
       localStorage.removeItem(OTP_VERIFIED_KEY);
+      setApiUserToken(null);
       setApiAdminContext(null, null);
       purgeForeignLocalStorage();
     } else {
@@ -1317,49 +1418,67 @@ export const useAuthStore = defineStore('auth', () => {
           if (!parsed.username) {
             parsed.username = parsed.email?.split('@')[0] || 'user';
           }
-          user.value = parsed;
-          purgeForeignLocalStorage(parsed.uid);
-          localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
           const isAdminAccount =
-            parsed.role === 'admin' &&
-            (parsed.email?.toLowerCase() === SUPER_ADMIN_EMAIL ||
-              parsed.email?.toLowerCase() === WORKSPACE_ADMIN_EMAIL);
+            parsed.role === 'admin' ||
+            parsed.email?.toLowerCase() === SUPER_ADMIN_EMAIL ||
+            parsed.email?.toLowerCase() === WORKSPACE_ADMIN_EMAIL ||
+            parsed.username?.toLowerCase() === SUPER_ADMIN_USERNAME ||
+            parsed.uid === 'KlSX6JgegtUIsQinZRKp535OJ6E3' ||
+            parsed.uid === 'admin_vuedevo_01';
 
           const storedToken = localStorage.getItem('sisa_uang_admin_token');
           const storedOtpVerified = localStorage.getItem(OTP_VERIFIED_KEY) === 'true';
+          const storedUserToken = getApiUserToken();
 
-          if (isAdminAccount) {
-            // Strict: Super Admin access is ONLY valid if an authentic server token and verified OTP are present.
-            // If missing on app boot, demote silently to regular user session WITHOUT forcing an unsolicited OTP flow.
-            if (!storedToken || !storedOtpVerified) {
-              requiresOtp.value = false;
-              otpVerified.value = false;
-              localStorage.setItem(OTP_VERIFIED_KEY, 'false');
-              localStorage.removeItem('sisa_uang_admin_token');
-              setApiAdminContext(null, null);
-              parsed.role = 'user';
-              user.value = parsed;
-              localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(parsed));
-            } else {
+          if (isAdminAccount && (!storedToken || !storedOtpVerified)) {
+            // Security fix: wipe unverified Super Admin cache completely and cut Firebase Auth session
+            user.value = null;
+            requiresOtp.value = false;
+            otpVerified.value = false;
+            localStorage.removeItem(SESSION_STORAGE_KEY);
+            localStorage.removeItem(OTP_VERIFIED_KEY);
+            localStorage.removeItem('sisa_uang_admin_token');
+            setApiUserToken(null);
+            setApiAdminContext(null, null);
+            purgeForeignLocalStorage();
+            void firebaseSignOut(auth).catch(() => {});
+          } else if (!isAdminAccount && !storedUserToken) {
+            // Clear unauthenticated legacy cache lacking a signed userToken; if Firebase Auth holds
+            // a valid Google/email user session, onAuthStateChanged below will immediately exchange idToken cleanly.
+            user.value = null;
+            localStorage.removeItem(SESSION_STORAGE_KEY);
+            setApiAdminContext(null, null);
+            purgeForeignLocalStorage();
+          } else {
+            user.value = parsed;
+            purgeForeignLocalStorage(parsed.uid);
+            localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+
+            if (isAdminAccount && storedToken && storedOtpVerified) {
               requiresOtp.value = false;
               otpVerified.value = true;
               setApiAdminContext(parsed.email, storedToken);
-              upsertSavedAccount(parsed, storedToken);
+              upsertSavedAccount(parsed, storedToken, storedUserToken);
+            } else {
+              setApiAdminContext(parsed.email, null);
             }
-          } else {
-            setApiAdminContext(parsed.email, null);
-          }
 
-          void registerCurrentDeviceSession(parsed, false);
-          // Always validate subscription status directly against Cloud Firestore
-          void syncSubscriptionFromFirestoreForUser(parsed.uid, parsed.email);
-          startUserStatusMonitor(parsed);
+            void registerCurrentDeviceSession(parsed, false);
+            void syncSubscriptionFromFirestoreForUser(parsed.uid, parsed.email);
+            startUserStatusMonitor(parsed);
+          }
         } catch {
           localStorage.removeItem(SESSION_STORAGE_KEY);
+          setApiUserToken(null);
           purgeForeignLocalStorage();
         }
       }
     }
+
+    if (isAuthListenerBound) {
+      return;
+    }
+    isAuthListenerBound = true;
 
     onAuthStateChanged(auth, async (fbUser) => {
       // If user explicitly logged out and has no active local session, DO NOT auto-restore session from Firebase Auth cache!
@@ -1378,21 +1497,35 @@ export const useAuthStore = defineStore('auth', () => {
       }
 
       if (fbUser && !fbUser.isAnonymous) {
+        const fbEmail = (fbUser.email || '').toLowerCase();
+        const isFbSuperAdmin = fbEmail === SUPER_ADMIN_EMAIL || fbEmail === WORKSPACE_ADMIN_EMAIL;
+        const storedToken = localStorage.getItem('sisa_uang_admin_token');
+        const storedOtp = localStorage.getItem(OTP_VERIFIED_KEY) === 'true';
+
+        // Strict guard: never leave an ambient Firebase Auth Super Admin session active without verified 2FA OTP & token
+        if (isFbSuperAdmin && (!storedToken || !storedOtp)) {
+          try {
+            await firebaseSignOut(auth);
+          } catch {
+            // Ignore
+          }
+          if (user.value && (user.value.email?.toLowerCase() === SUPER_ADMIN_EMAIL || user.value.email?.toLowerCase() === WORKSPACE_ADMIN_EMAIL)) {
+            user.value = null;
+            localStorage.removeItem(SESSION_STORAGE_KEY);
+            setApiUserToken(null);
+            setApiAdminContext(null, null);
+            purgeForeignLocalStorage();
+          }
+          isReady.value = true;
+          return;
+        }
+
         if (user.value || isRegisteringInProgress) {
           isReady.value = true;
           return;
         }
 
-        const fbEmail = (fbUser.email || '').toLowerCase();
-        const isFbSuperAdmin = fbEmail === SUPER_ADMIN_EMAIL || fbEmail === WORKSPACE_ADMIN_EMAIL;
-        const hasExplicitSavedSession = Boolean(localStorage.getItem(SESSION_STORAGE_KEY));
-        const storedToken = localStorage.getItem('sisa_uang_admin_token');
-        const storedOtp = localStorage.getItem(OTP_VERIFIED_KEY) === 'true';
-
-        // CRITICAL: finance.ts establishes an ambient Firebase Auth session as Super Admin for Firestore reads.
-        // If there is NO active local session (`sisa_uang_active_user`) and NO verified admin token,
-        // NEVER auto-login into Super Admin or trigger 2FA OTP when visiting `/auth`!
-        if (isFbSuperAdmin && !hasExplicitSavedSession && (!storedToken || !storedOtp)) {
+        if (isFbSuperAdmin) {
           isReady.value = true;
           return;
         }
@@ -1400,31 +1533,27 @@ export const useAuthStore = defineStore('auth', () => {
         localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
 
         try {
+          if (!getApiUserToken()) {
+            try {
+              const idToken = await fbUser.getIdToken();
+              const { data: fsData } = await apiClient.post('/auth/firebase-session', { idToken });
+              if (fsData?.userToken) {
+                setApiUserToken(fsData.userToken);
+              }
+            } catch {
+              // Ignore firebase-session exchange error when offline
+            }
+          }
+
           const profile = await ensureFirestoreUserDocument(fbUser);
           const currentActiveUser = user.value as AppUser | null;
           if (!currentActiveUser || currentActiveUser.email.toLowerCase() === profile.email.toLowerCase()) {
-            const isProfileAdmin =
-              profile.role === 'admin' &&
-              (profile.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
-                profile.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL);
-
-            if (isProfileAdmin && (!storedToken || !storedOtp)) {
-              // Demote silently to regular user without triggering automatic OTP dispatch
-              profile.role = 'user';
-              requiresOtp.value = false;
-              otpVerified.value = false;
-              localStorage.setItem(OTP_VERIFIED_KEY, 'false');
-              localStorage.removeItem('sisa_uang_admin_token');
-              setApiAdminContext(null, null);
-            } else if (isProfileAdmin && storedToken && storedOtp) {
-              requiresOtp.value = false;
-              otpVerified.value = true;
-              setApiAdminContext(profile.email, storedToken);
-              upsertSavedAccount(profile, storedToken);
-            }
-
+            profile.role = 'user';
             user.value = profile;
             localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
+            purgeForeignLocalStorage(profile.uid);
+            setApiAdminContext(profile.email, null);
+            upsertSavedAccount(profile, null, getApiUserToken());
             await syncSubscriptionFromFirestoreForUser(profile.uid, profile.email);
             void registerCurrentDeviceSession(profile, true);
             startUserStatusMonitor(profile);
@@ -1435,104 +1564,6 @@ export const useAuthStore = defineStore('auth', () => {
       }
       isReady.value = true;
     });
-  }
-
-  /**
-   * Look up a user document directly in Cloud Firestore ("sisa-uang") by email OR username.
-   * Uses targeted indexed queries with a safe fallback when username is not stored on the Firestore doc.
-   */
-  async function findMigratedUserInFirestore(identifier: string): Promise<{
-    uid: string;
-    username: string;
-    email: string;
-    displayName: string;
-    passwordHash?: string;
-    role: 'user' | 'admin';
-    status: 'active' | 'blocked';
-    authProvider: 'password' | 'google';
-    currency: 'IDR' | 'USD';
-    subscriptionStatus?: 'free' | 'pro';
-    isPro?: boolean;
-  } | null> {
-    const clean = identifier.trim().toLowerCase().replace(/^@+/, '');
-    const normalizedUsername = clean.replace(/\s+/g, '_');
-
-    // Ensure an active Firebase session if available
-    if (!auth.currentUser) {
-      try {
-        await signInAnonymously(auth);
-      } catch {
-        // Ignore
-      }
-    }
-
-    const mapFirestoreUserDoc = (d: any, fallbackIdentifier: string) => {
-      const data = d.data();
-      const isPro = data.subscriptionStatus === 'pro' || data.isPro === true;
-      const emailStr = String(data.email || `${fallbackIdentifier}@sisa-uang.id`).toLowerCase();
-      return {
-        uid: d.id,
-        username: String(data.username || emailStr.split('@')[0] || fallbackIdentifier),
-        email: emailStr,
-        displayName: String(data.displayName || data.username || emailStr.split('@')[0] || fallbackIdentifier),
-        passwordHash: data.passwordHash ? String(data.passwordHash) : undefined,
-        role: (data.role === 'admin' ? 'admin' : 'user') as 'user' | 'admin',
-        status: (data.status === 'blocked' ? 'blocked' : 'active') as 'active' | 'blocked',
-        authProvider: (data.authProvider === 'google' ? 'google' : 'password') as 'password' | 'google',
-        currency: (data.currency === 'USD' ? 'USD' : 'IDR') as 'IDR' | 'USD',
-        subscriptionStatus: (isPro ? 'pro' : 'free') as 'free' | 'pro',
-        isPro,
-      };
-    };
-
-    try {
-      const usersCol = collection(db, 'users');
-      // 1. Query by email directly from server (if identifier contains @, check email first)
-      if (clean.includes('@')) {
-        const qEmail = query(usersCol, where('email', '==', clean));
-        const byEmailSnap = await getDocsFromServer(qEmail).catch(() => getDocs(qEmail));
-        if (!byEmailSnap.empty) {
-          return mapFirestoreUserDoc(byEmailSnap.docs[0], clean);
-        }
-      }
-
-      // 2. Query by username directly from server (exact and normalized underscore form)
-      const qUser = query(usersCol, where('username', '==', clean));
-      const byUsernameSnap = await getDocsFromServer(qUser).catch(() => getDocs(qUser));
-      if (!byUsernameSnap.empty) {
-        return mapFirestoreUserDoc(byUsernameSnap.docs[0], clean);
-      }
-      if (normalizedUsername !== clean) {
-        const qNorm = query(usersCol, where('username', '==', normalizedUsername));
-        const byNormSnap = await getDocsFromServer(qNorm).catch(() => getDocs(qNorm));
-        if (!byNormSnap.empty) {
-          return mapFirestoreUserDoc(byNormSnap.docs[0], normalizedUsername);
-        }
-      }
-
-      // 3. If not @ and not found by username field, check displayName or synthetic email directly from server
-      // STRICT QUOTA PROTECTION: Never call getDocs(usersCol) without where/limit constraints!
-      if (!clean.includes('@')) {
-        const qDisplay = query(usersCol, where('displayName', '==', clean), limit(1));
-        const byDisplaySnap = await getDocsFromServer(qDisplay).catch(() => getDocs(qDisplay));
-        if (!byDisplaySnap.empty) {
-          return mapFirestoreUserDoc(byDisplaySnap.docs[0], clean);
-        }
-
-        const qSynthetic = query(usersCol, where('email', '==', `${clean}@sisa-uang.id`), limit(1));
-        const bySyntheticEmailSnap = await getDocsFromServer(qSynthetic).catch(() => getDocs(qSynthetic));
-        if (!bySyntheticEmailSnap.empty) {
-          return mapFirestoreUserDoc(bySyntheticEmailSnap.docs[0], clean);
-        }
-      }
-    } catch (fsErr: any) {
-      if (isFirestoreQuotaError(fsErr)) {
-        useNotificationStore().notifyQuotaExceeded();
-        throw new Error('Terjadi kesalahan sistem, mohon maaf atas ketidaknyamannya (db-unhandled)');
-      }
-    }
-
-    return null;
   }
 
   // 1. Login with Email OR Username and Password
@@ -1546,98 +1577,26 @@ export const useAuthStore = defineStore('auth', () => {
     const cleanIdentifier = identifierInput.trim().toLowerCase();
 
     try {
-      // Step A: Try Express backend login (supports email or username + Bcrypt/SHA256 verification)
-      let backendData: any = null;
-      try {
-        const response = await apiClient.post('/auth/login', {
-          identifier: cleanIdentifier,
-          email: cleanIdentifier,
-          password: passwordInput,
-        });
-        backendData = response.data;
-      } catch (backendErr: any) {
-        // Step A2: If backend didn't find the user (e.g., server restarted after Firestore import),
-        // check Cloud Firestore /users collection directly by email or username!
-        const firestoreUser = await findMigratedUserInFirestore(cleanIdentifier);
-        if (firestoreUser) {
-          if (firestoreUser.status === 'blocked') {
-            throw new Error('Akses akun Anda sedang diblokir oleh Administrator.');
-          }
-
-          // Verify password against stored passwordHash (Bcrypt $2y$ from CI4 Shield or SHA-256)
-          // Or if the newly registered Firestore user doc had no passwordHash saved, verify via Firebase Auth with their resolved email!
-          if (firestoreUser.passwordHash) {
-            const { data: verifyRes } = await apiClient.post('/auth/verify-hash', {
-              password: passwordInput,
-              passwordHash: firestoreUser.passwordHash,
-            });
-            if (!verifyRes.valid) {
-              throw new Error(
-                'Kata sandi tidak sesuai dengan kredensial akun Anda.'
-              );
-            }
-          } else if (firestoreUser.email && firestoreUser.email.includes('@')) {
-            try {
-              await signInWithEmailAndPassword(auth, firestoreUser.email, passwordInput);
-            } catch {
-              throw new Error('Kata sandi tidak sesuai dengan kredensial akun Anda.');
-            }
-          }
-
-          // Sync this Firestore user back into the live Express server registry
-          await apiClient.post('/users/sync', {
-            uid: firestoreUser.uid,
-            username: firestoreUser.username,
-            email: firestoreUser.email,
-            displayName: firestoreUser.displayName,
-            authProvider: firestoreUser.authProvider,
-            passwordHash: firestoreUser.passwordHash,
-            subscriptionStatus: firestoreUser.subscriptionStatus,
-            isPro: firestoreUser.isPro,
-          });
-
-          const isFsSuperAdminEmail =
-            firestoreUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
-            firestoreUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL;
-
-          backendData = {
-            user: {
-              uid: firestoreUser.uid,
-              username: firestoreUser.username,
-              email: firestoreUser.email,
-              displayName: firestoreUser.displayName,
-              role: isFsSuperAdminEmail ? 'admin' : firestoreUser.role,
-              status: firestoreUser.status,
-              authProvider: firestoreUser.authProvider,
-              currency: firestoreUser.currency,
-              subscriptionStatus: firestoreUser.subscriptionStatus,
-              isPro: firestoreUser.isPro,
-            },
-            requiresOtp: isFsSuperAdminEmail,
-          };
-
-          if (backendData.requiresOtp) {
-            backendData.otpVerified = false;
-            try {
-              const { data: otpData } = await apiClient.post('/auth/request-otp', {
-                email: firestoreUser.email,
-              });
-              backendData.otpDispatch = otpData;
-            } catch {
-              // Keep requiresOtp = true; AuthView will surface / retry OTP request
-            }
-          }
-        } else {
-          throw backendErr;
-        }
-      }
+      // Step A: Express backend login verifies password against in-memory registry, Cloud Firestore, or Firebase Auth
+      const response = await apiClient.post('/auth/login', {
+        identifier: cleanIdentifier,
+        email: cleanIdentifier,
+        password: passwordInput,
+      });
+      const backendData = response.data;
 
       const resolvedEmail = String(backendData.user.email || cleanIdentifier).toLowerCase();
-      const isMigratedUserUid =
-        String(backendData.user.uid || '').startsWith('ci4_user_') ||
-        backendData.user.uid === 'admin_vuedevo_01';
+      const isLoggedSuperAdmin =
+        resolvedEmail === SUPER_ADMIN_EMAIL ||
+        resolvedEmail === WORKSPACE_ADMIN_EMAIL;
 
-      // Step B: Set user.value BEFORE changing Firebase Auth state so onAuthStateChanged knows the active user
+      // Step B: Store userToken cleanly & set active user state before touching Firebase Auth
+      if (isLoggedSuperAdmin) {
+        setApiUserToken(null);
+      } else if (backendData.userToken) {
+        setApiUserToken(backendData.userToken);
+      }
+
       const loggedInUser: AppUser = {
         ...backendData.user,
         username:
@@ -1655,24 +1614,24 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(loggedInUser));
       purgeForeignLocalStorage(loggedInUser.uid);
 
-      // Step C: For email or username login, synchronize Firebase Auth session if applicable
-      if (resolvedEmail && resolvedEmail.includes('@')) {
-        try {
-          await signInWithEmailAndPassword(auth, resolvedEmail, passwordInput);
-        } catch {
-          // Ignore
+      // Step C: Isolate Firebase Auth session strictly to this user (never reuse a foreign/admin Firebase session)
+      if (!isLoggedSuperAdmin) {
+        if (auth.currentUser && auth.currentUser.email?.toLowerCase() !== resolvedEmail) {
+          await firebaseSignOut(auth).catch(() => {});
+        }
+        if (resolvedEmail && resolvedEmail.includes('@')) {
+          try {
+            await signInWithEmailAndPassword(auth, resolvedEmail, passwordInput);
+          } catch {
+            // Hybrid / migrated users use backend userToken + /api/user-db bridge seamlessly
+          }
         }
       }
 
-      // Also check Firestore `/users/{uid}` and `/budgets/su_sub_pro_{uid}` on login so if Super Admin updated subscriptionStatus on another device/instance, it is immediately reflected
       await syncSubscriptionFromFirestoreForUser(loggedInUser.uid, loggedInUser.email);
       if (user.value) {
         Object.assign(loggedInUser, user.value);
       }
-
-      const isLoggedSuperAdmin =
-        loggedInUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
-        loggedInUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL;
 
       if (isLoggedSuperAdmin) {
         // Strict: Super Admin MUST complete 2FA OTP verification. No token is granted yet.
@@ -1685,7 +1644,6 @@ export const useAuthStore = defineStore('auth', () => {
         localStorage.removeItem('sisa_uang_admin_token');
         setApiAdminContext(null, null);
 
-        // If backendData did not include otpDispatch (e.g., edge fallback), request OTP explicitly now
         if (!backendData.otpDispatch) {
           try {
             const { data: otpData } = await apiClient.post('/auth/request-otp', {
@@ -1723,7 +1681,7 @@ export const useAuthStore = defineStore('auth', () => {
       requiresOtp.value = false;
       otpVerified.value = false;
       setApiAdminContext(loggedInUser.email, null);
-      upsertSavedAccount(loggedInUser, null);
+      upsertSavedAccount(loggedInUser, null, backendData.userToken || getApiUserToken());
       await registerCurrentDeviceSession(loggedInUser, true);
       startUserStatusMonitor(loggedInUser);
 
@@ -1733,17 +1691,30 @@ export const useAuthStore = defineStore('auth', () => {
       );
       return { requiresOtp: false };
     } catch (err: any) {
-      // Final fallback: direct Firebase Auth signInWithEmailAndPassword if identifier is an email
-      if (cleanIdentifier.includes('@') && cleanIdentifier !== SUPER_ADMIN_EMAIL) {
+      // Fallback ONLY if backend returned 404/network error for a native Firebase Auth non-admin email user
+      const errStatus = err?.response?.status;
+      if (
+        (!errStatus || errStatus === 404) &&
+        cleanIdentifier.includes('@') &&
+        cleanIdentifier !== SUPER_ADMIN_EMAIL &&
+        cleanIdentifier !== WORKSPACE_ADMIN_EMAIL
+      ) {
         try {
           const cred = await signInWithEmailAndPassword(auth, cleanIdentifier, passwordInput);
-          const profile = await ensureFirestoreUserDocument(cred.user);
+          const idToken = await cred.user.getIdToken();
+          const { data: fsData } = await apiClient.post('/auth/firebase-session', { idToken });
+          if (fsData?.userToken) {
+            setApiUserToken(fsData.userToken);
+          }
+          const profile = fsData?.user
+            ? ({ ...fsData.user, isFirebaseBacked: true } as AppUser)
+            : await ensureFirestoreUserDocument(cred.user);
           localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
           user.value = profile;
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
           purgeForeignLocalStorage(profile.uid);
           setApiAdminContext(profile.email, null);
-          upsertSavedAccount(profile, null);
+          upsertSavedAccount(profile, null, fsData?.userToken || null);
           await registerCurrentDeviceSession(profile, true);
           startUserStatusMonitor(profile);
 
@@ -1800,16 +1771,22 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       let fbUid: string | undefined;
+      let idToken: string | undefined;
       let isFbAuthenticated = false;
 
-      // 1. Register user on the backend server registry first (before syncing to avoid 409 self-conflict)
+      // Clear any previous foreign Firebase Auth session before registering
+      if (auth.currentUser && auth.currentUser.email?.toLowerCase() !== cleanEmail) {
+        await firebaseSignOut(auth).catch(() => {});
+      }
+
       try {
         const cred = await createUserWithEmailAndPassword(auth, cleanEmail, passwordInput);
         await updateProfile(cred.user, { displayName: cleanName });
         fbUid = cred.user.uid;
+        idToken = await cred.user.getIdToken();
         isFbAuthenticated = true;
       } catch {
-        // Fallback to hybrid backend registration if Email/Password provider is not yet enabled or email exists in Firebase Auth
+        // Fallback to hybrid backend registration if email already exists in Firebase Auth
       }
 
       const { data } = await apiClient.post('/auth/register', {
@@ -1818,60 +1795,59 @@ export const useAuthStore = defineStore('auth', () => {
         email: cleanEmail,
         password: passwordInput,
         displayName: cleanName,
+        idToken,
       });
 
-      const resolvedUid = sanitizeId(data.user?.uid || fbUid || `user_${Date.now()}`);
-      const isAdminEmail = cleanEmail === SUPER_ADMIN_EMAIL || cleanEmail === WORKSPACE_ADMIN_EMAIL;
+      if (data.userToken) {
+        setApiUserToken(data.userToken);
+      }
 
-      // 2. Ensure the newly registered user document is written to Cloud Firestore (/users/{uid})
-      try {
-        const userDocRef = doc(db, 'users', resolvedUid);
-        const snap = await getDoc(userDocRef);
-        if (!snap.exists()) {
-          await setDoc(userDocRef, {
-            uid: resolvedUid,
-            username: data.user?.username || cleanUsername,
-            email: cleanEmail,
-            displayName: data.user?.displayName || cleanName,
-            role: 'user',
-            status: 'active',
-            authProvider: 'password',
-            currency: 'IDR',
-            subscriptionStatus: 'free',
-            isPro: false,
-            deleted: false,
-            deletedAt: null,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        } else {
-          // Ensure username is saved on existing doc if it was created without username
-          const existingData = snap.data();
-          if (!existingData?.username && (data.user?.username || cleanUsername)) {
-            await updateDoc(userDocRef, {
-              username: data.user?.username || cleanUsername,
-              displayName: data.user?.displayName || cleanName,
-              updatedAt: serverTimestamp(),
-            }).catch(() => {});
-          }
-        }
-      } catch {
-        // Fallback with minimal required fields + username
+      const resolvedUid = sanitizeId(data.user?.uid || fbUid || `user_${Date.now()}`);
+
+      // Sync newly registered user document to Cloud Firestore via authorized client or bridge
+      if (hasActiveFirestoreAccess(resolvedUid)) {
         try {
-          await setDoc(doc(db, 'users', resolvedUid), {
-            uid: resolvedUid,
-            username: data.user?.username || cleanUsername,
-            email: cleanEmail,
-            displayName: data.user?.displayName || cleanName,
-            role: 'user',
-            status: 'active',
-            authProvider: 'password',
-            currency: 'IDR',
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
+          const snap = await fsGetDoc('users', resolvedUid, resolvedUid);
+          if (!snap.exists()) {
+            await fsSetDoc(
+              'users',
+              resolvedUid,
+              {
+                uid: resolvedUid,
+                username: data.user?.username || cleanUsername,
+                email: cleanEmail,
+                displayName: data.user?.displayName || cleanName,
+                role: 'user',
+                status: 'active',
+                authProvider: 'password',
+                currency: 'IDR',
+                subscriptionStatus: 'free',
+                isPro: false,
+                deleted: false,
+                deletedAt: null,
+                createdAt: fsServerTimestamp(),
+                updatedAt: fsServerTimestamp(),
+              },
+              undefined,
+              resolvedUid
+            );
+          } else {
+            const existingData = snap.data();
+            if (!existingData?.username && (data.user?.username || cleanUsername)) {
+              await fsUpdateDoc(
+                'users',
+                resolvedUid,
+                {
+                  username: data.user?.username || cleanUsername,
+                  displayName: data.user?.displayName || cleanName,
+                  updatedAt: fsServerTimestamp(),
+                },
+                resolvedUid
+              ).catch(() => {});
+            }
+          }
         } catch {
-          // Ignore if remote rules restrict unverified email creation
+          // Server already persisted user document
         }
       }
 
@@ -1885,8 +1861,9 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.removeItem(EXPLICIT_LOGOUT_KEY);
       user.value = registeredUser;
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(registeredUser));
+      purgeForeignLocalStorage(registeredUser.uid);
       setApiAdminContext(registeredUser.email, null);
-      upsertSavedAccount(registeredUser, null);
+      upsertSavedAccount(registeredUser, null, data.userToken || getApiUserToken());
       await registerCurrentDeviceSession(registeredUser, true);
       startUserStatusMonitor(registeredUser);
 
@@ -1954,7 +1931,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     isLoading.value = true;
     try {
-      // 1. Update backend server registry
+      // 1. Update backend server registry (also persists to Firestore server-side)
       try {
         await apiClient.patch(`/users/${encodeURIComponent(user.value.uid)}/profile`, {
           displayName: safeDisplayName,
@@ -1964,14 +1941,19 @@ export const useAuthStore = defineStore('auth', () => {
         // Ignore if user only in Firestore
       }
 
-      // 2. Update Firestore user document
-      if (auth.currentUser) {
+      // 2. Update Firestore user document if client has direct authorization
+      if (isDirectFirestoreAuthorized(user.value.uid)) {
         try {
-          await updateDoc(doc(db, 'users', user.value.uid), {
-            displayName: safeDisplayName,
-            username: safeUsername,
-            updatedAt: serverTimestamp(),
-          });
+          await fsUpdateDoc(
+            'users',
+            user.value.uid,
+            {
+              displayName: safeDisplayName,
+              username: safeUsername,
+              updatedAt: fsServerTimestamp(),
+            },
+            user.value.uid
+          );
         } catch {
           // Ignore if doc doesn't exist yet
         }
@@ -2017,31 +1999,14 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = null;
 
     try {
-      // 1. Check Firestore user document for existing passwordHash (especially for migrated CI4 Shield users or after server restart)
-      let storedPasswordHash: string | undefined;
-      try {
-        const snap = await getDoc(doc(db, 'users', user.value.uid));
-        if (snap.exists()) {
-          const data = snap.data();
-          if (data?.passwordHash) {
-            storedPasswordHash = String(data.passwordHash);
-          }
-        }
-      } catch {
-        // Ignore if Firestore doc cannot be read
-      }
-
-      // 2. Verify currentPassword and update hash on backend server registry
-      const { data } = await apiClient.patch(`/users/${encodeURIComponent(user.value.uid)}/password`, {
+      // 1. Verify currentPassword and update hash on backend + Firestore server-side
+      await apiClient.patch(`/users/${encodeURIComponent(user.value.uid)}/password`, {
         email: user.value.email,
         currentPassword,
         newPassword,
-        storedPasswordHash,
       });
 
-      const newPasswordHash: string | undefined = data?.passwordHash;
-
-      // 3. Update Firebase Auth password if the active Firebase session belongs to this user
+      // 2. Update Firebase Auth password if the active Firebase session belongs to this user
       const fbUser = auth.currentUser;
       if (
         fbUser &&
@@ -2062,30 +2027,6 @@ export const useAuthStore = defineStore('auth', () => {
           await updatePassword(fbUser, newPassword);
         } catch {
           // Ignore if Firebase Auth session is managed via hybrid backend/Firestore
-        }
-      }
-
-      // 4. Persist updated passwordHash to Cloud Firestore /users/{uid}
-      if (newPasswordHash && auth.currentUser) {
-        try {
-          await updateDoc(doc(db, 'users', user.value.uid), {
-            passwordHash: newPasswordHash,
-            authProvider: 'password',
-            updatedAt: serverTimestamp(),
-          });
-        } catch {
-          try {
-            await setDoc(
-              doc(db, 'users', user.value.uid),
-              {
-                passwordHash: newPasswordHash,
-                updatedAt: serverTimestamp(),
-              },
-              { merge: true }
-            );
-          } catch {
-            // Ignore if remote Firestore rules restrict passwordHash field
-          }
         }
       }
 
@@ -2136,59 +2077,11 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = null;
 
     try {
-      // Check if user exists in Cloud Firestore first (in case server cache hasn't synced this user yet)
-      const firestoreUser = await findMigratedUserInFirestore(cleanIdentifier);
-
-      const { data } = await apiClient.post('/auth/reset-password', {
+      // Backend handles lookup across server registry + Firestore and persists new hash securely
+      await apiClient.post('/auth/reset-password', {
         identifier: cleanIdentifier,
-        uid: firestoreUser?.uid,
         newPassword,
       });
-
-      const resolvedUid = data?.uid || firestoreUser?.uid;
-      const newPasswordHash: string | undefined = data?.passwordHash;
-
-      if (resolvedUid && newPasswordHash) {
-        // Sync user into backend registry if they were found in Firestore
-        if (firestoreUser) {
-          try {
-            await apiClient.post('/users/sync', {
-              uid: firestoreUser.uid,
-              username: firestoreUser.username,
-              email: firestoreUser.email,
-              displayName: firestoreUser.displayName,
-              authProvider: 'password',
-              passwordHash: newPasswordHash,
-              subscriptionStatus: firestoreUser.subscriptionStatus,
-              isPro: firestoreUser.isPro,
-            });
-          } catch {
-            // Ignore
-          }
-        }
-
-        // Persist updated passwordHash to Cloud Firestore /users/{uid}
-        try {
-          await updateDoc(doc(db, 'users', resolvedUid), {
-            passwordHash: newPasswordHash,
-            authProvider: 'password',
-            updatedAt: serverTimestamp(),
-          });
-        } catch {
-          try {
-            await setDoc(
-              doc(db, 'users', resolvedUid),
-              {
-                passwordHash: newPasswordHash,
-                updatedAt: serverTimestamp(),
-              },
-              { merge: true }
-            );
-          } catch {
-            // Ignore if remote Firestore rules restrict passwordHash field
-          }
-        }
-      }
 
       notify.notifySuccess(
         'Reset Kata Sandi Berhasil',
@@ -2215,7 +2108,22 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       const cred = await signInWithPopup(auth, googleProvider);
-      const profile = await ensureFirestoreUserDocument(cred.user);
+      const idToken = await cred.user.getIdToken();
+      const { data: fsData } = await apiClient.post('/auth/firebase-session', { idToken });
+
+      const fbEmail = String(cred.user.email || fsData?.user?.email || '').toLowerCase();
+      const isGoogleSuperAdmin =
+        fbEmail === SUPER_ADMIN_EMAIL || fbEmail === WORKSPACE_ADMIN_EMAIL;
+
+      if (!isGoogleSuperAdmin && fsData?.userToken) {
+        setApiUserToken(fsData.userToken);
+      } else if (isGoogleSuperAdmin) {
+        setApiUserToken(null);
+      }
+
+      const profile: AppUser = fsData?.user
+        ? { ...fsData.user, isFirebaseBacked: true }
+        : await ensureFirestoreUserDocument(cred.user);
 
       if (profile.status === 'blocked') {
         error.value = 'Akses akun Anda sedang diblokir oleh Administrator.';
@@ -2227,23 +2135,7 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = profile;
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
       purgeForeignLocalStorage(profile.uid);
-      const googleAdminToken = localStorage.getItem('sisa_uang_admin_token');
-      setApiAdminContext(profile.email, googleAdminToken);
-      upsertSavedAccount(user.value || profile, googleAdminToken);
-      await registerCurrentDeviceSession(user.value || profile, true);
-      startUserStatusMonitor(user.value || profile);
-      // Strictly query authoritative subscription from Firestore server
-      await syncSubscriptionFromFirestoreForUser(profile.uid, profile.email);
-
-      await recordAuditLog(
-        'google_login',
-        `Pengguna ${profile.displayName} (${profile.email}) masuk menggunakan Google OAuth.`,
-        'info'
-      );
-
-      const isGoogleSuperAdmin =
-        profile.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
-        profile.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL;
+      setApiAdminContext(profile.email, null);
 
       if (isGoogleSuperAdmin) {
         profile.role = 'admin';
@@ -2262,6 +2154,17 @@ export const useAuthStore = defineStore('auth', () => {
         }
         return { requiresOtp: true };
       }
+
+      upsertSavedAccount(profile, null, fsData?.userToken || getApiUserToken());
+      await registerCurrentDeviceSession(profile, true);
+      startUserStatusMonitor(profile);
+      await syncSubscriptionFromFirestoreForUser(profile.uid, profile.email);
+
+      await recordAuditLog(
+        'google_login',
+        `Pengguna ${profile.displayName} (${profile.email}) masuk menggunakan Google OAuth.`,
+        'info'
+      );
 
       useNotificationStore().notifySuccess(
         'Autentikasi Google Berhasil',
@@ -2395,12 +2298,16 @@ export const useAuthStore = defineStore('auth', () => {
         otpDispatchInfo.value = null;
         saveOtpDispatchToSessionStorage(null);
         localStorage.setItem(OTP_VERIFIED_KEY, 'true');
+        if (data.userToken) {
+          setApiUserToken(data.userToken);
+        }
         setApiAdminContext(promotedUser.email, data.adminToken);
-        upsertSavedAccount(promotedUser, data.adminToken);
-        try {
-          await signInWithEmailAndPassword(auth, promotedUser.email, '@Dienzaki2019##');
-        } catch (fbErr) {
-          console.warn('[Auth] Super admin Firebase Auth session notice:', fbErr);
+        upsertSavedAccount(promotedUser, data.adminToken, data.userToken || getApiUserToken());
+        if (
+          auth.currentUser &&
+          auth.currentUser.email?.toLowerCase() !== promotedUser.email.toLowerCase()
+        ) {
+          await firebaseSignOut(auth).catch(() => {});
         }
         useNotificationStore().notifySuccess(
           'Verifikasi Super Admin Berhasil',
@@ -2437,6 +2344,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem(OTP_VERIFIED_KEY);
     localStorage.removeItem('sisa_uang_admin_token');
     localStorage.removeItem('sisa_uang_actor_email');
+    setApiUserToken(null);
     setApiAdminContext(null, null);
     purgeForeignLocalStorage();
 
@@ -2515,6 +2423,24 @@ export const useAuthStore = defineStore('auth', () => {
     });
   }
 
+  if (typeof window !== 'undefined' && !(window as any).__sisauang_user_expired_listener_bound) {
+    (window as any).__sisauang_user_expired_listener_bound = true;
+    window.addEventListener('sisauang:user-session-expired', () => {
+      if (!user.value) return;
+      void logout(true).then(async () => {
+        try {
+          const currentPath = window.location?.pathname || '';
+          if (currentPath && currentPath !== '/' && currentPath !== '/auth') {
+            const { router } = await import('../router');
+            await router.replace('/auth');
+          }
+        } catch {
+          // Ignore router navigation error
+        }
+      });
+    });
+  }
+
   async function submitProSubscriptionPayment(payload: {
     subscriptionPlan: 'monthly' | 'yearly';
     paymentMethod: 'qris' | 'bank_transfer';
@@ -2554,18 +2480,17 @@ export const useAuthStore = defineStore('auth', () => {
       };
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user.value));
 
-      // Also persist pending marker to Cloud Firestore `/budgets/su_sub_pro_${safeUid}`
-      // with period `P:M:YYYY-MM-DD` or `P:Y:YYYY-MM-DD` (length 14 chars, compliant with isValidBudget rule)
+      // Also persist pending marker to Cloud Firestore `/budgets/su_sub_pro_${safeUid}` via authorized client or bridge
       try {
-        const targetDb = db;
         const proMarkerId = sanitizeId(`su_sub_pro_${safeUid}`);
         const now = new Date();
         const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
         const planCode = payload.subscriptionPlan === 'yearly' ? 'Y' : 'M';
         const markerPeriod = `P:${planCode}:${todayIso}`;
 
-        await setDoc(
-          doc(targetDb, 'budgets', proMarkerId),
+        await fsSetDoc(
+          'budgets',
+          proMarkerId,
           {
             ownerId: safeUid,
             category: '__SISAUANG_PRO__',
@@ -2574,15 +2499,19 @@ export const useAuthStore = defineStore('auth', () => {
             period: markerPeriod,
             deleted: false,
             deletedAt: null,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
+            createdAt: fsServerTimestamp(),
+            updatedAt: fsServerTimestamp(),
           },
-          { merge: true }
+          { merge: true },
+          safeUid
         );
 
-        await updateDoc(doc(targetDb, 'users', safeUid), {
-          updatedAt: serverTimestamp(),
-        }).catch(() => {});
+        await fsUpdateDoc(
+          'users',
+          safeUid,
+          { updatedAt: fsServerTimestamp() },
+          safeUid
+        ).catch(() => {});
       } catch {
         // Fallback handled by Express server registry
       }

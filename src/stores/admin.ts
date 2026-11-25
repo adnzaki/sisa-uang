@@ -16,12 +16,7 @@ import {
   limit,
   startAfter,
 } from 'firebase/firestore';
-import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signInAnonymously,
-  signOut as firebaseSignOut,
-} from 'firebase/auth';
+import { signOut as firebaseSignOut } from 'firebase/auth';
 import {
   auth,
   db,
@@ -333,19 +328,20 @@ export const useAdminStore = defineStore('admin', () => {
       const currentEmail = targetAuth.currentUser?.email?.toLowerCase() || '';
       const isAlreadyAdminEmail =
         currentEmail === 'vuedevo@gmail.com' ||
-        currentEmail === 'adnanzaki65@admin.sd.belajar.id' ||
-        currentEmail === 'sdnpengasinantujuh@gmail.com';
+        currentEmail === 'adnanzaki65@admin.sd.belajar.id';
 
-      if (!targetAuth.currentUser || targetAuth.currentUser.isAnonymous || !isAlreadyAdminEmail) {
+      // Never embed or auto-login with hardcoded Super Admin credentials;
+      // if client Firebase Auth holds a non-admin session, sign it out so backend admin endpoints handle DB access.
+      if (targetAuth.currentUser && (targetAuth.currentUser.isAnonymous || !isAlreadyAdminEmail)) {
         try {
-          await signInWithEmailAndPassword(targetAuth, 'vuedevo@gmail.com', '@Dienzaki2019##');
-        } catch (signInErr) {
-          console.warn('[Admin] Failed to establish Super Admin Firebase Auth session:', signInErr);
-          continue;
+          await firebaseSignOut(targetAuth);
+        } catch {
+          // Ignore signout error
         }
+        continue;
       }
 
-      // Ensure `/admins/{uid}` document exists once per session
+      // Ensure `/admins/{uid}` document exists once per session when admin signed into Firebase directly
       if (targetAuth.currentUser && !adminDocVerifiedInSession) {
         adminDocVerifiedInSession = true;
         const safeAdminUid = sanitizeId(targetAuth.currentUser.uid);
@@ -1821,6 +1817,27 @@ export const useAdminStore = defineStore('admin', () => {
 
     await ensureSuperAdminFirebaseSession();
     const targetDb = sisaUangDb || db;
+    const targetAuth = sisaUangAuth || auth;
+    const hasDirectAdminAuth = Boolean(
+      targetAuth.currentUser &&
+      !targetAuth.currentUser.isAnonymous &&
+      ['vuedevo@gmail.com', 'adnanzaki65@admin.sd.belajar.id'].includes(
+        String(targetAuth.currentUser.email || '').toLowerCase()
+      )
+    );
+
+    if (!hasDirectAdminAuth) {
+      try {
+        const { data } = await apiClient.get('/admin/database/stats');
+        if (Array.isArray(data?.stats) && data.stats.length > 0) {
+          cachedCollectionStats = data.stats;
+          cachedCollectionStatsFetchedAt = Date.now();
+          return data.stats;
+        }
+      } catch {
+        // Fallback to direct client queries below
+      }
+    }
 
     const collectionDefs = [
       {
@@ -1979,6 +1996,29 @@ export const useAdminStore = defineStore('admin', () => {
 
     await ensureSuperAdminFirebaseSession();
     const targetDb = sisaUangDb || db;
+    const targetAuth = sisaUangAuth || auth;
+    const hasDirectAdminAuth = Boolean(
+      targetAuth.currentUser &&
+      !targetAuth.currentUser.isAnonymous &&
+      ['vuedevo@gmail.com', 'adnanzaki65@admin.sd.belajar.id'].includes(
+        String(targetAuth.currentUser.email || '').toLowerCase()
+      )
+    );
+
+    if (!hasDirectAdminAuth) {
+      try {
+        const { data } = await apiClient.get('/admin/database/raw-docs', {
+          params: { collection: collectionName, limit: docLimit || 200 },
+        });
+        if (Array.isArray(data?.docs)) {
+          cachedRawCollectionDocs.set(cacheKey, data.docs);
+          return data.docs;
+        }
+      } catch {
+        // Fallback to attempting direct client read below
+      }
+    }
+
     let snap;
     try {
       if (isUnlimited) {
@@ -2058,6 +2098,35 @@ export const useAdminStore = defineStore('admin', () => {
 
     await ensureSuperAdminFirebaseSession();
     const targetDb = sisaUangDb || db;
+    const targetAuth = sisaUangAuth || auth;
+    const hasDirectAdminAuth = Boolean(
+      targetAuth.currentUser &&
+      !targetAuth.currentUser.isAnonymous &&
+      ['vuedevo@gmail.com', 'adnanzaki65@admin.sd.belajar.id'].includes(
+        String(targetAuth.currentUser.email || '').toLowerCase()
+      )
+    );
+
+    if (!hasDirectAdminAuth) {
+      try {
+        const { data } = await apiClient.get('/admin/database/raw-docs', {
+          params: { collection: collectionName, limit: Math.min(200, cleanPage * cleanPageSize) },
+        });
+        const allDocs = Array.isArray(data?.docs) ? data.docs : [];
+        const startIdx = (cleanPage - 1) * cleanPageSize;
+        const paged = allDocs.slice(startIdx, startIdx + cleanPageSize);
+        const totalInCollection = Number(data?.totalInCollection || allDocs.length);
+        cachedRawCollectionDocs.set(cacheKey, paged);
+        return {
+          docs: paged,
+          hasMore: startIdx + paged.length < totalInCollection,
+          page: cleanPage,
+          pageSize: cleanPageSize,
+        };
+      } catch (serverErr) {
+        throw serverErr;
+      }
+    }
 
     if (!rawCollectionCursorMap.has(collectionName)) {
       rawCollectionCursorMap.set(collectionName, new Map());
@@ -2077,6 +2146,24 @@ export const useAdminStore = defineStore('admin', () => {
     } catch (err) {
       if (isFirestoreQuotaError(err)) {
         useNotificationStore().notifyQuotaExceeded();
+      }
+      try {
+        const { data } = await apiClient.get('/admin/database/raw-docs', {
+          params: { collection: collectionName, limit: Math.min(200, cleanPage * cleanPageSize) },
+        });
+        const allDocs = Array.isArray(data?.docs) ? data.docs : [];
+        const startIdx = (cleanPage - 1) * cleanPageSize;
+        const paged = allDocs.slice(startIdx, startIdx + cleanPageSize);
+        const totalInCollection = Number(data?.totalInCollection || allDocs.length);
+        cachedRawCollectionDocs.set(cacheKey, paged);
+        return {
+          docs: paged,
+          hasMore: startIdx + paged.length < totalInCollection,
+          page: cleanPage,
+          pageSize: cleanPageSize,
+        };
+      } catch {
+        // Rethrow original error if server fallback fails
       }
       throw err;
     }

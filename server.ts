@@ -15,14 +15,21 @@ import { initializeApp as initServerFirebaseApp } from 'firebase/app';
 import {
   getFirestore as getServerFirestore,
   doc as serverFsDoc,
+  getDoc as serverFsGetDoc,
   updateDoc as serverFsUpdateDoc,
+  deleteDoc as serverFsDeleteDoc,
   serverTimestamp as serverFsTimestamp,
   collection as serverFsCollection,
   getDocs as serverFsGetDocs,
   setDoc as serverFsSetDoc,
   getCountFromServer as serverFsGetCountFromServer,
   query as serverFsQuery,
+  where as serverFsWhere,
+  orderBy as serverFsOrderBy,
   limit as serverFsLimit,
+  startAfter as serverFsStartAfter,
+  increment as serverFsIncrement,
+  writeBatch as serverFsWriteBatch,
 } from 'firebase/firestore';
 import {
   getAuth as getServerAuth,
@@ -37,8 +44,45 @@ const __dirname = path.dirname(__filename);
 const SUPER_ADMIN_EMAIL = 'vuedevo@gmail.com';
 const SUPER_ADMIN_USERNAME = 'vuedevo';
 const WORKSPACE_ADMIN_EMAIL = 'adnanzaki65@admin.sd.belajar.id';
+const RUNTIME_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+let runtimeServerFbPassword = '';
 
-// Initialize server-side Firebase connection for admin operations (e.g. instant Pro activation in Firestore)
+function getSessionSecret(): string {
+  return (process.env.SESSION_SECRET || '').trim() || RUNTIME_SESSION_SECRET;
+}
+
+function getServerFirebasePassword(): string {
+  return (process.env.SUPER_ADMIN_FIREBASE_PASSWORD || runtimeServerFbPassword || '').trim();
+}
+
+function tsToIsoValue(val: any): any {
+  if (val === null || val === undefined) return val;
+  if (typeof val === 'object') {
+    if (typeof val.toDate === 'function') {
+      try {
+        return val.toDate().toISOString();
+      } catch {
+        return String(val);
+      }
+    }
+    if ('seconds' in val && typeof val.seconds === 'number') {
+      try {
+        return new Date(val.seconds * 1000).toISOString();
+      } catch {
+        return String(val);
+      }
+    }
+    if (Array.isArray(val)) return val.map(tsToIsoValue);
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(val)) {
+      out[k] = tsToIsoValue(v);
+    }
+    return out;
+  }
+  return val;
+}
+
+// Initialize server-side Firebase connection for authenticated server worker operations
 let serverDb: any = null;
 let serverAuth: any = null;
 try {
@@ -49,6 +93,23 @@ try {
   console.warn('[Server Firebase Init Notice]', e?.message || e);
 }
 
+async function ensureServerFirebaseSignedIn(): Promise<void> {
+  if (!serverDb || !serverAuth) {
+    throw new Error('Koneksi database server belum diinisialisasi.');
+  }
+  const currentEmail = String(serverAuth.currentUser?.email || '').trim().toLowerCase();
+  if (serverAuth.currentUser && currentEmail === SUPER_ADMIN_EMAIL) {
+    return;
+  }
+  const serverPw = getServerFirebasePassword();
+  if (!serverPw) {
+    throw new Error(
+      'Konfigurasi SUPER_ADMIN_FIREBASE_PASSWORD belum tersedia di server. Hubungi administrator.'
+    );
+  }
+  await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, serverPw);
+}
+
 async function activateProUserInFirestore(
   uid: string,
   plan: 'monthly' | 'yearly',
@@ -56,9 +117,7 @@ async function activateProUserInFirestore(
 ): Promise<boolean> {
   if (!serverDb || !serverAuth || !uid) return false;
   try {
-    if (!serverAuth.currentUser) {
-      await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
-    }
+    await ensureServerFirebaseSignedIn();
     await serverFsUpdateDoc(serverFsDoc(serverDb, 'users', uid), {
       isPro: true,
       subscriptionStatus: 'pro',
@@ -307,9 +366,10 @@ async function syncUsersFromFirestore(force = false): Promise<number> {
   }
   lastUsersSyncAt = now;
   try {
-    if (!serverAuth.currentUser) {
-      await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
+    if (!getServerFirebasePassword() && !serverAuth.currentUser) {
+      return usersStore.size;
     }
+    await ensureServerFirebaseSignedIn();
     const snap = await serverFsGetDocs(serverFsCollection(serverDb, 'users'));
     hasInitialUsersSyncCompleted = true;
     if (!snap || snap.empty) return usersStore.size;
@@ -496,13 +556,37 @@ loadPersistedReportSettingsCache();
 const DEV_APP_URL = 'https://ais-dev-mmsxhrlhyl6nd34sur3nm5-416811674365.asia-southeast1.run.app';
 const PRE_APP_URL = 'https://ais-pre-mmsxhrlhyl6nd34sur3nm5-416811674365.asia-southeast1.run.app';
 
+function computePeerSignature(ownerId: string): string | null {
+  const secret = (process.env.SESSION_SECRET || '').trim();
+  if (!secret) return null;
+  return crypto.createHmac('sha256', secret).update(`peer:${ownerId}`).digest('hex');
+}
+
+function isAuthorizedPeerRequest(req: Request, ownerId: string): boolean {
+  const sig = String(req.headers['x-peer-signature'] || '').trim();
+  const expected = computePeerSignature(ownerId);
+  if (!expected || !sig || req.query.peer !== '1' || sig.length !== expected.length) {
+    return false;
+  }
+  try {
+    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
+
 async function syncReportSettingsToPeer(ownerId: string, record: ServerReportSettingsRecord) {
+  const peerSig = computePeerSignature(ownerId);
+  if (!peerSig) return;
   try {
     const peerUrls = [DEV_APP_URL, PRE_APP_URL];
     for (const pUrl of peerUrls) {
       void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/report-settings?peer=1`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-peer-signature': peerSig,
+        },
         body: JSON.stringify(record),
         signal: AbortSignal.timeout(3000),
       }).catch(() => {});
@@ -604,18 +688,24 @@ function savePersistedAutomationsCache() {
 loadPersistedAutomationsCache();
 
 async function syncAutomationToPeer(ownerId: string, record: ServerAutomationRecord, isDelete = false) {
+  const peerSig = computePeerSignature(ownerId);
+  if (!peerSig) return;
   try {
     const peerUrls = [DEV_APP_URL, PRE_APP_URL];
     for (const pUrl of peerUrls) {
       if (isDelete) {
         void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/automations/${encodeURIComponent(record.id)}?peer=1`, {
           method: 'DELETE',
+          headers: { 'x-peer-signature': peerSig },
           signal: AbortSignal.timeout(3000),
         }).catch(() => {});
       } else {
         void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/automations?peer=1`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-peer-signature': peerSig,
+          },
           body: JSON.stringify(record),
           signal: AbortSignal.timeout(3000),
         }).catch(() => {});
@@ -751,18 +841,24 @@ async function syncSavingsToPeer(
   payload: any,
   isDelete = false
 ) {
+  const peerSig = computePeerSignature(ownerId);
+  if (!peerSig) return;
   try {
     const peerUrls = [DEV_APP_URL, PRE_APP_URL];
     for (const pUrl of peerUrls) {
       if (isDelete) {
         void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/savings/${kind}/${encodeURIComponent(recordId)}?peer=1`, {
           method: 'DELETE',
+          headers: { 'x-peer-signature': peerSig },
           signal: AbortSignal.timeout(3000),
         }).catch(() => {});
       } else {
         void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/savings/${kind}?peer=1`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-peer-signature': peerSig,
+          },
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(3000),
         }).catch(() => {});
@@ -904,18 +1000,24 @@ async function syncDebtsToPeer(
   payload: any,
   isDelete = false
 ) {
+  const peerSig = computePeerSignature(ownerId);
+  if (!peerSig) return;
   try {
     const peerUrls = [DEV_APP_URL, PRE_APP_URL];
     for (const pUrl of peerUrls) {
       if (isDelete) {
         void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/debts/${kind}/${encodeURIComponent(recordId)}?peer=1`, {
           method: 'DELETE',
+          headers: { 'x-peer-signature': peerSig },
           signal: AbortSignal.timeout(3000),
         }).catch(() => {});
       } else {
         void fetch(`${pUrl}/api/users/${encodeURIComponent(ownerId)}/debts/${kind}?peer=1`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-peer-signature': peerSig,
+          },
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(3000),
         }).catch(() => {});
@@ -1365,6 +1467,284 @@ async function startServer() {
   app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
   // =========================================================================
+  // Signed User Session Tokens & Server-Side Identity Verification Helpers
+  // =========================================================================
+  const USER_TOKEN_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+  const verifiedFirebaseTokenCache = new Map<
+    string,
+    { uid: string; email: string; displayName: string; exp: number }
+  >();
+
+  interface UserSessionPayload {
+    uid: string;
+    email: string;
+    role: 'user' | 'admin';
+    exp: number;
+  }
+
+  function issueUserSessionToken(user: Pick<ServerUserRecord, 'uid' | 'email' | 'role'>): string {
+    const payload: UserSessionPayload = {
+      uid: String(user.uid).trim(),
+      email: String(user.email).trim().toLowerCase(),
+      role: user.role === 'admin' ? 'admin' : 'user',
+      exp: Date.now() + USER_TOKEN_MAX_AGE_MS,
+    };
+    const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+    const sig = crypto
+      .createHmac('sha256', getSessionSecret())
+      .update(encoded)
+      .digest('base64url');
+    return `${encoded}.${sig}`;
+  }
+
+  function verifyUserSessionToken(token: string): UserSessionPayload | null {
+    if (!token || !token.includes('.')) return null;
+    const parts = token.split('.');
+    if (parts.length !== 2) return null;
+    const [encoded, sig] = parts;
+    if (!encoded || !sig) return null;
+
+    const expectedSig = crypto
+      .createHmac('sha256', getSessionSecret())
+      .update(encoded)
+      .digest('base64url');
+    if (sig.length !== expectedSig.length) return null;
+    try {
+      if (!crypto.timingSafeEqual(Buffer.from(sig, 'utf8'), Buffer.from(expectedSig, 'utf8'))) {
+        return null;
+      }
+      const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as UserSessionPayload;
+      if (!parsed?.uid || !parsed?.email || typeof parsed.exp !== 'number') return null;
+      if (Date.now() > parsed.exp) return null;
+      const storeUser = usersStore.get(parsed.uid);
+      if (storeUser?.status === 'blocked') return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  async function verifyFirebaseIdToken(
+    idToken: string
+  ): Promise<{ uid: string; email: string; displayName: string } | null> {
+    const clean = String(idToken || '').trim();
+    if (!clean || clean.length < 20) return null;
+    const cacheKey = crypto.createHash('sha256').update(clean).digest('hex');
+    const cached = verifiedFirebaseTokenCache.get(cacheKey);
+    if (cached && cached.exp > Date.now()) {
+      return { uid: cached.uid, email: cached.email, displayName: cached.displayName };
+    }
+
+    try {
+      const lookupRes = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(firebaseServerConfig.apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken: clean }),
+          signal: AbortSignal.timeout(8000),
+        }
+      );
+      if (!lookupRes.ok) return null;
+      const lookupData = (await lookupRes.json()) as {
+        users?: Array<{
+          localId?: string;
+          email?: string;
+          displayName?: string;
+          disabled?: boolean;
+        }>;
+      };
+      const fbUser = lookupData?.users?.[0];
+      if (!fbUser?.localId || fbUser.disabled) return null;
+
+      const resolved = {
+        uid: String(fbUser.localId).trim(),
+        email: String(fbUser.email || '').trim().toLowerCase(),
+        displayName: String(fbUser.displayName || '').trim(),
+      };
+      if (!resolved.email) return null;
+
+      if (verifiedFirebaseTokenCache.size > 500) {
+        verifiedFirebaseTokenCache.clear();
+      }
+      verifiedFirebaseTokenCache.set(cacheKey, {
+        ...resolved,
+        exp: Date.now() + 30_000,
+      });
+      return resolved;
+    } catch {
+      return null;
+    }
+  }
+
+  function validateVerifiedAdminToken(adminToken: string | undefined): { email: string } | null {
+    if (!adminToken) return null;
+    const session = verifiedAdminTokens.get(adminToken);
+    if (!session) return null;
+    const MAX_TOKEN_AGE_MS = 24 * 60 * 60 * 1000;
+    if (Date.now() - session.verifiedAt > MAX_TOKEN_AGE_MS) {
+      verifiedAdminTokens.delete(adminToken);
+      savePersistedAdminTokens();
+      return null;
+    }
+    const email = session.email.toLowerCase();
+    if (email !== SUPER_ADMIN_EMAIL && email !== WORKSPACE_ADMIN_EMAIL) {
+      return null;
+    }
+    return { email };
+  }
+
+  async function doesCallerOwnTargetUid(
+    callerUid: string,
+    callerEmail: string,
+    targetUid: string
+  ): Promise<boolean> {
+    const cleanCallerUid = callerUid.trim().replace(/[^a-zA-Z0-9_\-]/g, '_');
+    const cleanTargetUid = targetUid.trim().replace(/[^a-zA-Z0-9_\-]/g, '_');
+    if (!cleanTargetUid || cleanCallerUid === cleanTargetUid || callerUid.trim() === targetUid.trim()) {
+      return true;
+    }
+    const normEmail = callerEmail.trim().toLowerCase();
+    if (!normEmail) return false;
+
+    const targetRecord = usersStore.get(targetUid.trim()) || usersStore.get(cleanTargetUid);
+    if (targetRecord?.email && targetRecord.email.trim().toLowerCase() === normEmail) {
+      return true;
+    }
+
+    if (serverDb) {
+      try {
+        await ensureServerFirebaseSignedIn();
+        const snap = await serverFsGetDoc(serverFsDoc(serverDb, 'users', cleanTargetUid));
+        if (snap.exists()) {
+          const fsEmail = String(snap.data()?.email || '').trim().toLowerCase();
+          if (fsEmail && fsEmail === normEmail) {
+            return true;
+          }
+        }
+      } catch {
+        // Ignore Firestore lookup fallback failure
+      }
+    }
+    return false;
+  }
+
+  async function verifyCallerAuth(
+    req: Request,
+    expectedOwnerUid?: string
+  ): Promise<
+    | { ok: true; uid: string; email: string; isAdmin: boolean }
+    | { ok: false; status: number; error: string }
+  > {
+    const adminSession = validateVerifiedAdminToken(
+      req.headers['x-admin-token'] as string | undefined
+    );
+    if (adminSession) {
+      return {
+        ok: true,
+        uid: (expectedOwnerUid || 'admin_vuedevo_01').trim(),
+        email: adminSession.email,
+        isAdmin: true,
+      };
+    }
+
+    const userToken = String(req.headers['x-user-token'] || '').trim();
+    if (userToken) {
+      const payload = verifyUserSessionToken(userToken);
+      if (!payload) {
+        return {
+          ok: false,
+          status: 401,
+          error: 'Sesi login tidak valid atau telah kedaluwarsa. Silakan masuk kembali.',
+        };
+      }
+      if (expectedOwnerUid) {
+        const owns = await doesCallerOwnTargetUid(payload.uid, payload.email, expectedOwnerUid);
+        if (!owns) {
+          return {
+            ok: false,
+            status: 403,
+            error: 'Akses ditolak: Anda tidak berwenang mengakses data pengguna ini.',
+          };
+        }
+      }
+      return {
+        ok: true,
+        uid: expectedOwnerUid ? expectedOwnerUid.trim() : payload.uid,
+        email: payload.email,
+        isAdmin: false,
+      };
+    }
+
+    const authHeader = String(req.headers.authorization || '').trim();
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (match?.[1]) {
+      const fbUser = await verifyFirebaseIdToken(match[1]);
+      if (!fbUser) {
+        return {
+          ok: false,
+          status: 401,
+          error: 'Token autentikasi tidak valid atau sudah kedaluwarsa.',
+        };
+      }
+      const isSuperAdminEmail =
+        fbUser.email === SUPER_ADMIN_EMAIL || fbUser.email === WORKSPACE_ADMIN_EMAIL;
+      if (isSuperAdminEmail) {
+        return {
+          ok: false,
+          status: 403,
+          error: 'Verifikasi 2FA Super Admin diperlukan sebelum mengakses sumber daya.',
+        };
+      }
+      const storeUser = usersStore.get(fbUser.uid);
+      if (storeUser?.status === 'blocked') {
+        return {
+          ok: false,
+          status: 403,
+          error: 'Akses akun Anda sedang diblokir oleh Administrator.',
+        };
+      }
+      if (expectedOwnerUid) {
+        const owns = await doesCallerOwnTargetUid(fbUser.uid, fbUser.email, expectedOwnerUid);
+        if (!owns) {
+          return {
+            ok: false,
+            status: 403,
+            error: 'Akses ditolak: Anda tidak berwenang mengakses data pengguna ini.',
+          };
+        }
+      }
+      return {
+        ok: true,
+        uid: expectedOwnerUid ? expectedOwnerUid.trim() : fbUser.uid,
+        email: fbUser.email,
+        isAdmin: false,
+      };
+    }
+
+    return {
+      ok: false,
+      status: 401,
+      error: 'Sesi autentikasi diperlukan. Silakan masuk terlebih dahulu.',
+    };
+  }
+
+  async function authorizeUserOrPeer(
+    req: Request,
+    targetUid?: string
+  ): Promise<
+    | { ok: true; uid: string; email: string; isAdmin: boolean; isPeer: boolean }
+    | { ok: false; status: number; error: string }
+  > {
+    if (targetUid && isAuthorizedPeerRequest(req, targetUid)) {
+      return { ok: true, uid: targetUid, email: '', isAdmin: false, isPeer: true };
+    }
+    const authRes = await verifyCallerAuth(req, targetUid);
+    if (!authRes.ok) return authRes;
+    return { ...authRes, isPeer: false };
+  }
+
+  // =========================================================================
   // Middleware: Verify Super Admin Token for /api/admin/* protected routes
   // =========================================================================
   const requireAdminMiddleware = (req: Request, res: Response, next: NextFunction) => {
@@ -1448,7 +1828,71 @@ async function startServer() {
     });
   });
 
-  // Authenticate with Email or Username & Password (supports Super Admin vuedevo@gmail.com / vuedevo / dark.notes + regular & CI4 Shield users)
+  // Helper to resolve a user by email or username via server Firestore when absent from local store
+  async function findUserInServerFirestore(identifierRaw: string): Promise<ServerUserRecord | undefined> {
+    if (!serverDb) return undefined;
+    const clean = identifierRaw.trim().toLowerCase().replace(/^@+/, '');
+    const normalized = clean.replace(/\s+/g, '_');
+    if (!clean) return undefined;
+    try {
+      await ensureServerFirebaseSignedIn();
+      const colRef = serverFsCollection(serverDb, 'users');
+      let snap: any = null;
+      if (clean.includes('@')) {
+        snap = await serverFsGetDocs(serverFsQuery(colRef, serverFsWhere('email', '==', clean), serverFsLimit(1)));
+      }
+      if (!snap || snap.empty) {
+        snap = await serverFsGetDocs(serverFsQuery(colRef, serverFsWhere('username', '==', clean), serverFsLimit(1)));
+      }
+      if ((!snap || snap.empty) && normalized !== clean) {
+        snap = await serverFsGetDocs(serverFsQuery(colRef, serverFsWhere('username', '==', normalized), serverFsLimit(1)));
+      }
+      if (!snap || snap.empty) return undefined;
+      const d = snap.docs[0];
+      const data = d.data() as Record<string, any>;
+      const uid = d.id;
+      const email = String(data.email || '').trim().toLowerCase();
+      if (!uid || !email) return undefined;
+      const isSuper = email === SUPER_ADMIN_EMAIL || email === WORKSPACE_ADMIN_EMAIL || uid === 'admin_vuedevo_01';
+      const isDeactivated = Boolean(data.isExplicitlyDeactivated === true);
+      const isPro =
+        !isDeactivated &&
+        (data.isPro === true || data.subscriptionStatus === 'pro') &&
+        isUserSubscriptionActive({
+          isPro: true,
+          subscriptionStatus: 'pro',
+          subscriptionExpiresAt: data.subscriptionExpiresAt,
+          isExplicitlyDeactivated: isDeactivated,
+        });
+      const isPending = !isDeactivated && !isPro && data.subscriptionStatus === 'pending';
+      const existing = usersStore.get(uid);
+      const record: ServerUserRecord = {
+        uid,
+        username: String(data.username || email.split('@')[0] || uid).toLowerCase(),
+        email,
+        displayName: String(data.displayName || data.username || email.split('@')[0] || uid),
+        role: isSuper ? 'admin' : data.role === 'admin' ? 'admin' : 'user',
+        status: data.status === 'blocked' ? 'blocked' : 'active',
+        authProvider: data.authProvider === 'google' ? 'google' : 'password',
+        currency: data.currency === 'USD' ? 'USD' : 'IDR',
+        subscriptionStatus: isPro ? 'pro' : isPending ? 'pending' : 'free',
+        isPro,
+        isExplicitlyDeactivated: isDeactivated,
+        subscriptionPlan: isPro || isPending ? (data.subscriptionPlan === 'yearly' ? 'yearly' : 'monthly') : null,
+        subscriptionExpiresAt: isPro ? data.subscriptionExpiresAt || null : null,
+        passwordHash: data.passwordHash || existing?.passwordHash,
+        createdAt: tsToIsoValue(data.createdAt || existing?.createdAt || nowIso()),
+        updatedAt: tsToIsoValue(data.updatedAt || existing?.updatedAt || nowIso()),
+      };
+      usersStore.set(uid, record);
+      savePersistedUsersCache();
+      return record;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Authenticate with Email or Username & Password
   app.post('/api/auth/login', async (req: Request, res: Response) => {
     const identifierRaw = String(req.body?.identifier || req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
@@ -1458,19 +1902,25 @@ async function startServer() {
       return;
     }
 
-    // Find user by email OR username (with fallback reload from persisted cache if not yet in memory)
+    // Two-pass exact lookup in memory (email or username first, email local-part second)
     const normalizedIdentifier = identifierRaw.replace(/\s+/g, '_').replace(/^@+/, '');
     const findMatchingUserInStore = (): ServerUserRecord | undefined => {
       for (const u of usersStore.values()) {
         const uEmail = String(u.email || '').trim().toLowerCase();
         const uUsername = String(u.username || '').trim().toLowerCase().replace(/^@+/, '');
-        const uEmailLocal = uEmail.split('@')[0];
         if (
           uEmail === identifierRaw ||
-          (uUsername && (uUsername === identifierRaw || uUsername === normalizedIdentifier)) ||
-          (!identifierRaw.includes('@') && uEmailLocal === identifierRaw)
+          (uUsername && (uUsername === identifierRaw || uUsername === normalizedIdentifier))
         ) {
           return u;
+        }
+      }
+      if (!identifierRaw.includes('@')) {
+        for (const u of usersStore.values()) {
+          const uEmailLocal = String(u.email || '').trim().toLowerCase().split('@')[0];
+          if (uEmailLocal === identifierRaw) {
+            return u;
+          }
         }
       }
       return undefined;
@@ -1481,9 +1931,11 @@ async function startServer() {
       loadPersistedUsersCache();
       matchedUser = findMatchingUserInStore();
     }
+    if (!matchedUser) {
+      matchedUser = await findUserInServerFirestore(identifierRaw);
+    }
 
     const incomingHash = hashPassword(password);
-    const defaultSuperHash = '2759b5f6c9e3ae92ca8cd9129ab6d6336d569e8e4f84c0996839347b84c1b7e8';
     const isSuperAdminIdentifier =
       identifierRaw === SUPER_ADMIN_EMAIL ||
       identifierRaw === WORKSPACE_ADMIN_EMAIL ||
@@ -1500,13 +1952,14 @@ async function startServer() {
           ? WORKSPACE_ADMIN_EMAIL
           : SUPER_ADMIN_EMAIL;
 
+      const envSuperPassword = (process.env.SUPER_ADMIN_FIREBASE_PASSWORD || '').trim();
       const isSuperPasswordValid =
         incomingHash === superAdminPasswordHash ||
-        incomingHash === defaultSuperHash ||
         verifyPasswordAgainstStoredHash(password, superAdminPasswordHash) ||
         (matchedUser?.passwordHash
           ? verifyPasswordAgainstStoredHash(password, matchedUser.passwordHash)
-          : false);
+          : false) ||
+        Boolean(envSuperPassword && password === envSuperPassword);
 
       if (!isSuperPasswordValid) {
         const fails = (failedLoginTracker.get(targetEmailForOtp) || 0) + 1;
@@ -1533,6 +1986,9 @@ async function startServer() {
         res.status(401).json({ error: 'Email/Username atau kata sandi Super Admin tidak sesuai.' });
         return;
       }
+
+      runtimeServerFbPassword = password;
+      void ensureServerFirebaseSignedIn().catch(() => {});
 
       failedLoginTracker.delete(targetEmailForOtp);
       const fallbackAdmin = usersStore.get('admin_vuedevo_01')!;
@@ -1563,7 +2019,6 @@ async function startServer() {
             cooldownRemainingSec: eligibility.cooldownRemainingSec,
             smtpError: null,
             smtpMessageId: null,
-            fallbackCode: eligibility.reusedChallenge.code,
             message: `Kode OTP sebelumnya masih berlaku dan telah dikirim ke ${recipientEmail}. Tunggu ${eligibility.cooldownRemainingSec} detik untuk mengirim ulang.`,
           },
         });
@@ -1588,8 +2043,7 @@ async function startServer() {
       });
       recordOtpSentRate(recipientEmail);
 
-      // Strict Security: DO NOT issue or return adminToken during initial login.
-      // Admin token is ONLY minted in /api/auth/verify-otp after valid OTP code confirmation.
+      // Strict Security: DO NOT issue or return adminToken or OTP code in response during initial login.
       let smtpSent = false;
       let smtpError: string | null = null;
       let smtpMessageId: string | null = null;
@@ -1644,7 +2098,6 @@ async function startServer() {
           cooldownRemainingSec: 60,
           smtpError,
           smtpMessageId,
-          fallbackCode: otpCode,
           message: smtpSent
             ? `Kode OTP 6 digit telah dikirim ke email ${recipientEmail}.`
             : smtpError || `Gagal mengirim email OTP ke ${recipientEmail}.`,
@@ -1657,7 +2110,7 @@ async function startServer() {
     const isPasswordValid = matchedUser
       ? matchedUser.passwordHash
         ? verifyPasswordAgainstStoredHash(password, matchedUser.passwordHash)
-        : true
+        : false
       : false;
 
     if (!matchedUser || !isPasswordValid) {
@@ -1702,6 +2155,7 @@ async function startServer() {
 
     failedLoginTracker.delete(identifierRaw);
     matchedUser.updatedAt = nowIso();
+    const userToken = issueUserSessionToken(matchedUser);
     appendLog(
       matchedUser.uid,
       matchedUser.email,
@@ -1712,15 +2166,128 @@ async function startServer() {
 
     res.json({
       user: sanitizeUser(matchedUser),
+      userToken,
       requiresOtp: false,
     });
   });
 
-  // Reset Password by Email or Username (Forgot Password on /auth screen)
-  app.post('/api/auth/reset-password', (req: Request, res: Response) => {
+  // Exchange a verified Firebase ID Token (Google OAuth or Firebase Email login) for an authenticated app session & userToken
+  app.post('/api/auth/firebase-session', async (req: Request, res: Response) => {
+    const idToken = String(req.body?.idToken || '').trim();
+    if (!idToken) {
+      res.status(400).json({ error: 'Token Firebase Auth diperlukan.' });
+      return;
+    }
+
+    const fbUser = await verifyFirebaseIdToken(idToken);
+    if (!fbUser) {
+      res.status(401).json({ error: 'Token Firebase Auth tidak valid atau kedaluwarsa.' });
+      return;
+    }
+
+    const fbEmail = fbUser.email.toLowerCase();
+    const isSuperAdminEmail =
+      fbEmail === SUPER_ADMIN_EMAIL || fbEmail === WORKSPACE_ADMIN_EMAIL;
+
+    let matchedUser: ServerUserRecord | undefined = usersStore.get(fbUser.uid);
+    if (!matchedUser) {
+      for (const u of usersStore.values()) {
+        if (u.email.toLowerCase() === fbEmail) {
+          matchedUser = u;
+          break;
+        }
+      }
+    }
+    if (!matchedUser) {
+      matchedUser = await findUserInServerFirestore(fbEmail);
+    }
+
+    if (isSuperAdminEmail) {
+      const adminUser: ServerUserRecord = matchedUser
+        ? { ...matchedUser, role: 'admin', email: fbEmail }
+        : {
+            ...usersStore.get('admin_vuedevo_01')!,
+            email: fbEmail,
+          };
+      res.json({
+        user: sanitizeUser(adminUser),
+        requiresOtp: true,
+        otpVerified: false,
+      });
+      return;
+    }
+
+    if (!matchedUser) {
+      const defaultUsername = (fbEmail.split('@')[0] || `user_${fbUser.uid.slice(0, 6)}`)
+        .toLowerCase()
+        .replace(/[^a-z0-9_.\-]/g, '_')
+        .slice(0, 60);
+      matchedUser = {
+        uid: fbUser.uid,
+        username: defaultUsername,
+        email: fbEmail,
+        displayName: (fbUser.displayName || defaultUsername).slice(0, 80),
+        role: 'user',
+        status: 'active',
+        authProvider: 'google',
+        currency: 'IDR',
+        subscriptionStatus: 'free',
+        isPro: false,
+        isExplicitlyDeactivated: false,
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      };
+      usersStore.set(matchedUser.uid, matchedUser);
+      savePersistedUsersCache();
+
+      if (serverDb) {
+        try {
+          await ensureServerFirebaseSignedIn();
+          const docRef = serverFsDoc(serverDb, 'users', matchedUser.uid);
+          const snap = await serverFsGetDoc(docRef);
+          if (!snap.exists()) {
+            await serverFsSetDoc(docRef, {
+              uid: matchedUser.uid,
+              username: matchedUser.username,
+              email: matchedUser.email,
+              displayName: matchedUser.displayName,
+              role: 'user',
+              status: 'active',
+              authProvider: 'google',
+              currency: 'IDR',
+              subscriptionStatus: 'free',
+              isPro: false,
+              deleted: false,
+              deletedAt: null,
+              createdAt: serverFsTimestamp(),
+              updatedAt: serverFsTimestamp(),
+            });
+          }
+        } catch {
+          // Ignore server Firestore init error for fresh social signup
+        }
+      }
+    }
+
+    if (matchedUser.status === 'blocked') {
+      res.status(403).json({
+        error: 'Akses akun Anda sedang diblokir oleh Administrator. Hubungi pengelola sistem.',
+      });
+      return;
+    }
+
+    const userToken = issueUserSessionToken(matchedUser);
+    res.json({
+      user: sanitizeUser(matchedUser),
+      userToken,
+      requiresOtp: false,
+    });
+  });
+
+  // Reset Password by Email or Username (Strictly blocked for Super Admin accounts)
+  app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
     const identifierRaw = String(req.body?.identifier || '').trim().toLowerCase();
     const newPassword = String(req.body?.newPassword || '');
-    const targetUidFromClient = req.body?.uid ? String(req.body.uid).trim() : '';
 
     if (!identifierRaw || newPassword.length < 6) {
       res.status(400).json({
@@ -1729,74 +2296,105 @@ async function startServer() {
       return;
     }
 
+    const isSuperIdentifier =
+      identifierRaw === SUPER_ADMIN_EMAIL ||
+      identifierRaw === WORKSPACE_ADMIN_EMAIL ||
+      identifierRaw === SUPER_ADMIN_USERNAME ||
+      identifierRaw === 'dark.notes' ||
+      identifierRaw === 'admin_vuedevo_01';
+
+    if (isSuperIdentifier) {
+      appendLog(
+        'admin_vuedevo_01',
+        SUPER_ADMIN_EMAIL,
+        'blocked_admin_password_reset',
+        `Percobaan reset kata sandi tanpa autentikasi pada akun Super Admin (${identifierRaw}) ditolak.`,
+        'critical'
+      );
+      res.status(403).json({
+        error:
+          'Reset kata sandi akun Super Administrator tidak diizinkan melalui halaman masuk. Gunakan Pengaturan Akun setelah terautentikasi.',
+      });
+      return;
+    }
+
     let matchedUser: ServerUserRecord | undefined;
-    if (targetUidFromClient && usersStore.has(targetUidFromClient)) {
-      matchedUser = usersStore.get(targetUidFromClient);
-    } else {
-      for (const u of usersStore.values()) {
-        if (
-          u.email.toLowerCase() === identifierRaw ||
-          (u.username && u.username.toLowerCase() === identifierRaw)
-        ) {
-          matchedUser = u;
-          break;
-        }
+    for (const u of usersStore.values()) {
+      if (
+        u.email.toLowerCase() === identifierRaw ||
+        (u.username && u.username.toLowerCase() === identifierRaw)
+      ) {
+        matchedUser = u;
+        break;
       }
+    }
+    if (!matchedUser) {
+      matchedUser = await findUserInServerFirestore(identifierRaw);
+    }
+
+    if (!matchedUser) {
+      res.status(404).json({
+        error: 'Akun dengan Email atau Username tersebut tidak ditemukan.',
+      });
+      return;
+    }
+
+    if (
+      matchedUser.role === 'admin' ||
+      matchedUser.uid === 'admin_vuedevo_01' ||
+      matchedUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
+      matchedUser.email.toLowerCase() === WORKSPACE_ADMIN_EMAIL
+    ) {
+      res.status(403).json({
+        error: 'Reset kata sandi akun Super Administrator tidak diizinkan melalui halaman ini.',
+      });
+      return;
+    }
+
+    if (matchedUser.status === 'blocked') {
+      res.status(403).json({
+        error: 'Akses akun Anda sedang diblokir oleh Administrator.',
+      });
+      return;
     }
 
     const newHash = hashPassword(newPassword);
+    matchedUser.passwordHash = newHash;
+    matchedUser.authProvider = 'password';
+    matchedUser.updatedAt = nowIso();
+    savePersistedUsersCache();
 
-    if (matchedUser) {
-      if (matchedUser.status === 'blocked') {
-        res.status(403).json({
-          error: 'Akses akun Anda sedang diblokir oleh Administrator.',
-        });
-        return;
+    if (serverDb) {
+      try {
+        await ensureServerFirebaseSignedIn();
+        await serverFsSetDoc(
+          serverFsDoc(serverDb, 'users', matchedUser.uid),
+          {
+            passwordHash: newHash,
+            authProvider: 'password',
+            updatedAt: serverFsTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch {
+        // Best-effort Firestore sync
       }
-
-      matchedUser.passwordHash = newHash;
-      matchedUser.authProvider = 'password';
-      matchedUser.updatedAt = nowIso();
-      if (
-        matchedUser.email.toLowerCase() === SUPER_ADMIN_EMAIL ||
-        matchedUser.uid === 'admin_vuedevo_01'
-      ) {
-        superAdminPasswordHash = newHash;
-      }
-      savePersistedUsersCache();
-
-      appendLog(
-        matchedUser.uid,
-        matchedUser.email,
-        'password_reset',
-        `Pengguna ${matchedUser.displayName} (@${matchedUser.username}) melakukan reset kata sandi.`,
-        'info'
-      );
-
-      res.json({
-        success: true,
-        uid: matchedUser.uid,
-        email: matchedUser.email,
-        username: matchedUser.username,
-        passwordHash: newHash,
-        updatedAt: matchedUser.updatedAt,
-      });
-      return;
     }
 
-    // If user is only in Firestore and client passed uid, return the computed hash so client can save to Firestore & sync
-    if (targetUidFromClient) {
-      res.json({
-        success: true,
-        uid: targetUidFromClient,
-        passwordHash: newHash,
-        updatedAt: nowIso(),
-      });
-      return;
-    }
+    appendLog(
+      matchedUser.uid,
+      matchedUser.email,
+      'password_reset',
+      `Pengguna ${matchedUser.displayName} (@${matchedUser.username}) melakukan reset kata sandi.`,
+      'info'
+    );
 
-    res.status(404).json({
-      error: 'Akun dengan Email atau Username tersebut tidak ditemukan.',
+    res.json({
+      success: true,
+      uid: matchedUser.uid,
+      email: matchedUser.email,
+      username: matchedUser.username,
+      updatedAt: matchedUser.updatedAt,
     });
   });
 
@@ -1813,6 +2411,7 @@ async function startServer() {
     const emailRaw = String(req.body?.email || '').trim().toLowerCase();
     const rawUsername = String(req.body?.username || '').trim().toLowerCase().replace(/\s+/g, '_');
     const password = String(req.body?.password || '');
+    const idToken = String(req.body?.idToken || '').trim();
     const username = (rawUsername || emailRaw.split('@')[0] || `user_${Date.now()}`).slice(0, 60);
     const displayName = String(req.body?.displayName || '').trim() || username;
     const uid = String(req.body?.uid || `user_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`);
@@ -1822,15 +2421,32 @@ async function startServer() {
       return;
     }
 
+    if (
+      emailRaw === SUPER_ADMIN_EMAIL ||
+      emailRaw === WORKSPACE_ADMIN_EMAIL ||
+      username === SUPER_ADMIN_USERNAME ||
+      username === 'dark.notes'
+    ) {
+      res.status(403).json({
+        error: 'Email atau username ini dicadangkan untuk Super Administrator.',
+      });
+      return;
+    }
+
+    const verifiedFbCaller = idToken ? await verifyFirebaseIdToken(idToken) : null;
+
     let preSyncedRecord: ServerUserRecord | undefined;
     for (const u of usersStore.values()) {
-      const isSameEmail = u.email.toLowerCase() === emailRaw && emailRaw !== SUPER_ADMIN_EMAIL;
-      const isSameUsername = u.username.toLowerCase() === username && emailRaw !== SUPER_ADMIN_EMAIL;
+      const isSameEmail = u.email.toLowerCase() === emailRaw;
+      const isSameUsername = u.username.toLowerCase() === username;
       if (isSameEmail || isSameUsername) {
-        // If this exact UID was just pre-synced from Firebase Auth (or has no passwordHash yet), allow completing registration
-        const isSameFirebaseUid = Boolean(req.body?.uid && u.uid === String(req.body.uid).trim());
-        const hasNoPasswordYet = !u.passwordHash;
-        if (isSameFirebaseUid || hasNoPasswordYet) {
+        const isAuthenticatedOwner =
+          Boolean(
+            verifiedFbCaller &&
+              verifiedFbCaller.uid === u.uid &&
+              verifiedFbCaller.email === emailRaw
+          );
+        if (isAuthenticatedOwner) {
           preSyncedRecord = u;
           break;
         }
@@ -1845,25 +2461,55 @@ async function startServer() {
       }
     }
 
-    const isSuperAdmin = emailRaw === SUPER_ADMIN_EMAIL || emailRaw === WORKSPACE_ADMIN_EMAIL;
     const newUser: ServerUserRecord = {
-      uid: isSuperAdmin ? 'admin_vuedevo_01' : preSyncedRecord?.uid || uid,
-      username: isSuperAdmin ? SUPER_ADMIN_USERNAME : username,
+      uid: preSyncedRecord?.uid || (verifiedFbCaller?.uid || uid),
+      username,
       email: emailRaw,
       displayName: displayName.slice(0, 80),
-      role: isSuperAdmin ? 'admin' : preSyncedRecord?.role || 'user',
+      role: 'user',
       status: preSyncedRecord?.status || 'active',
       authProvider: 'password',
       currency: preSyncedRecord?.currency || 'IDR',
       subscriptionStatus: preSyncedRecord?.subscriptionStatus || 'free',
       isPro: preSyncedRecord?.isPro || false,
-      passwordHash: isSuperAdmin ? superAdminPasswordHash : hashPassword(password),
+      passwordHash: hashPassword(password),
       createdAt: preSyncedRecord?.createdAt || nowIso(),
       updatedAt: nowIso(),
     };
 
     usersStore.set(newUser.uid, newUser);
     savePersistedUsersCache();
+
+    if (serverDb) {
+      try {
+        await ensureServerFirebaseSignedIn();
+        await serverFsSetDoc(
+          serverFsDoc(serverDb, 'users', newUser.uid),
+          {
+            uid: newUser.uid,
+            username: newUser.username,
+            email: newUser.email,
+            displayName: newUser.displayName,
+            role: 'user',
+            status: newUser.status,
+            authProvider: 'password',
+            currency: newUser.currency,
+            subscriptionStatus: newUser.subscriptionStatus,
+            isPro: newUser.isPro,
+            passwordHash: newUser.passwordHash,
+            deleted: false,
+            deletedAt: null,
+            createdAt: serverFsTimestamp(),
+            updatedAt: serverFsTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch {
+        // Fallback already persisted in server store
+      }
+    }
+
+    const userToken = issueUserSessionToken(newUser);
     appendLog(
       newUser.uid,
       newUser.email,
@@ -1874,11 +2520,12 @@ async function startServer() {
 
     res.json({
       user: sanitizeUser(newUser),
+      userToken,
       requiresOtp: false,
     });
   });
 
-  // Request or Resend OTP specifically for Super Admin (vuedevo@gmail.com) with strict cooldown & rate limiting
+  // Request or Resend OTP specifically for Super Admin with strict cooldown & rate limiting
   app.post('/api/auth/request-otp', async (req: Request, res: Response) => {
     const emailRaw = String(req.body?.email || '').trim().toLowerCase();
     if (emailRaw !== SUPER_ADMIN_EMAIL && emailRaw !== WORKSPACE_ADMIN_EMAIL) {
@@ -1899,7 +2546,6 @@ async function startServer() {
         smtpMessageId: null,
         email: emailRaw,
         expiresAt: eligibility.reusedChallenge.expiresAt,
-        fallbackCode: eligibility.reusedChallenge.code,
         message: `Kode verifikasi sebelumnya masih aktif. Silakan periksa Inbox/Spam atau tunggu ${eligibility.cooldownRemainingSec} detik untuk mengirim ulang.`,
       });
       return;
@@ -1973,7 +2619,6 @@ async function startServer() {
       smtpMessageId,
       email: emailRaw,
       expiresAt,
-      fallbackCode: otpCode,
       message: smtpSent
         ? `Kode verifikasi baru telah dikirim ke email ${emailRaw}.`
         : smtpError || `Gagal mengirim email OTP ke ${emailRaw}.`,
@@ -2026,9 +2671,15 @@ async function startServer() {
       return;
     }
 
-    // OTP verification passed - issue cryptographically secure admin token
+    // OTP verification passed - issue cryptographically secure admin & session tokens
     otpChallenges.delete(emailRaw);
     const adminToken = issueSuperAdminToken(emailRaw);
+    const adminRecord = usersStore.get('admin_vuedevo_01');
+    const userToken = issueUserSessionToken({
+      uid: adminRecord?.uid || 'admin_vuedevo_01',
+      email: emailRaw,
+      role: 'admin',
+    });
 
     appendLog(
       'admin_vuedevo_01',
@@ -2041,22 +2692,28 @@ async function startServer() {
     res.json({
       verified: true,
       adminToken,
+      userToken,
       verifiedAt: nowIso(),
     });
   });
 
-  // Sync Firebase Auth user (Google or Email/Password) into the live registry
-  app.post('/api/users/sync', (req: Request, res: Response) => {
+  // Sync authenticated user profile metadata into the live registry
+  app.post('/api/users/sync', async (req: Request, res: Response) => {
     const uid = String(req.body?.uid || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();
     const rawUsername = String(req.body?.username || '').trim().toLowerCase().replace(/\s+/g, '_');
     const username = (rawUsername || email.split('@')[0] || 'user').slice(0, 60);
     const displayName = String(req.body?.displayName || '').trim() || username || 'Pengguna';
     const authProvider = req.body?.authProvider === 'google' ? 'google' : 'password';
-    const passwordHash = req.body?.passwordHash ? String(req.body.passwordHash) : undefined;
 
     if (!uid || !email) {
       res.status(400).json({ error: 'UID dan email wajib disertakan.' });
+      return;
+    }
+
+    const caller = await verifyCallerAuth(req, uid);
+    if (!caller.ok) {
+      res.status(caller.status).json({ error: caller.error });
       return;
     }
 
@@ -2070,33 +2727,8 @@ async function startServer() {
       }
     }
 
-    const isSuperAdmin = email === SUPER_ADMIN_EMAIL || email === WORKSPACE_ADMIN_EMAIL;
-    const incomingSubStatus: 'free' | 'pending' | 'pro' | undefined =
-      req.body?.subscriptionStatus === 'pending'
-        ? 'pending'
-        : req.body?.subscriptionStatus === 'pro' || req.body?.isPro === true
-          ? 'pro'
-          : req.body?.subscriptionStatus === 'free' || req.body?.isPro === false
-            ? 'free'
-            : undefined;
-    const incomingPlan: 'monthly' | 'yearly' | null =
-      req.body?.subscriptionPlan === 'yearly'
-        ? 'yearly'
-        : req.body?.subscriptionPlan === 'monthly'
-          ? 'monthly'
-          : null;
-    const incomingExpiresAt: string | null = req.body?.subscriptionExpiresAt
-      ? String(req.body.subscriptionExpiresAt).slice(0, 10)
-      : null;
-
-    const isDeactivated = Boolean(req.body?.isExplicitlyDeactivated === true);
-    const isPro = !isDeactivated && incomingSubStatus === 'pro';
-    const isPending = !isDeactivated && !isPro && incomingSubStatus === 'pending';
-    const effectiveStatus: 'free' | 'pending' | 'pro' = isPro
-      ? 'pro'
-      : isPending
-        ? 'pending'
-        : 'free';
+    const isSuperAdmin =
+      caller.isAdmin && (email === SUPER_ADMIN_EMAIL || email === WORKSPACE_ADMIN_EMAIL);
 
     if (existing) {
       existing.displayName = displayName.slice(0, 80);
@@ -2104,33 +2736,53 @@ async function startServer() {
       if (rawUsername && (!existing.username || rawUsername !== emailPrefix || existing.username === emailPrefix)) {
         existing.username = username;
       }
-      if (isPro) {
-        existing.subscriptionStatus = 'pro';
-        existing.isPro = true;
-        existing.isExplicitlyDeactivated = false;
-        if (incomingPlan) existing.subscriptionPlan = incomingPlan;
-        if (incomingExpiresAt) existing.subscriptionExpiresAt = incomingExpiresAt;
-      } else if (isPending) {
-        existing.subscriptionStatus = 'pending';
-        existing.isPro = false;
-        if (incomingPlan) existing.subscriptionPlan = incomingPlan;
-      } else {
-        existing.subscriptionStatus = 'free';
-        existing.isPro = false;
-        existing.subscriptionPlan = null;
-        existing.subscriptionExpiresAt = null;
-        existing.isExplicitlyDeactivated = isDeactivated;
-      }
-      if (passwordHash) {
-        existing.passwordHash = passwordHash;
-        if (isSuperAdmin || existing.uid === 'admin_vuedevo_01') {
-          superAdminPasswordHash = passwordHash;
+
+      // Only Super Admin may elevate role, subscription tier, deactivation state, or passwordHash via /users/sync
+      if (caller.isAdmin) {
+        const incomingSubStatus: 'free' | 'pending' | 'pro' | undefined =
+          req.body?.subscriptionStatus === 'pending'
+            ? 'pending'
+            : req.body?.subscriptionStatus === 'pro' || req.body?.isPro === true
+              ? 'pro'
+              : req.body?.subscriptionStatus === 'free' || req.body?.isPro === false
+                ? 'free'
+                : undefined;
+        const incomingPlan: 'monthly' | 'yearly' | null =
+          req.body?.subscriptionPlan === 'yearly'
+            ? 'yearly'
+            : req.body?.subscriptionPlan === 'monthly'
+              ? 'monthly'
+              : null;
+        const incomingExpiresAt: string | null = req.body?.subscriptionExpiresAt
+          ? String(req.body.subscriptionExpiresAt).slice(0, 10)
+          : null;
+        const isDeactivated = Boolean(req.body?.isExplicitlyDeactivated === true);
+        const isPro = !isDeactivated && incomingSubStatus === 'pro';
+        const isPending = !isDeactivated && !isPro && incomingSubStatus === 'pending';
+
+        if (isPro) {
+          existing.subscriptionStatus = 'pro';
+          existing.isPro = true;
+          existing.isExplicitlyDeactivated = false;
+          if (incomingPlan) existing.subscriptionPlan = incomingPlan;
+          if (incomingExpiresAt) existing.subscriptionExpiresAt = incomingExpiresAt;
+        } else if (isPending) {
+          existing.subscriptionStatus = 'pending';
+          existing.isPro = false;
+          if (incomingPlan) existing.subscriptionPlan = incomingPlan;
+        } else if (incomingSubStatus === 'free') {
+          existing.subscriptionStatus = 'free';
+          existing.isPro = false;
+          existing.subscriptionPlan = null;
+          existing.subscriptionExpiresAt = null;
+          existing.isExplicitlyDeactivated = isDeactivated;
+        }
+        if (isSuperAdmin) {
+          existing.role = 'admin';
         }
       }
+
       existing.updatedAt = nowIso();
-      if (isSuperAdmin) {
-        existing.role = 'admin';
-      }
       savePersistedUsersCache();
       res.json({ user: sanitizeUser(existing) });
       return;
@@ -2141,16 +2793,15 @@ async function startServer() {
       username,
       email,
       displayName: displayName.slice(0, 80),
-      role: isSuperAdmin ? 'admin' : 'user',
+      role: 'user',
       status: 'active',
       authProvider,
       currency: 'IDR',
-      subscriptionStatus: effectiveStatus,
-      isPro,
+      subscriptionStatus: 'free',
+      isPro: false,
       isExplicitlyDeactivated: false,
-      subscriptionPlan: isPro ? incomingPlan || 'yearly' : null,
-      subscriptionExpiresAt: isPro ? incomingExpiresAt : null,
-      passwordHash,
+      subscriptionPlan: null,
+      subscriptionExpiresAt: null,
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
@@ -2168,8 +2819,28 @@ async function startServer() {
     res.json({ user: sanitizeUser(record) });
   });
 
+  // Enforce authentication & ownership on all /api/users/:uid/* routes declared below
+  app.use('/api/users/:uid', async (req: Request, res: Response, next: NextFunction) => {
+    const rawUid = String(req.params.uid || '').trim();
+    const allowPeer =
+      req.path.startsWith('/report-settings') ||
+      req.path.startsWith('/automations') ||
+      req.path.startsWith('/savings') ||
+      req.path.startsWith('/debts');
+
+    const authRes = allowPeer
+      ? await authorizeUserOrPeer(req, rawUid)
+      : await verifyCallerAuth(req, rawUid);
+    if (!authRes.ok) {
+      res.status(authRes.status).json({ error: authRes.error });
+      return;
+    }
+    (req as any).verifiedCaller = authRes;
+    next();
+  });
+
   // Update User Profile (displayName & username)
-  app.patch('/api/users/:uid/profile', (req: Request, res: Response) => {
+  app.patch('/api/users/:uid/profile', async (req: Request, res: Response) => {
     const uid = String(req.params.uid || '').trim();
     const displayName = String(req.body?.displayName || '').trim();
     const rawUsername = String(req.body?.username || '').trim().toLowerCase().replace(/\s+/g, '_');
@@ -2187,6 +2858,23 @@ async function startServer() {
       }
       target.updatedAt = nowIso();
       savePersistedUsersCache();
+    }
+
+    if (serverDb) {
+      try {
+        await ensureServerFirebaseSignedIn();
+        const updatePayload: Record<string, any> = {
+          displayName: displayName.slice(0, 80),
+          updatedAt: serverFsTimestamp(),
+        };
+        if (rawUsername) updatePayload.username = rawUsername.slice(0, 60);
+        await serverFsSetDoc(serverFsDoc(serverDb, 'users', uid), updatePayload, { merge: true });
+      } catch {
+        // Ignore if doc update fails
+      }
+    }
+
+    if (target) {
       res.json({ user: sanitizeUser(target) });
       return;
     }
@@ -2201,15 +2889,12 @@ async function startServer() {
     });
   });
 
-  // Change User Password (verifies currentPassword if passwordHash is present, and returns new SHA-256 passwordHash for Firestore sync)
-  app.patch('/api/users/:uid/password', (req: Request, res: Response) => {
+  // Change User Password (verifies currentPassword against server-stored hash & updates Firestore server-side)
+  app.patch('/api/users/:uid/password', async (req: Request, res: Response) => {
     const uid = String(req.params.uid || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();
     const currentPassword = String(req.body?.currentPassword || '');
     const newPassword = String(req.body?.newPassword || '');
-    const storedHashFromClient = req.body?.storedPasswordHash
-      ? String(req.body.storedPasswordHash)
-      : undefined;
 
     if (!newPassword || newPassword.length < 6) {
       res.status(400).json({ error: 'Kata sandi baru wajib diisi minimal 6 karakter.' });
@@ -2225,15 +2910,29 @@ async function startServer() {
         }
       }
     }
+    if (!target) {
+      target = await findUserInServerFirestore(uid) || (email ? await findUserInServerFirestore(email) : undefined);
+    }
 
-    const effectiveStoredHash = target?.passwordHash || storedHashFromClient;
+    let serverStoredHash = target?.passwordHash;
+    if (!serverStoredHash && serverDb) {
+      try {
+        await ensureServerFirebaseSignedIn();
+        const snap = await serverFsGetDoc(serverFsDoc(serverDb, 'users', uid));
+        if (snap.exists() && snap.data()?.passwordHash) {
+          serverStoredHash = String(snap.data()!.passwordHash);
+        }
+      } catch {
+        // Ignore Firestore lookup fallback failure
+      }
+    }
 
-    if (effectiveStoredHash) {
+    if (serverStoredHash) {
       if (!currentPassword) {
         res.status(400).json({ error: 'Kata sandi saat ini wajib diisi untuk verifikasi keamanan.' });
         return;
       }
-      const isValidCurrent = verifyPasswordAgainstStoredHash(currentPassword, effectiveStoredHash);
+      const isValidCurrent = verifyPasswordAgainstStoredHash(currentPassword, serverStoredHash);
       if (!isValidCurrent) {
         appendLog(
           uid || 'unknown',
@@ -2255,10 +2954,29 @@ async function startServer() {
       target.updatedAt = nowIso();
       if (target.email.toLowerCase() === SUPER_ADMIN_EMAIL || uid === 'admin_vuedevo_01') {
         superAdminPasswordHash = newHash;
+        runtimeServerFbPassword = newPassword;
       }
       savePersistedUsersCache();
     } else if (email === SUPER_ADMIN_EMAIL || uid === 'admin_vuedevo_01') {
       superAdminPasswordHash = newHash;
+      runtimeServerFbPassword = newPassword;
+    }
+
+    if (serverDb) {
+      try {
+        await ensureServerFirebaseSignedIn();
+        await serverFsSetDoc(
+          serverFsDoc(serverDb, 'users', uid),
+          {
+            passwordHash: newHash,
+            authProvider: 'password',
+            updatedAt: serverFsTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch {
+        // Ignore if Firestore rules disallow direct field update
+      }
     }
 
     appendLog(
@@ -2271,7 +2989,6 @@ async function startServer() {
 
     res.json({
       success: true,
-      passwordHash: newHash,
       updatedAt: nowIso(),
     });
   });
@@ -2478,15 +3195,7 @@ async function startServer() {
   // =========================================================================
   app.get('/api/users/:uid/report-settings', (req: Request, res: Response) => {
     const uid = String(req.params.uid || '').trim();
-    let record = reportSettingsStore.get(uid);
-
-    if (!record && uid !== 'default') {
-      record = reportSettingsStore.get('default');
-    }
-
-    if (!record && reportSettingsStore.size > 0) {
-      record = Array.from(reportSettingsStore.values())[0];
-    }
+    const record = uid ? reportSettingsStore.get(uid) : undefined;
 
     if (!record) {
       res.json({
@@ -2503,7 +3212,11 @@ async function startServer() {
   });
 
   app.put('/api/users/:uid/report-settings', (req: Request, res: Response) => {
-    const uid = String(req.params.uid || '').trim() || 'default';
+    const uid = String(req.params.uid || '').trim();
+    if (!uid) {
+      res.status(400).json({ error: 'UID pengguna wajib disertakan.' });
+      return;
+    }
     const body = req.body || {};
 
     const record: ServerReportSettingsRecord = {
@@ -2524,10 +3237,9 @@ async function startServer() {
     };
 
     reportSettingsStore.set(uid, record);
-    reportSettingsStore.set('default', { ...record, ownerId: 'default' });
     savePersistedReportSettingsCache();
 
-    const isFromPeer = req.query.peer === '1';
+    const isFromPeer = Boolean((req as any).verifiedCaller?.isPeer);
     if (!isFromPeer) {
       void syncReportSettingsToPeer(uid, record);
     }
@@ -2697,7 +3409,7 @@ async function startServer() {
     automationsStore.set(id, record);
     savePersistedAutomationsCache();
 
-    const isFromPeer = req.query.peer === '1';
+    const isFromPeer = Boolean((req as any).verifiedCaller?.isPeer);
     if (!isFromPeer) {
       void syncAutomationToPeer(uid, record, false);
     }
@@ -2751,7 +3463,7 @@ async function startServer() {
     automationsStore.set(id, record);
     savePersistedAutomationsCache();
 
-    const isFromPeer = req.query.peer === '1';
+    const isFromPeer = Boolean((req as any).verifiedCaller?.isPeer);
     if (!isFromPeer) {
       void syncAutomationToPeer(uid, record, false);
     }
@@ -2795,7 +3507,7 @@ async function startServer() {
     automationsStore.set(id, existing);
     savePersistedAutomationsCache();
 
-    const isFromPeer = req.query.peer === '1';
+    const isFromPeer = Boolean((req as any).verifiedCaller?.isPeer);
     if (!isFromPeer) {
       void syncAutomationToPeer(uid, existing, false);
     }
@@ -2917,7 +3629,7 @@ async function startServer() {
     automationsStore.delete(id);
     savePersistedAutomationsCache();
 
-    const isFromPeer = req.query.peer === '1';
+    const isFromPeer = Boolean((req as any).verifiedCaller?.isPeer);
     if (!isFromPeer && existing) {
       void syncAutomationToPeer(uid, { ...existing, id, deleted: true, updatedAt: nowIso() }, true);
     }
@@ -3057,7 +3769,7 @@ async function startServer() {
     savingsGoalsStore.set(id, record);
     savePersistedSavingsCache();
 
-    if (req.query.peer !== '1') {
+    if (!Boolean((req as any).verifiedCaller?.isPeer)) {
       void syncSavingsToPeer(uid, 'goals', id, record, false);
     }
 
@@ -3087,7 +3799,7 @@ async function startServer() {
     savingsGoalsStore.set(id, existing);
     savePersistedSavingsCache();
 
-    if (req.query.peer !== '1') {
+    if (!Boolean((req as any).verifiedCaller?.isPeer)) {
       void syncSavingsToPeer(uid, 'goals', id, existing, false);
     }
 
@@ -3112,7 +3824,7 @@ async function startServer() {
     }
     savePersistedSavingsCache();
 
-    if (req.query.peer !== '1' && existing) {
+    if (!Boolean((req as any).verifiedCaller?.isPeer) && existing) {
       void syncSavingsToPeer(uid, 'goals', id, { ...existing, deleted: true }, true);
     }
 
@@ -3149,7 +3861,7 @@ async function startServer() {
     savingsEntriesStore.set(id, record);
     savePersistedSavingsCache();
 
-    if (req.query.peer !== '1') {
+    if (!Boolean((req as any).verifiedCaller?.isPeer)) {
       void syncSavingsToPeer(uid, 'entries', id, record, false);
     }
 
@@ -3166,7 +3878,7 @@ async function startServer() {
     savingsEntriesStore.delete(id);
     savePersistedSavingsCache();
 
-    if (req.query.peer !== '1' && existing) {
+    if (!Boolean((req as any).verifiedCaller?.isPeer) && existing) {
       void syncSavingsToPeer(uid, 'entries', id, { ...existing, deleted: true }, true);
     }
 
@@ -3329,7 +4041,7 @@ async function startServer() {
     debtsStore.set(id, record);
     savePersistedDebtsCache();
 
-    if (req.query.peer !== '1') {
+    if (!Boolean((req as any).verifiedCaller?.isPeer)) {
       void syncDebtsToPeer(uid, 'items', id, record, false);
     }
 
@@ -3359,7 +4071,7 @@ async function startServer() {
     debtsStore.set(id, existing);
     savePersistedDebtsCache();
 
-    if (req.query.peer !== '1') {
+    if (!Boolean((req as any).verifiedCaller?.isPeer)) {
       void syncDebtsToPeer(uid, 'items', id, existing, false);
     }
 
@@ -3383,7 +4095,7 @@ async function startServer() {
     }
     savePersistedDebtsCache();
 
-    if (req.query.peer !== '1' && existing) {
+    if (!Boolean((req as any).verifiedCaller?.isPeer) && existing) {
       void syncDebtsToPeer(uid, 'items', id, { ...existing, deleted: true }, true);
     }
 
@@ -3420,7 +4132,7 @@ async function startServer() {
     debtEntriesStore.set(id, record);
     savePersistedDebtsCache();
 
-    if (req.query.peer !== '1') {
+    if (!Boolean((req as any).verifiedCaller?.isPeer)) {
       void syncDebtsToPeer(uid, 'entries', id, record, false);
     }
 
@@ -3437,7 +4149,7 @@ async function startServer() {
     debtEntriesStore.delete(id);
     savePersistedDebtsCache();
 
-    if (req.query.peer !== '1' && existing) {
+    if (!Boolean((req as any).verifiedCaller?.isPeer) && existing) {
       void syncDebtsToPeer(uid, 'entries', id, { ...existing, deleted: true }, true);
     }
 
@@ -4114,12 +4826,17 @@ async function startServer() {
 
   // 1. Create Midtrans Transaction / In-Site Checkout Order (Strictly IDR)
   app.post('/api/payment/create-transaction', async (req: Request, res: Response) => {
+    const caller = await verifyCallerAuth(req);
+    if (!caller.ok) {
+      res.status(caller.status).json({ error: caller.error });
+      return;
+    }
     try {
       const plan: 'monthly' | 'yearly' = req.body?.plan === 'yearly' ? 'yearly' : 'monthly';
       const amount = plan === 'yearly' ? 215000 : 21500;
       const customerName = String(req.body?.customerName || 'Pelanggan SisaUang').trim().slice(0, 80);
-      const customerEmail = String(req.body?.customerEmail || 'vuedevo@gmail.com').trim().toLowerCase().slice(0, 100);
-      const customerPhone = String(req.body?.customerPhone || '0851-2963-4505').trim().slice(0, 30);
+      const customerEmail = String(req.body?.customerEmail || caller.email || '').trim().toLowerCase().slice(0, 100);
+      const customerPhone = String(req.body?.customerPhone || '080000000000').trim().slice(0, 30);
       const paymentMethod = String(req.body?.paymentMethod || 'qris');
 
       const timestamp = Date.now();
@@ -4209,8 +4926,8 @@ async function startServer() {
     }
   });
 
-  // 2. Confirm in-site simulated / verified payment
-  app.post('/api/payment/confirm-mock-payment', async (req: Request, res: Response) => {
+  // 2. Confirm in-site simulated payment (Strictly Super Admin only)
+  app.post('/api/payment/confirm-mock-payment', requireAdminMiddleware, async (req: Request, res: Response) => {
     const orderId = String(req.body?.orderId || '');
     const invoiceNumber = String(req.body?.invoiceNumber || '');
     const customerEmail = String(req.body?.customerEmail || '').trim().toLowerCase();
@@ -5561,7 +6278,7 @@ async function startServer() {
           ? superAdminPasswordHash
           : u.passwordHash
           ? String(u.passwordHash)
-          : existing?.passwordHash || hashPassword('ShieldUser2026!'),
+          : existing?.passwordHash,
         createdAt: String(u.createdAt || existing?.createdAt || nowIso()),
         updatedAt: String(u.updatedAt || existing?.updatedAt || nowIso()),
       };
@@ -5680,9 +6397,7 @@ async function startServer() {
 
     if (serverDb && serverAuth) {
       try {
-        if (!serverAuth.currentUser) {
-          await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
-        }
+        await ensureServerFirebaseSignedIn();
         await Promise.all(
           collectionDefs.map(async (def) => {
             try {
@@ -5727,9 +6442,7 @@ async function startServer() {
     }
 
     try {
-      if (!serverAuth.currentUser) {
-        await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
-      }
+      await ensureServerFirebaseSignedIn();
 
       const tsToIso = (val: any): any => {
         if (val === null || val === undefined) return val;
@@ -5805,9 +6518,7 @@ async function startServer() {
     }
 
     try {
-      if (!serverAuth.currentUser) {
-        await serverFsSignIn(serverAuth, SUPER_ADMIN_EMAIL, '@Dienzaki2019##');
-      }
+      await ensureServerFirebaseSignedIn();
 
       const [snap, countSnap] = await Promise.all([
         serverFsGetDocs(serverFsQuery(serverFsCollection(serverDb, colName), serverFsLimit(limitCount))),
@@ -5909,6 +6620,390 @@ async function startServer() {
   });
 
   // =========================================================================
+  // Authenticated User Firestore Bridge (/api/user-db/*)
+  // Enables legacy/email-password users (ci4_user_*, user_*) to access only
+  // their own Cloud Firestore documents without ever signing clients in as Admin.
+  // =========================================================================
+  const ALLOWED_USER_DB_COLLECTIONS = new Set([
+    'users',
+    'wallets',
+    'wallet_owners',
+    'categories',
+    'transactions',
+    'budgets',
+    'report_settings',
+    'savings_goals',
+    'savings_entries',
+    'debts',
+    'debt_entries',
+    'automations',
+  ]);
+  const SHARED_CATEGORY_OWNER_IDS = new Set(['ci4_user_46', 'default', 'system', '']);
+  const USER_SENSITIVE_FIELDS = new Set([
+    'role',
+    'status',
+    'isPro',
+    'subscriptionExpiresAt',
+    'isExplicitlyDeactivated',
+    'passwordHash',
+  ]);
+
+  function translateBridgeSentinels(value: any): any {
+    if (value === null || value === undefined) return value;
+    if (Array.isArray(value)) return value.map((item) => translateBridgeSentinels(item));
+    if (typeof value === 'object') {
+      if (value.__fsType === 'serverTimestamp') {
+        return serverFsTimestamp();
+      }
+      if (value.__fsType === 'increment') {
+        return serverFsIncrement(Number(value.delta || 0));
+      }
+      const out: Record<string, any> = {};
+      for (const [k, v] of Object.entries(value)) {
+        if (v !== undefined) {
+          out[k] = translateBridgeSentinels(v);
+        }
+      }
+      return out;
+    }
+    return value;
+  }
+
+  function stripSensitiveUserFields(colName: string, data: Record<string, any>): Record<string, any> {
+    if (colName !== 'users') return data;
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (k === 'passwordHash') continue;
+      out[k] = v;
+    }
+    return out;
+  }
+
+  function verifyQueryWheresForOwner(
+    colName: string,
+    wheres: any[],
+    targetOwnerUid: string
+  ): boolean {
+    if (!Array.isArray(wheres)) return false;
+    return wheres.some((w) => {
+      if (!w || w.field !== 'ownerId') return false;
+      if (w.op === '==') {
+        return (
+          String(w.value || '') === targetOwnerUid ||
+          (colName === 'categories' && SHARED_CATEGORY_OWNER_IDS.has(String(w.value || '')))
+        );
+      }
+      if (w.op === 'in' && colName === 'categories' && Array.isArray(w.value)) {
+        return w.value.every(
+          (val: any) =>
+            String(val || '') === targetOwnerUid || SHARED_CATEGORY_OWNER_IDS.has(String(val || ''))
+        );
+      }
+      return false;
+    });
+  }
+
+  app.post('/api/user-db/doc', async (req: Request, res: Response) => {
+    const colName = String(req.body?.collection || '').trim();
+    const docId = String(req.body?.docId || '').trim();
+    const rawOwner = String(
+      req.body?.ownerUid || req.headers['x-owner-uid'] || (colName === 'users' ? docId : '')
+    ).trim();
+
+    if (!ALLOWED_USER_DB_COLLECTIONS.has(colName) || !docId || docId.includes('/')) {
+      res.status(400).json({ success: false, error: 'Koleksi atau ID dokumen tidak valid.' });
+      return;
+    }
+
+    const caller = await verifyCallerAuth(req, rawOwner || undefined);
+    if (!caller.ok) {
+      res.status(caller.status).json({ success: false, error: caller.error });
+      return;
+    }
+    const targetOwnerUid = rawOwner || caller.uid;
+
+    if (colName === 'users' && !caller.isAdmin) {
+      const ownsUserDoc = await doesCallerOwnTargetUid(caller.uid, caller.email, docId);
+      if (!ownsUserDoc) {
+        res.status(403).json({ success: false, error: 'Akses ditolak untuk dokumen pengguna ini.' });
+        return;
+      }
+    }
+
+    try {
+      await ensureServerFirebaseSignedIn();
+      const snap = await serverFsGetDoc(serverFsDoc(serverDb, colName, docId));
+      if (!snap.exists()) {
+        res.json({ success: true, exists: false, id: docId, data: null });
+        return;
+      }
+      const rawData = (snap.data() || {}) as Record<string, any>;
+      const docOwner = String(rawData.ownerId || '').trim();
+      const allowedNonUser =
+        caller.isAdmin ||
+        docOwner === targetOwnerUid ||
+        docOwner === caller.uid ||
+        (colName === 'categories' && SHARED_CATEGORY_OWNER_IDS.has(docOwner)) ||
+        (colName === 'report_settings' && docId === targetOwnerUid);
+
+      if (colName !== 'users' && !allowedNonUser) {
+        res.status(403).json({ success: false, error: 'Dokumen bukan milik akun Anda.' });
+        return;
+      }
+
+      const serialized = stripSensitiveUserFields(colName, tsToIsoValue(rawData));
+      res.json({
+        success: true,
+        exists: true,
+        id: snap.id,
+        data: serialized,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: err?.message || 'Gagal membaca dokumen Firestore dari server.',
+      });
+    }
+  });
+
+  app.post('/api/user-db/query', async (req: Request, res: Response) => {
+    const colName = String(req.body?.collection || '').trim();
+    const wheres = Array.isArray(req.body?.wheres) ? req.body.wheres : [];
+    const orderBys = Array.isArray(req.body?.orderBys) ? req.body.orderBys : [];
+    const limitCount = req.body?.limitCount ? Math.min(5000, Math.max(1, Number(req.body.limitCount))) : undefined;
+    const startAfterDocId = req.body?.startAfterDocId ? String(req.body.startAfterDocId).trim() : '';
+    const rawOwner = String(req.body?.ownerUid || req.headers['x-owner-uid'] || '').trim();
+
+    if (!ALLOWED_USER_DB_COLLECTIONS.has(colName)) {
+      res.status(400).json({ success: false, error: 'Koleksi Firestore tidak diizinkan.' });
+      return;
+    }
+
+    const caller = await verifyCallerAuth(req, rawOwner || undefined);
+    if (!caller.ok) {
+      res.status(caller.status).json({ success: false, error: caller.error });
+      return;
+    }
+    const targetOwnerUid = rawOwner || caller.uid;
+
+    if (!caller.isAdmin) {
+      if (colName === 'users') {
+        const emailMatchesCaller = wheres.some(
+          (w: any) => w && w.field === 'email' && w.op === '==' && String(w.value || '').toLowerCase() === caller.email
+        );
+        if (!emailMatchesCaller) {
+          res.status(403).json({ success: false, error: 'Query koleksi users dibatasi untuk akun sendiri.' });
+          return;
+        }
+      } else if (!verifyQueryWheresForOwner(colName, wheres, targetOwnerUid)) {
+        res.status(403).json({ success: false, error: 'Query harus dibatasi pada ownerId milik akun Anda.' });
+        return;
+      }
+    }
+
+    try {
+      await ensureServerFirebaseSignedIn();
+      const constraints: any[] = [];
+      for (const w of wheres) {
+        if (w && typeof w.field === 'string' && typeof w.op === 'string') {
+          constraints.push(serverFsWhere(w.field, w.op as any, w.value));
+        }
+      }
+      for (const o of orderBys) {
+        if (o && typeof o.field === 'string') {
+          constraints.push(serverFsOrderBy(o.field, o.dir === 'desc' ? 'desc' : 'asc'));
+        }
+      }
+      if (startAfterDocId) {
+        const cursorSnap = await serverFsGetDoc(serverFsDoc(serverDb, colName, startAfterDocId));
+        if (cursorSnap.exists()) {
+          constraints.push(serverFsStartAfter(cursorSnap));
+        }
+      }
+      if (limitCount) {
+        constraints.push(serverFsLimit(limitCount));
+      }
+
+      const q = serverFsQuery(serverFsCollection(serverDb, colName), ...constraints);
+      const snap = await serverFsGetDocs(q);
+      const docs = snap.docs.map((d) => ({
+        id: d.id,
+        data: stripSensitiveUserFields(colName, tsToIsoValue(d.data() || {})),
+      }));
+
+      res.json({ success: true, docs });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: err?.message || 'Gagal menjalankan query Firestore dari server.',
+      });
+    }
+  });
+
+  app.post('/api/user-db/count', async (req: Request, res: Response) => {
+    const colName = String(req.body?.collection || '').trim();
+    const wheres = Array.isArray(req.body?.wheres) ? req.body.wheres : [];
+    const rawOwner = String(req.body?.ownerUid || req.headers['x-owner-uid'] || '').trim();
+
+    if (!ALLOWED_USER_DB_COLLECTIONS.has(colName)) {
+      res.status(400).json({ success: false, error: 'Koleksi Firestore tidak diizinkan.' });
+      return;
+    }
+
+    const caller = await verifyCallerAuth(req, rawOwner || undefined);
+    if (!caller.ok) {
+      res.status(caller.status).json({ success: false, error: caller.error });
+      return;
+    }
+    const targetOwnerUid = rawOwner || caller.uid;
+
+    if (!caller.isAdmin && !verifyQueryWheresForOwner(colName, wheres, targetOwnerUid)) {
+      res.status(403).json({ success: false, error: 'Aggregation query harus dibatasi pada ownerId milik akun Anda.' });
+      return;
+    }
+
+    try {
+      await ensureServerFirebaseSignedIn();
+      const constraints: any[] = [];
+      for (const w of wheres) {
+        if (w && typeof w.field === 'string' && typeof w.op === 'string') {
+          constraints.push(serverFsWhere(w.field, w.op as any, w.value));
+        }
+      }
+      const q = serverFsQuery(serverFsCollection(serverDb, colName), ...constraints);
+      const snap = await serverFsGetCountFromServer(q);
+      res.json({ success: true, count: Number(snap.data().count || 0) });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: err?.message || 'Gagal menghitung dokumen Firestore dari server.',
+      });
+    }
+  });
+
+  app.post('/api/user-db/mutate', async (req: Request, res: Response) => {
+    const ops = Array.isArray(req.body?.ops) ? req.body.ops : [];
+    const rawOwner = String(req.body?.ownerUid || req.headers['x-owner-uid'] || '').trim();
+
+    if (ops.length === 0 || ops.length > 500) {
+      res.status(400).json({ success: false, error: 'Jumlah operasi mutate harus antara 1 sampai 500.' });
+      return;
+    }
+
+    const caller = await verifyCallerAuth(req, rawOwner || undefined);
+    if (!caller.ok) {
+      res.status(caller.status).json({ success: false, error: caller.error });
+      return;
+    }
+    const targetOwnerUid = rawOwner || caller.uid;
+
+    try {
+      await ensureServerFirebaseSignedIn();
+      const batch = serverFsWriteBatch(serverDb);
+
+      for (const item of ops) {
+        const opType = item?.op;
+        const colName = String(item?.collection || '').trim();
+        const docId = String(item?.docId || '').trim();
+
+        if (!ALLOWED_USER_DB_COLLECTIONS.has(colName) || !docId || docId.includes('/')) {
+          res.status(400).json({ success: false, error: `Operasi pada ${colName}/${docId} tidak valid.` });
+          return;
+        }
+
+        const docRef = serverFsDoc(serverDb, colName, docId);
+
+        if (opType === 'delete') {
+          if (!caller.isAdmin) {
+            if (colName === 'users') {
+              res.status(403).json({ success: false, error: 'Tidak dapat menghapus dokumen users.' });
+              return;
+            }
+            const existingSnap = await serverFsGetDoc(docRef);
+            if (existingSnap.exists()) {
+              const existingOwner = String(existingSnap.data()?.ownerId || '').trim();
+              if (existingOwner !== targetOwnerUid && existingOwner !== caller.uid) {
+                res.status(403).json({ success: false, error: 'Tidak berwenang menghapus dokumen pengguna lain.' });
+                return;
+              }
+            }
+          }
+          batch.delete(docRef);
+          continue;
+        }
+
+        if (opType !== 'set' && opType !== 'update') {
+          res.status(400).json({ success: false, error: 'Jenis operasi database tidak dikenal.' });
+          return;
+        }
+
+        const rawPayload = item?.data && typeof item.data === 'object' ? { ...item.data } : {};
+
+        if (!caller.isAdmin) {
+          if (colName === 'users') {
+            const ownsUserDoc = await doesCallerOwnTargetUid(caller.uid, caller.email, docId);
+            if (!ownsUserDoc) {
+              res.status(403).json({ success: false, error: 'Tidak berwenang mengubah profil pengguna lain.' });
+              return;
+            }
+            for (const f of USER_SENSITIVE_FIELDS) {
+              delete rawPayload[f];
+            }
+            if (
+              rawPayload.subscriptionStatus !== undefined &&
+              rawPayload.subscriptionStatus !== 'free' &&
+              rawPayload.subscriptionStatus !== 'pending'
+            ) {
+              delete rawPayload.subscriptionStatus;
+            }
+          } else {
+            if (
+              rawPayload.ownerId !== undefined &&
+              String(rawPayload.ownerId || '').trim() !== targetOwnerUid &&
+              String(rawPayload.ownerId || '').trim() !== caller.uid
+            ) {
+              res.status(403).json({ success: false, error: 'ownerId dokumen harus sesuai akun yang sedang masuk.' });
+              return;
+            }
+            if (opType === 'update') {
+              const existingSnap = await serverFsGetDoc(docRef);
+              if (existingSnap.exists()) {
+                const existingOwner = String(existingSnap.data()?.ownerId || '').trim();
+                const isOwnReport = colName === 'report_settings' && docId === targetOwnerUid;
+                if (!isOwnReport && existingOwner !== targetOwnerUid && existingOwner !== caller.uid) {
+                  res.status(403).json({ success: false, error: 'Tidak berwenang memperbarui dokumen pengguna lain.' });
+                  return;
+                }
+              }
+            } else if (!rawPayload.ownerId) {
+              rawPayload.ownerId = targetOwnerUid;
+            }
+          }
+        }
+
+        const translated = translateBridgeSentinels(rawPayload);
+        if (opType === 'set') {
+          if (item?.merge) {
+            batch.set(docRef, translated, { merge: true });
+          } else {
+            batch.set(docRef, translated);
+          }
+        } else {
+          batch.update(docRef, translated);
+        }
+      }
+
+      await batch.commit();
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: err?.message || 'Gagal menyimpan perubahan Firestore melalui server.',
+      });
+    }
+  });
+
+  // =========================================================================
   // Cloudflare R2 (S3-Compatible) Endpoints for Transaction Attachments
   // =========================================================================
   function getR2RuntimeConfig() {
@@ -5946,58 +7041,19 @@ async function startServer() {
   async function verifyTransactionAttachmentCaller(
     req: Request
   ): Promise<{ ok: true; ownerUid: string } | { ok: false; status: number; error: string }> {
-    const authHeader = String(req.headers.authorization || '').trim();
-    const match = authHeader.match(/^Bearer\s+(.+)$/i);
-    const idToken = match?.[1]?.trim() || '';
-    if (!idToken) {
-      return { ok: false, status: 401, error: 'Autentikasi diperlukan untuk mengelola lampiran transaksi.' };
+    const rawRequestedUid = String(
+      req.headers['x-owner-uid'] || req.body?.ownerUid || req.query?.ownerUid || ''
+    ).trim();
+    const sanitizedRequestedUid = rawRequestedUid.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    const authRes = await verifyCallerAuth(req, sanitizedRequestedUid || undefined);
+    if (!authRes.ok) {
+      return authRes;
     }
-
-    try {
-      const lookupRes = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(firebaseServerConfig.apiKey)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ idToken }),
-          signal: AbortSignal.timeout(8000),
-        }
-      );
-      if (!lookupRes.ok) {
-        return { ok: false, status: 401, error: 'Sesi autentikasi tidak valid atau kedaluwarsa.' };
-      }
-      const lookupData = (await lookupRes.json()) as {
-        users?: Array<{ localId?: string; email?: string; emailVerified?: boolean; disabled?: boolean }>;
-      };
-      const fbUser = lookupData?.users?.[0];
-      if (!fbUser?.localId || fbUser.disabled) {
-        return { ok: false, status: 401, error: 'Akun autentikasi tidak ditemukan atau dinonaktifkan.' };
-      }
-
-      const tokenUid = String(fbUser.localId).trim();
-      const tokenEmail = String(fbUser.email || '').trim().toLowerCase();
-      const rawRequestedUid = String(
-        req.headers['x-owner-uid'] || req.body?.ownerUid || req.query?.ownerUid || ''
-      ).trim();
-      const sanitizedRequestedUid = rawRequestedUid.replace(/[^a-zA-Z0-9_\-]/g, '_');
-
-      if (!sanitizedRequestedUid || sanitizedRequestedUid === tokenUid) {
-        return { ok: true, ownerUid: tokenUid };
-      }
-
-      const isTrustedAppSession =
-        tokenEmail === SUPER_ADMIN_EMAIL ||
-        tokenEmail === WORKSPACE_ADMIN_EMAIL ||
-        tokenEmail === 'sdnpengasinantujuh@gmail.com';
-
-      if (isTrustedAppSession && /^[a-zA-Z0-9_\-]{1,128}$/.test(sanitizedRequestedUid)) {
-        return { ok: true, ownerUid: sanitizedRequestedUid };
-      }
-
-      return { ok: false, status: 403, error: 'Akses ditolak: Anda tidak berwenang mengakses lampiran pengguna ini.' };
-    } catch {
-      return { ok: false, status: 401, error: 'Gagal memverifikasi sesi autentikasi pengguna.' };
-    }
+    const finalOwnerUid = (sanitizedRequestedUid || authRes.uid || 'guest').replace(
+      /[^a-zA-Z0-9_\-]/g,
+      '_'
+    );
+    return { ok: true, ownerUid: finalOwnerUid };
   }
 
   function detectVerifiedUploadType(

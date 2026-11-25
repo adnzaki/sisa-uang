@@ -1,24 +1,19 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import {
-  collection,
-  doc,
-  getDocs,
-  getDocsFromServer,
-  setDoc,
-  deleteDoc,
-  query,
-  where,
-  serverTimestamp,
-} from 'firebase/firestore';
-import {
   auth,
-  db,
   sanitizeId,
   sanitizeString,
   isFirestoreOfflineError,
   isFirestoreQuotaError,
 } from '../firebase';
+import { getUserAuthHeaders } from '../services/api';
+import {
+  fsGetDocs,
+  fsSetDoc,
+  fsDeleteDoc,
+  fsServerTimestamp,
+} from '../services/userFirestoreBridge';
 import { useAuthStore } from './auth';
 import { useFinanceStore, formatHolderName } from './finance';
 import { useNotificationStore } from './notification';
@@ -268,7 +263,7 @@ export const useDebtsStore = defineStore('debts', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/debts/batch`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify({ debts: debtList, entries: entryList }),
       });
     } catch {
@@ -307,12 +302,9 @@ export const useDebtsStore = defineStore('debts', () => {
       let fsSuccess = false;
 
       try {
-        const debtsQuery = query(collection(db, 'debts'), where('ownerId', '==', uid));
-        const entriesQuery = query(collection(db, 'debt_entries'), where('ownerId', '==', uid));
-        const fetcher = forceRefresh ? getDocsFromServer : getDocs;
         const [debtsSnap, entriesSnap] = await Promise.all([
-          fetcher(debtsQuery).catch(() => getDocs(debtsQuery)),
-          fetcher(entriesQuery).catch(() => getDocs(entriesQuery)),
+          fsGetDocs('debts', { wheres: [{ field: 'ownerId', op: '==', value: uid }] }, uid, forceRefresh),
+          fsGetDocs('debt_entries', { wheres: [{ field: 'ownerId', op: '==', value: uid }] }, uid, forceRefresh),
         ]);
         fsDebts = debtsSnap.docs
           .map((d) => ({ id: d.id, ...(d.data() as Omit<DebtItem, 'id'>) }))
@@ -330,7 +322,9 @@ export const useDebtsStore = defineStore('debts', () => {
       let serverDebts: DebtItem[] = [];
       let serverEntries: DebtEntryItem[] = [];
       try {
-        const res = await fetch(`/api/users/${encodeURIComponent(uid)}/debts`);
+        const res = await fetch(`/api/users/${encodeURIComponent(uid)}/debts`, {
+          headers: getUserAuthHeaders(),
+        });
         if (res.ok) {
           const data = await res.json();
           if (data && Array.isArray(data.debts)) {
@@ -574,7 +568,7 @@ export const useDebtsStore = defineStore('debts', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/debts/items`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify(debtItem),
       });
     } catch {
@@ -604,16 +598,16 @@ export const useDebtsStore = defineStore('debts', () => {
         reminderAmount: debtItem.reminderAmount || null,
         deleted: false,
         deletedAt: null,
-        updatedAt: serverTimestamp(),
+        updatedAt: fsServerTimestamp(),
       };
       if (!isEdit) {
-        docData.createdAt = serverTimestamp();
+        docData.createdAt = fsServerTimestamp();
         docData.lastRemindedDate = null;
         docData.lastSkippedDate = null;
         docData.lastPushNotifiedDate = null;
         docData.snoozedUntil = null;
       }
-      await setDoc(doc(db, 'debts', id), docData, { merge: true });
+      await fsSetDoc('debts', id, docData, { merge: true }, uid);
       await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch (err: any) {
       console.warn('Firestore saveDebt notice:', err?.message || err);
@@ -682,6 +676,7 @@ export const useDebtsStore = defineStore('debts', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/debts/items/${encodeURIComponent(id)}`, {
         method: 'DELETE',
+        headers: getUserAuthHeaders(),
       });
     } catch {
       // Ignore
@@ -689,9 +684,9 @@ export const useDebtsStore = defineStore('debts', () => {
 
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await deleteDoc(doc(db, 'debts', id));
+      await fsDeleteDoc('debts', id, uid);
       for (const e of relatedEntries) {
-        await deleteDoc(doc(db, 'debt_entries', e.id)).catch(() => {});
+        await fsDeleteDoc('debt_entries', e.id, uid).catch(() => {});
       }
       await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch {
@@ -813,12 +808,12 @@ export const useDebtsStore = defineStore('debts', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/debts/entries`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify(entryItem),
       });
       await fetch(`/api/users/${encodeURIComponent(uid)}/debts/items/${encodeURIComponent(debt.id)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify({ lastRemindedDate: debt.lastRemindedDate, snoozedUntil: null }),
       });
     } catch {
@@ -827,32 +822,40 @@ export const useDebtsStore = defineStore('debts', () => {
 
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await setDoc(doc(db, 'debt_entries', entryId), {
-        ownerId: uid,
-        debtId: debt.id,
-        debtDescription: debt.description,
-        debtType: debt.type,
-        walletId: wallet.id,
-        walletName: wallet.name,
-        fundOwnerId: resolvedHolderId,
-        fundOwnerName: resolvedHolderName,
-        amount: numericAmount,
-        date: safeDate,
-        note: safeNote,
-        relatedTransactionId: createdTx?.id || null,
-        deleted: false,
-        deletedAt: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      await setDoc(
-        doc(db, 'debts', debt.id),
+      await fsSetDoc(
+        'debt_entries',
+        entryId,
+        {
+          ownerId: uid,
+          debtId: debt.id,
+          debtDescription: debt.description,
+          debtType: debt.type,
+          walletId: wallet.id,
+          walletName: wallet.name,
+          fundOwnerId: resolvedHolderId,
+          fundOwnerName: resolvedHolderName,
+          amount: numericAmount,
+          date: safeDate,
+          note: safeNote,
+          relatedTransactionId: createdTx?.id || null,
+          deleted: false,
+          deletedAt: null,
+          createdAt: fsServerTimestamp(),
+          updatedAt: fsServerTimestamp(),
+        },
+        undefined,
+        uid
+      );
+      await fsSetDoc(
+        'debts',
+        debt.id,
         {
           lastRemindedDate: debt.lastRemindedDate,
           snoozedUntil: null,
-          updatedAt: serverTimestamp(),
+          updatedAt: fsServerTimestamp(),
         },
-        { merge: true }
+        { merge: true },
+        uid
       );
       await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch (err: any) {
@@ -909,6 +912,7 @@ export const useDebtsStore = defineStore('debts', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/debts/entries/${encodeURIComponent(entryId)}`, {
         method: 'DELETE',
+        headers: getUserAuthHeaders(),
       });
     } catch {
       // Ignore
@@ -916,7 +920,7 @@ export const useDebtsStore = defineStore('debts', () => {
 
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await deleteDoc(doc(db, 'debt_entries', entryId));
+      await fsDeleteDoc('debt_entries', entryId, uid);
       await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch {
       // Ignore
@@ -1017,7 +1021,7 @@ export const useDebtsStore = defineStore('debts', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/debts/items/${encodeURIComponent(debtId)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify({ snoozedUntil }),
       });
     } catch {
@@ -1026,7 +1030,7 @@ export const useDebtsStore = defineStore('debts', () => {
 
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await setDoc(doc(db, 'debts', debtId), { snoozedUntil, updatedAt: serverTimestamp() }, { merge: true });
+      await fsSetDoc('debts', debtId, { snoozedUntil, updatedAt: fsServerTimestamp() }, { merge: true }, uid);
     } catch {
       // Ignore
     }
@@ -1058,7 +1062,7 @@ export const useDebtsStore = defineStore('debts', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/debts/items/${encodeURIComponent(debtId)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify({ lastSkippedDate: todayIso, snoozedUntil: null }),
       });
     } catch {
@@ -1067,10 +1071,12 @@ export const useDebtsStore = defineStore('debts', () => {
 
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await setDoc(
-        doc(db, 'debts', debtId),
-        { lastSkippedDate: todayIso, snoozedUntil: null, updatedAt: serverTimestamp() },
-        { merge: true }
+      await fsSetDoc(
+        'debts',
+        debtId,
+        { lastSkippedDate: todayIso, snoozedUntil: null, updatedAt: fsServerTimestamp() },
+        { merge: true },
+        uid
       );
     } catch {
       // Ignore
@@ -1176,7 +1182,7 @@ export const useDebtsStore = defineStore('debts', () => {
 
           void fetch(`/api/users/${encodeURIComponent(uid)}/debts/items/${encodeURIComponent(debt.id)}`, {
             method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
             body: JSON.stringify({ lastPushNotifiedDate: wib.dateIso }),
           }).catch(() => {});
         }

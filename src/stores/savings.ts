@@ -1,24 +1,19 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import {
-  collection,
-  doc,
-  getDocs,
-  getDocsFromServer,
-  setDoc,
-  deleteDoc,
-  query,
-  where,
-  serverTimestamp,
-} from 'firebase/firestore';
-import {
   auth,
-  db,
   sanitizeId,
   sanitizeString,
   isFirestoreOfflineError,
   isFirestoreQuotaError,
 } from '../firebase';
+import { getUserAuthHeaders } from '../services/api';
+import {
+  fsGetDocs,
+  fsSetDoc,
+  fsDeleteDoc,
+  fsServerTimestamp,
+} from '../services/userFirestoreBridge';
 import { useAuthStore } from './auth';
 import { useFinanceStore, formatHolderName } from './finance';
 import { useNotificationStore } from './notification';
@@ -366,7 +361,7 @@ export const useSavingsStore = defineStore('savings', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/savings/batch`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify({ goals: goalItems, entries: entryItems }),
       });
     } catch {
@@ -405,12 +400,9 @@ export const useSavingsStore = defineStore('savings', () => {
       let fsSuccess = false;
 
       try {
-        const goalsQuery = query(collection(db, 'savings_goals'), where('ownerId', '==', uid));
-        const entriesQuery = query(collection(db, 'savings_entries'), where('ownerId', '==', uid));
-        const fetcher = forceRefresh ? getDocsFromServer : getDocs;
         const [goalsSnap, entriesSnap] = await Promise.all([
-          fetcher(goalsQuery).catch(() => getDocs(goalsQuery)),
-          fetcher(entriesQuery).catch(() => getDocs(entriesQuery)),
+          fsGetDocs('savings_goals', { wheres: [{ field: 'ownerId', op: '==', value: uid }] }, uid, forceRefresh),
+          fsGetDocs('savings_entries', { wheres: [{ field: 'ownerId', op: '==', value: uid }] }, uid, forceRefresh),
         ]);
         fsGoals = goalsSnap.docs
           .map((d) => ({ id: d.id, ...(d.data() as Omit<SavingsGoalItem, 'id'>) }))
@@ -428,7 +420,9 @@ export const useSavingsStore = defineStore('savings', () => {
       let serverGoals: SavingsGoalItem[] = [];
       let serverEntries: SavingsEntryItem[] = [];
       try {
-        const res = await fetch(`/api/users/${encodeURIComponent(uid)}/savings`);
+        const res = await fetch(`/api/users/${encodeURIComponent(uid)}/savings`, {
+          headers: getUserAuthHeaders(),
+        });
         if (res.ok) {
           const data = await res.json();
           if (data && Array.isArray(data.goals)) {
@@ -583,7 +577,7 @@ export const useSavingsStore = defineStore('savings', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/savings/goals`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify(goalItem),
       });
     } catch {
@@ -607,16 +601,16 @@ export const useSavingsStore = defineStore('savings', () => {
         reminderAmount: goalItem.reminderAmount || null,
         deleted: false,
         deletedAt: null,
-        updatedAt: serverTimestamp(),
+        updatedAt: fsServerTimestamp(),
       };
       if (!isEdit) {
-        docData.createdAt = serverTimestamp();
+        docData.createdAt = fsServerTimestamp();
         docData.lastRemindedDate = null;
         docData.lastSkippedDate = null;
         docData.lastPushNotifiedDate = null;
         docData.snoozedUntil = null;
       }
-      await setDoc(doc(db, 'savings_goals', id), docData, { merge: true });
+      await fsSetDoc('savings_goals', id, docData, { merge: true }, uid);
       await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch (err: any) {
       console.warn('Firestore saveGoal notice:', err?.message || err);
@@ -668,6 +662,7 @@ export const useSavingsStore = defineStore('savings', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/savings/goals/${encodeURIComponent(id)}`, {
         method: 'DELETE',
+        headers: getUserAuthHeaders(),
       });
     } catch {
       // Ignore
@@ -675,9 +670,9 @@ export const useSavingsStore = defineStore('savings', () => {
 
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await deleteDoc(doc(db, 'savings_goals', id));
+      await fsDeleteDoc('savings_goals', id, uid);
       for (const e of relatedEntries) {
-        await deleteDoc(doc(db, 'savings_entries', e.id)).catch(() => {});
+        await fsDeleteDoc('savings_entries', e.id, uid).catch(() => {});
       }
       await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch {
@@ -800,13 +795,13 @@ export const useSavingsStore = defineStore('savings', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/savings/entries`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify(entryItem),
       });
       if (payload.type === 'deposit') {
         await fetch(`/api/users/${encodeURIComponent(uid)}/savings/goals/${encodeURIComponent(goal.id)}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
           body: JSON.stringify({ lastRemindedDate: goal.lastRemindedDate, snoozedUntil: null }),
         });
       }
@@ -817,34 +812,42 @@ export const useSavingsStore = defineStore('savings', () => {
     // Cloud Firestore sync
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await setDoc(doc(db, 'savings_entries', entryId), {
-        ownerId: uid,
-        savingsId: goal.id,
-        savingsName: goal.name,
-        type: payload.type,
-        walletId: wallet.id,
-        walletName: wallet.name,
-        fundOwnerId: resolvedHolderId,
-        fundOwnerName: resolvedHolderName,
-        amount: numericAmount,
-        date: safeDate,
-        note: safeNote,
-        relatedTransactionId: payload.relatedTransactionId || null,
-        deleted: false,
-        deletedAt: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      await fsSetDoc(
+        'savings_entries',
+        entryId,
+        {
+          ownerId: uid,
+          savingsId: goal.id,
+          savingsName: goal.name,
+          type: payload.type,
+          walletId: wallet.id,
+          walletName: wallet.name,
+          fundOwnerId: resolvedHolderId,
+          fundOwnerName: resolvedHolderName,
+          amount: numericAmount,
+          date: safeDate,
+          note: safeNote,
+          relatedTransactionId: payload.relatedTransactionId || null,
+          deleted: false,
+          deletedAt: null,
+          createdAt: fsServerTimestamp(),
+          updatedAt: fsServerTimestamp(),
+        },
+        undefined,
+        uid
+      );
 
       if (payload.type === 'deposit') {
-        await setDoc(
-          doc(db, 'savings_goals', goal.id),
+        await fsSetDoc(
+          'savings_goals',
+          goal.id,
           {
             lastRemindedDate: goal.lastRemindedDate,
             snoozedUntil: null,
-            updatedAt: serverTimestamp(),
+            updatedAt: fsServerTimestamp(),
           },
-          { merge: true }
+          { merge: true },
+          uid
         );
       }
       await financeStore.bumpRemoteAndLocalSyncToken(uid);
@@ -894,6 +897,7 @@ export const useSavingsStore = defineStore('savings', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/savings/entries/${encodeURIComponent(entryId)}`, {
         method: 'DELETE',
+        headers: getUserAuthHeaders(),
       });
     } catch {
       // Ignore
@@ -901,7 +905,7 @@ export const useSavingsStore = defineStore('savings', () => {
 
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await deleteDoc(doc(db, 'savings_entries', entryId));
+      await fsDeleteDoc('savings_entries', entryId, uid);
       await financeStore.bumpRemoteAndLocalSyncToken(uid);
     } catch {
       // Ignore
@@ -994,7 +998,7 @@ export const useSavingsStore = defineStore('savings', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/savings/goals/${encodeURIComponent(goalId)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify({ snoozedUntil }),
       });
     } catch {
@@ -1003,7 +1007,7 @@ export const useSavingsStore = defineStore('savings', () => {
 
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await setDoc(doc(db, 'savings_goals', goalId), { snoozedUntil, updatedAt: serverTimestamp() }, { merge: true });
+      await fsSetDoc('savings_goals', goalId, { snoozedUntil, updatedAt: fsServerTimestamp() }, { merge: true }, uid);
     } catch {
       // Ignore
     }
@@ -1034,7 +1038,7 @@ export const useSavingsStore = defineStore('savings', () => {
     try {
       await fetch(`/api/users/${encodeURIComponent(uid)}/savings/goals/${encodeURIComponent(goalId)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
         body: JSON.stringify({ lastSkippedDate: todayIso, snoozedUntil: null }),
       });
     } catch {
@@ -1043,10 +1047,12 @@ export const useSavingsStore = defineStore('savings', () => {
 
     try {
       await financeStore.ensureFirestoreSessionForUser(uid);
-      await setDoc(
-        doc(db, 'savings_goals', goalId),
-        { lastSkippedDate: todayIso, snoozedUntil: null, updatedAt: serverTimestamp() },
-        { merge: true }
+      await fsSetDoc(
+        'savings_goals',
+        goalId,
+        { lastSkippedDate: todayIso, snoozedUntil: null, updatedAt: fsServerTimestamp() },
+        { merge: true },
+        uid
       );
     } catch {
       // Ignore
@@ -1151,7 +1157,7 @@ export const useSavingsStore = defineStore('savings', () => {
 
           void fetch(`/api/users/${encodeURIComponent(uid)}/savings/goals/${encodeURIComponent(goal.id)}`, {
             method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
             body: JSON.stringify({ lastPushNotifiedDate: wib.dateIso }),
           }).catch(() => {});
         }

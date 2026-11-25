@@ -1,16 +1,15 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { i18n } from '../i18n';
+import type { Unsubscribe } from 'firebase/firestore';
+import { sanitizeId, isFirestoreOfflineError } from '../firebase';
+import { getUserAuthHeaders } from '../services/api';
 import {
-  doc,
-  getDoc,
-  setDoc,
-  onSnapshot,
-  serverTimestamp,
-  type Unsubscribe,
-} from 'firebase/firestore';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth, db, sanitizeId, isFirestoreOfflineError } from '../firebase';
+  hasActiveFirestoreAccess,
+  fsGetDoc,
+  fsSetDoc,
+  fsServerTimestamp,
+} from '../services/userFirestoreBridge';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 export type CurrencyCode = 'IDR' | 'USD';
@@ -127,7 +126,36 @@ export const useThemeStore = defineStore('theme', () => {
   let saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   function readFromLocalStorage() {
-    if (typeof localStorage === 'undefined') return;
+    if (typeof localStorage === 'undefined') return false;
+    const isDefaultScope = !currentSignatureOwnerKey.value || currentSignatureOwnerKey.value === 'default';
+    reportSigners.value = [];
+    reportActiveSignerIds.value = {
+      kas_umum: [],
+      rekonsiliasi_kas: [],
+      realisasi_anggaran: [],
+    };
+    reportSignPlace.value = '';
+    reportLetterhead.value = {
+      enabled: false,
+      mode: 'text',
+      organizationName: '',
+      subtitle: '',
+      addressLine: '',
+      imageDataUrl: '',
+      imageWidthPx: 0,
+      imageHeightPx: 0,
+      enabledReports: {
+        kas_umum: true,
+        rekonsiliasi_kas: true,
+        realisasi_anggaran: true,
+      },
+    };
+    reportCustomTitles.value = {
+      kas_umum: '',
+      rekonsiliasi_kas: '',
+      realisasi_anggaran: '',
+    };
+
     const {
       signersKey,
       activeMapKey,
@@ -138,7 +166,8 @@ export const useThemeStore = defineStore('theme', () => {
 
     try {
       const rawSigners =
-        localStorage.getItem(signersKey) || localStorage.getItem(REPORT_SIGNERS_KEY_PREFIX);
+        localStorage.getItem(signersKey) ||
+        (isDefaultScope ? localStorage.getItem(REPORT_SIGNERS_KEY_PREFIX) : null);
       if (rawSigners) {
         const parsed = JSON.parse(rawSigners);
         if (Array.isArray(parsed)) {
@@ -162,7 +191,7 @@ export const useThemeStore = defineStore('theme', () => {
     try {
       const rawActive =
         localStorage.getItem(activeMapKey) ||
-        localStorage.getItem(REPORT_ACTIVE_SIGNERS_KEY_PREFIX);
+        (isDefaultScope ? localStorage.getItem(REPORT_ACTIVE_SIGNERS_KEY_PREFIX) : null);
       if (rawActive) {
         const parsedMap = JSON.parse(rawActive);
         if (parsedMap && typeof parsedMap === 'object') {
@@ -187,7 +216,7 @@ export const useThemeStore = defineStore('theme', () => {
     try {
       const rawPlace =
         localStorage.getItem(placeKey) ||
-        localStorage.getItem(REPORT_SIGN_PLACE_KEY_PREFIX) ||
+        (isDefaultScope ? localStorage.getItem(REPORT_SIGN_PLACE_KEY_PREFIX) : null) ||
         '';
       if (rawPlace) {
         reportSignPlace.value = rawPlace;
@@ -199,7 +228,7 @@ export const useThemeStore = defineStore('theme', () => {
     try {
       const rawLh =
         localStorage.getItem(letterheadKey) ||
-        localStorage.getItem(REPORT_LETTERHEAD_KEY_PREFIX);
+        (isDefaultScope ? localStorage.getItem(REPORT_LETTERHEAD_KEY_PREFIX) : null);
       if (rawLh) {
         const parsedLh = JSON.parse(rawLh);
         if (parsedLh && typeof parsedLh === 'object') {
@@ -237,7 +266,7 @@ export const useThemeStore = defineStore('theme', () => {
     try {
       const rawTitles =
         localStorage.getItem(customTitlesKey) ||
-        localStorage.getItem(REPORT_CUSTOM_TITLES_KEY_PREFIX);
+        (isDefaultScope ? localStorage.getItem(REPORT_CUSTOM_TITLES_KEY_PREFIX) : null);
       if (rawTitles) {
         const parsedTitles = JSON.parse(rawTitles);
         if (parsedTitles && typeof parsedTitles === 'object') {
@@ -336,14 +365,7 @@ export const useThemeStore = defineStore('theme', () => {
   let activeFirestoreUnsub: Unsubscribe | null = null;
 
   async function ensureFirestoreSessionForReportSettings(ownerUid?: string | null): Promise<boolean> {
-    try {
-      if (typeof (auth as any).authStateReady === 'function') {
-        await (auth as any).authStateReady();
-      }
-    } catch {
-      // Ignore
-    }
-    return Boolean(auth.currentUser);
+    return hasActiveFirestoreAccess(ownerUid || currentSignatureOwnerKey.value);
   }
 
   function stopRealtimeFirestoreListener() {
@@ -365,6 +387,9 @@ export const useThemeStore = defineStore('theme', () => {
   async function pushReportSettingsToFirestore(ownerUid?: string | null): Promise<boolean> {
     const rawKey = ownerUid?.trim() || currentSignatureOwnerKey.value || 'default';
     const key = sanitizeId(rawKey);
+    if (!key || key === 'default' || key === 'guest') {
+      return false;
+    }
 
     const firestorePayload = {
       ownerId: key,
@@ -406,19 +431,13 @@ export const useThemeStore = defineStore('theme', () => {
         rekonsiliasi_kas: String(reportCustomTitles.value.rekonsiliasi_kas || '').slice(0, 100),
         realisasi_anggaran: String(reportCustomTitles.value.realisasi_anggaran || '').slice(0, 100),
       },
-      updatedAt: serverTimestamp(),
+      updatedAt: fsServerTimestamp(),
     };
 
     try {
-      await ensureFirestoreSessionForReportSettings(key);
-      await setDoc(doc(db, 'report_settings', key), firestorePayload, { merge: true });
-      if (key !== 'default') {
-        const defaultDoc = {
-          ...firestorePayload,
-          ownerId: 'default',
-        };
-        await setDoc(doc(db, 'report_settings', 'default'), defaultDoc, { merge: true }).catch(() => {});
-      }
+      const canAccess = await ensureFirestoreSessionForReportSettings(key);
+      if (!canAccess) return false;
+      await fsSetDoc('report_settings', key, firestorePayload, { merge: true }, key);
       return true;
     } catch (err) {
       if (!isFirestoreOfflineError(err)) {
@@ -431,58 +450,52 @@ export const useThemeStore = defineStore('theme', () => {
   async function fetchRemoteReportSettings(ownerUid?: string | null): Promise<boolean> {
     const rawKey = ownerUid?.trim() || currentSignatureOwnerKey.value || 'default';
     const key = sanitizeId(rawKey);
+    if (!key || key === 'default' || key === 'guest') {
+      reportSettingsSyncStatus.value = 'idle';
+      isReportSettingsSyncing.value = false;
+      return false;
+    }
+
     isReportSettingsSyncing.value = true;
     reportSettingsSyncStatus.value = 'syncing';
 
     try {
       let appliedFromFirestore = false;
-      await ensureFirestoreSessionForReportSettings(key);
+      const canAccess = await ensureFirestoreSessionForReportSettings(key);
 
-      // 1. Primary Cross-Device Source of Truth: Cloud Firestore (sisa-uang database)
-      try {
-        const docRef = doc(db, 'report_settings', key);
-        const snap = await getDoc(docRef);
-        if (snap.exists()) {
-          const remoteData = snap.data();
-          applyRemoteReportSettings(remoteData);
-          reportSettingsSyncStatus.value = 'synced';
-          reportSettingsLastSyncedAt.value =
-            remoteData.updatedAt?.toDate?.()?.toISOString?.() ||
-            (typeof remoteData.updatedAt === 'string'
-              ? remoteData.updatedAt
-              : new Date().toISOString());
-          appliedFromFirestore = true;
-        } else if (key !== 'default') {
-          // Fallback to default in Cloud Firestore if user document doesn't exist yet
-          const defaultSnap = await getDoc(doc(db, 'report_settings', 'default'));
-          if (defaultSnap.exists()) {
-            const defaultData = defaultSnap.data();
-            applyRemoteReportSettings(defaultData);
+      // 1. Primary Cross-Device Source of Truth: Cloud Firestore via Bridge or Authorized Direct SDK
+      if (canAccess) {
+        try {
+          const snap = await fsGetDoc('report_settings', key, key);
+          if (snap.exists()) {
+            const remoteData = snap.data() || {};
+            applyRemoteReportSettings(remoteData);
             reportSettingsSyncStatus.value = 'synced';
             reportSettingsLastSyncedAt.value =
-              defaultData.updatedAt?.toDate?.()?.toISOString?.() ||
-              (typeof defaultData.updatedAt === 'string'
-                ? defaultData.updatedAt
+              remoteData.updatedAt?.toDate?.()?.toISOString?.() ||
+              (typeof remoteData.updatedAt === 'string'
+                ? remoteData.updatedAt
                 : new Date().toISOString());
             appliedFromFirestore = true;
           }
-        }
-      } catch (firestoreErr) {
-        if (!isFirestoreOfflineError(firestoreErr)) {
-          console.warn('Firestore report_settings getDoc notice:', firestoreErr);
+        } catch (firestoreErr) {
+          if (!isFirestoreOfflineError(firestoreErr)) {
+            console.warn('Firestore report_settings getDoc notice:', firestoreErr);
+          }
         }
       }
 
-      // If retrieved from Cloud Firestore, activate realtime listener and return
       if (appliedFromFirestore) {
         setupRealtimeFirestoreListener(key);
         isReportSettingsSyncing.value = false;
         return true;
       }
 
-      // 2. Secondary fallback: HTTP endpoint /api/users/:key/report-settings
+      // 2. Secondary fallback: Authenticated HTTP endpoint /api/users/:key/report-settings
       try {
-        const res = await fetch(`/api/users/${encodeURIComponent(key)}/report-settings`);
+        const res = await fetch(`/api/users/${encodeURIComponent(key)}/report-settings`, {
+          headers: getUserAuthHeaders(),
+        });
         if (res.ok) {
           const data = await res.json();
           if (data && data.exists && data.reportSettings) {
@@ -490,7 +503,6 @@ export const useThemeStore = defineStore('theme', () => {
             reportSettingsSyncStatus.value = 'synced';
             reportSettingsLastSyncedAt.value =
               data.reportSettings.updatedAt || new Date().toISOString();
-            // Migrate server record to Cloud Firestore so all devices across preview & production sync
             void pushReportSettingsToFirestore(key);
             setupRealtimeFirestoreListener(key);
             isReportSettingsSyncing.value = false;
@@ -501,30 +513,7 @@ export const useThemeStore = defineStore('theme', () => {
         // Ignore server network error
       }
 
-      // Also try 'default' key on server fallback if user specific key was not found
-      if (key !== 'default') {
-        try {
-          const resDef = await fetch('/api/users/default/report-settings');
-          if (resDef.ok) {
-            const dataDef = await resDef.json();
-            if (dataDef && dataDef.exists && dataDef.reportSettings) {
-              applyRemoteReportSettings(dataDef.reportSettings);
-              reportSettingsSyncStatus.value = 'synced';
-              reportSettingsLastSyncedAt.value =
-                dataDef.reportSettings.updatedAt || new Date().toISOString();
-              void pushReportSettingsToFirestore(key);
-              setupRealtimeFirestoreListener(key);
-              isReportSettingsSyncing.value = false;
-              return true;
-            }
-          }
-        } catch {
-          // Ignore
-        }
-      }
-
-      // 3. If no remote record exists yet, but local config exists in browser,
-      // upload local config up to Cloud Firestore so other devices get it immediately!
+      // 3. If no remote record exists yet, but local config exists in browser, push local config to Cloud Firestore
       const hasLocalConfig =
         reportLetterhead.value.organizationName.trim().length > 0 ||
         reportLetterhead.value.imageDataUrl.length > 0 ||
@@ -547,13 +536,15 @@ export const useThemeStore = defineStore('theme', () => {
   async function pushReportSettingsToServer(): Promise<boolean> {
     const rawKey = currentSignatureOwnerKey.value || 'default';
     const key = sanitizeId(rawKey);
+    if (!key || key === 'default' || key === 'guest') {
+      return false;
+    }
+
     isReportSettingsSyncing.value = true;
     reportSettingsSyncStatus.value = 'syncing';
     try {
-      // 1. Push to Cloud Firestore (cross-device source of truth)
       await pushReportSettingsToFirestore(key);
 
-      // 2. Also send to server Express endpoint as backup
       const payload = {
         ownerId: key,
         signers: reportSigners.value,
@@ -565,7 +556,7 @@ export const useThemeStore = defineStore('theme', () => {
       try {
         const res = await fetch(`/api/users/${encodeURIComponent(key)}/report-settings`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
           body: JSON.stringify(payload),
         });
         if (res.ok) {
@@ -598,12 +589,13 @@ export const useThemeStore = defineStore('theme', () => {
     currentSignatureOwnerKey.value = nextKey;
     const hasLocal = readFromLocalStorage();
     reportSettingsLoadedInSessionKey = nextKey;
-    // Fast-path: if local cache already has the configuration, serve directly with 0 remote reads!
     if (hasLocal) {
       reportSettingsSyncStatus.value = 'synced';
       return;
     }
-    void fetchRemoteReportSettings(currentSignatureOwnerKey.value);
+    if (nextKey && nextKey !== 'default' && nextKey !== 'guest') {
+      void fetchRemoteReportSettings(currentSignatureOwnerKey.value);
+    }
   }
 
   function persistReportSignatureConfig(syncToServer = true) {
@@ -615,21 +607,24 @@ export const useThemeStore = defineStore('theme', () => {
         letterheadKey,
         customTitlesKey,
       } = getSignatureStorageKeys(currentSignatureOwnerKey.value);
+      const isDefaultScope = !currentSignatureOwnerKey.value || currentSignatureOwnerKey.value === 'default';
       try {
         const serializedSigners = JSON.stringify(reportSigners.value);
         const serializedMap = JSON.stringify(reportActiveSignerIds.value);
         const serializedLh = JSON.stringify(reportLetterhead.value);
         const serializedTitles = JSON.stringify(reportCustomTitles.value);
         localStorage.setItem(signersKey, serializedSigners);
-        localStorage.setItem(REPORT_SIGNERS_KEY_PREFIX, serializedSigners);
         localStorage.setItem(activeMapKey, serializedMap);
-        localStorage.setItem(REPORT_ACTIVE_SIGNERS_KEY_PREFIX, serializedMap);
         localStorage.setItem(placeKey, reportSignPlace.value.trim());
-        localStorage.setItem(REPORT_SIGN_PLACE_KEY_PREFIX, reportSignPlace.value.trim());
         localStorage.setItem(letterheadKey, serializedLh);
-        localStorage.setItem(REPORT_LETTERHEAD_KEY_PREFIX, serializedLh);
         localStorage.setItem(customTitlesKey, serializedTitles);
-        localStorage.setItem(REPORT_CUSTOM_TITLES_KEY_PREFIX, serializedTitles);
+        if (isDefaultScope) {
+          localStorage.setItem(REPORT_SIGNERS_KEY_PREFIX, serializedSigners);
+          localStorage.setItem(REPORT_ACTIVE_SIGNERS_KEY_PREFIX, serializedMap);
+          localStorage.setItem(REPORT_SIGN_PLACE_KEY_PREFIX, reportSignPlace.value.trim());
+          localStorage.setItem(REPORT_LETTERHEAD_KEY_PREFIX, serializedLh);
+          localStorage.setItem(REPORT_CUSTOM_TITLES_KEY_PREFIX, serializedTitles);
+        }
       } catch {
         // Ignore storage quota errors
       }
