@@ -844,7 +844,7 @@ async function handleSubmit() {
           @click="txType = 'income'"
         >
           <ArrowDownLeft class="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
-          <span class="truncate">Income</span>
+          <span class="truncate">{{ t('transactions.formIncome') }}</span>
         </button>
         <button
           type="button"
@@ -857,7 +857,7 @@ async function handleSubmit() {
           @click="txType = 'expense'"
         >
           <ArrowUpRight class="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
-          <span class="truncate">Expense</span>
+          <span class="truncate">{{ t('transactions.formExpense') }}</span>
         </button>
         <button
           type="button"
